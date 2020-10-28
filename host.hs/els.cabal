@@ -1,0 +1,166 @@
+cabal-version:      2.4
+name:               els
+version:            0.1.0.0
+license:            BSD-3-Clause
+copyright:          Compl Yue
+maintainer:         compl.yue@icloud.com
+author:             Compl Yue
+stability:          experimental
+homepage:           https://github.com/e-wrks/els
+bug-reports:        https://github.com/e-wrks/els/issues
+synopsis:           language server for Đ (Edh)
+description:
+  Please see the README on Github at <https://github.com/e-wrks/els>
+
+category:           Programming,Language
+build-type:         Simple
+extra-source-files:
+  README.md
+  CHANGELOG.md
+
+source-repository head
+  type:     git
+  location: https://github.com/e-wrks/els
+  subdir:   host.hs
+
+library
+  exposed-modules:
+    Language.Edh.LS
+
+  other-modules:
+
+  hs-source-dirs:     pub
+  default-language:   Haskell2010
+  default-extensions:
+    NoImplicitPrelude
+    BangPatterns
+    ConstraintKinds
+    DataKinds
+    FlexibleContexts
+    FlexibleInstances
+    GADTs
+    KindSignatures
+    LambdaCase
+    OverloadedStrings
+    ScopedTypeVariables
+    TupleSections
+    TypeApplications
+    TypeOperators
+    ViewPatterns
+
+  ghc-options:        -Wall
+  build-depends:
+    , base                  >=4.12  && <5
+    , bytestring
+    , clock
+    , containers
+    , directory
+    , edh-internal
+    , filepath
+    , ghc                   >=8.6.5
+    , hashable
+    , haskeline
+    , lossless-decimal
+    , megaparsec            >7.0
+    , mtl
+    , scientific
+    , stm                   >=2.5
+    , text
+    , time
+    , transformers
+    , unordered-containers
+    , uuid
+    , vector
+
+library edh-internal
+  exposed-modules:
+    Language.Edh.LS.RtTypes
+
+  hs-source-dirs:     src
+  default-language:   Haskell2010
+  default-extensions:
+    NoImplicitPrelude
+    BangPatterns
+    ConstraintKinds
+    DataKinds
+    FlexibleContexts
+    FlexibleInstances
+    GADTs
+    KindSignatures
+    LambdaCase
+    OverloadedStrings
+    ScopedTypeVariables
+    TupleSections
+    TypeApplications
+    TypeOperators
+    ViewPatterns
+
+  ghc-options:        -Wall
+  build-depends:
+    , base                  >=4.12  && <5
+    , bytestring
+    , clock
+    , containers
+    , directory
+    , filepath
+    , ghc                   >=8.6.5
+    , hashable
+    , haskeline
+    , lossless-decimal
+    , megaparsec            >7.0
+    , mtl
+    , scientific
+    , stm                   >=2.5
+    , text
+    , time
+    , transformers
+    , unordered-containers
+    , uuid
+    , vector
+
+executable els
+  main-is:            Main.hs
+  hs-source-dirs:     server
+  default-language:   Haskell2010
+  default-extensions:
+    NoImplicitPrelude
+    BangPatterns
+    ConstraintKinds
+    DataKinds
+    FlexibleContexts
+    FlexibleInstances
+    GADTs
+    KindSignatures
+    LambdaCase
+    OverloadedStrings
+    ScopedTypeVariables
+    TupleSections
+    TypeApplications
+    TypeOperators
+    ViewPatterns
+
+  ghc-options:        -Wall -threaded -rtsopts -with-rtsopts=-maxN31
+
+  -- same dependencies as edh-internal, so you can:
+  -- cabal v2-repl "--repl-options=-isrc -ipub" edh xxx
+  build-depends:
+    , base                  >=4.12  && <5
+    , bytestring
+    , clock
+    , containers
+    , directory
+    , edh
+    , filepath
+    , ghc                   >=8.6.5
+    , hashable
+    , haskeline
+    , lossless-decimal
+    , megaparsec            >7.0
+    , mtl
+    , scientific
+    , stm                   >=2.5
+    , text
+    , time
+    , transformers
+    , unordered-containers
+    , vector
