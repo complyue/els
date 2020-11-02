@@ -1,0 +1,19 @@
+{##
+ # localhost wide shared Edh language server
+ #}
+
+import * 'net'
+
+
+data ELS (
+  # local addr & port to listen for call-for-lsa
+  c4sAddr = '127.0.0.1', c4sPort = 1707,
+) {
+
+  method __init__(*** _ ) {
+    this.eol = sink
+  }
+
+  method join() this.eol.latest
+
+}

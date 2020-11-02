@@ -1,0 +1,16 @@
+
+{##
+ # this is the entry module of Edh Language Server
+ #}
+
+
+import * 'els/server'
+
+
+els = ELS(
+  # local addr to listen for call-for-lsa
+  '127.0.0.1', 1707,
+)
+
+# keep the server process running
+els.join()
