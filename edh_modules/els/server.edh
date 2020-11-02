@@ -1,19 +1,45 @@
 {##
- # localhost wide shared Edh language server
+ # shared Edh language server
  #}
 
 import * 'net'
 
+import * 'els/RT'
 
-data ELS (
+
+export data ELS (
   # local addr & port to listen for call-for-lsa
   c4sAddr = '127.0.0.1', c4sPort = 1707,
 ) {
 
   method __init__(*** _ ) {
-    this.eol = sink
+    els = this; # alias self
+    this.server = Server(
+      'els/server', # the service module
+      this.c4sAddr, this.c4sPort,
+      init= modu => { # per-connection peer module initialization
+        import * els into modu
+      },
+    )
+    case this.server.addrs() of {
+      { elsAddr :>_ } -> console.info<| 'Edh Language Server listening: '
+      ++ elsAddr
+      # or the network has failed, propagate the error
+      this.server.join() # this usually throws
+      # in case join() didn't throw, report this error
+      error( 'ELS failed listening.' )
+    }
+
   }
 
-  method join() this.eol.latest
+
+  method join() this.server.join()
+
+  {##
+   # meant to be call via rpc, by a starter process connected to this ls
+   #}
+  export method AttachToClient( port, addr= '127.0.0.1' ) {
+
+  }
 
 }

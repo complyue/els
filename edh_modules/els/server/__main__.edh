@@ -1,0 +1,39 @@
+{##
+ # this is the service module of Edh Language Server, each instance facing a
+ # starter process to serve its call-for-ls-attach rpc, namely `AttachToClient`.
+
+ # the starter process is usually started by the lsc extension from within an
+ # VSCode workspace session.
+ #}
+
+import ( Peer, **_ ) 'net/RT'
+import * 'net/symbols'
+effect import * 'net/effects'
+
+
+peer ?= Peer()
+console.debug<| 'ELS starter connected - ' ++ peer
+defer {
+  console.debug<| 'Disconnecting ELS starter ' ++ peer
+}
+
+effect {
+  ; @netPeer = peer
+  ; @dataSink = peer.armChannel( dataChan ?:= 'data' )
+}
+
+
+{
+
+  while peer.eol() is false case peer.readCommand() of {
+    # sequence of commands each resulting in nil are expected and let pass here
+    { cmdVal } -> {
+      console.warn<| 'Unexpected cmd from ' ++ peer ++ '\n  ' ++ cmdVal
+      cmdVal = nil # clear it
+    }
+  }
+
+} @=> { exc } -> {
+  console.warn<| 'Exception by ELS starter ' ++ peer
+  ++ ' error: ' ++ exc
+}
