@@ -73,6 +73,7 @@ library
 
 library els-internal
   exposed-modules:
+    Language.Edh.LS.MicroProto
     Language.Edh.LS.RtTypes
 
   hs-source-dirs:     src

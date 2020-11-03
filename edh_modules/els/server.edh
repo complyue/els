@@ -8,15 +8,15 @@ import * 'els/RT'
 
 
 export data ELS (
-  # local addr & port to listen for call-for-lsa
-  c4sAddr = '127.0.0.1', c4sPort = 1707,
+  # local addr & port to listen for call-for-languageserver-attachment
+  c4aAddr = '127.0.0.1', c4aPort = 1707,
 ) {
 
   method __init__(*** _ ) {
     els = this; # alias self
     this.server = Server(
       'els/server', # the service module
-      this.c4sAddr, this.c4sPort,
+      this.c4aAddr, this.c4aPort,
       init= modu => { # per-connection peer module initialization
         import * els into modu
       },

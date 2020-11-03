@@ -20,7 +20,7 @@ installLanguageServerBatteries :: EdhWorld -> IO ()
 installLanguageServerBatteries !world =
   void $ installEdhModule world "els/RT" $ \ !ets !exit ->
 
-      -- loosely depend on the @net@ runtime from nedh package
+    -- loosely depend on the @net@ runtime from nedh package
     runEdhTx ets $ importEdhModule "net/RT" $ \case
       EdhObject !moduNetRT -> \_ets ->
         lookupEdhObjAttr moduNetRT (AttrByName "Peer") >>= \case
