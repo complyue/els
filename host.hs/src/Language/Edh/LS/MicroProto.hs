@@ -53,11 +53,11 @@ sendPacket !outletter (Packet !headers !content) = do
   outletter
     $  TE.encodeUtf8
     $  "Content-Length: "
-    <> T.pack
-    $  show pktLen
+    <> T.pack (show pktLen)
     <> "\r\n"
   forM_ headers $ \(hdrName, hdrContent) ->
     outletter $ TE.encodeUtf8 $ hdrName <> ": " <> hdrContent <> "\r\n"
+  -- header/content separator
   outletter $ TE.encodeUtf8 "\r\n"
   -- write packet content
   outletter content
@@ -104,7 +104,7 @@ receivePacketStream peerSite !intaker !pktSink !eos = do
 
   parsePkts :: BL.ByteString -> IO ()
   parsePkts !readahead = do
-    (contentLen, headers, readahead') <- parseHdrs readahead
+    (contentLen, headers, readahead') <- parseHdrs (-1) [] readahead
     if contentLen < 0
       then -- normal eos, try mark and done
            void $ atomically $ tryPutTMVar eos $ Right ()
@@ -137,35 +137,50 @@ receivePacketStream peerSite !intaker !pktSink !eos = do
                     Left  (Right ()) -> return ()
                     Right _          -> parsePkts rest
 
-  parseHdrs :: BL.ByteString -> IO (Int64, PacketHeaders, BL.ByteString)
-  parseHdrs !readahead = do
+  parseHdrs
+    :: Int64
+    -> PacketHeaders
+    -> BL.ByteString
+    -> IO (Int64, PacketHeaders, BL.ByteString)
+  parseHdrs !knownLen !hdrs !readahead = do
     peeked <- if BL.null readahead
       then BL.fromStrict <$> intaker chunkSize
       else return readahead
     if BL.null peeked
-      then return (-1, [], BL.empty)
-      else do
-        unless ("[" `BL.isPrefixOf` peeked) $ throwIO $ EdhPeerError
-          peerSite
-          "missing packet header"
-        let (hdrPart, rest) = C.break (== ']') peeked
-        if not $ BL.null rest
-          then do -- got a full packet header
-            let !hdrContent = BL.drop 1 hdrPart
-                !readahead' = BL.drop 1 rest
-                (lenStr, _) = C.break (== '#') hdrContent
-                contentLen  = read $ TL.unpack $ TLE.decodeUtf8 lenStr
-            return
-              ( contentLen
-              , [] -- TL.toStrict $ TLE.decodeUtf8 $ BL.drop 1 headers
-              , readahead'
-              )
-          else if BL.length peeked < fromIntegral maxHeaderLength
-            then do
-              morePeek <- BL.fromStrict <$> intaker chunkSize
-              parseHdrs $ peeked <> morePeek
-            else throwIO
-              $ EdhPeerError peerSite "incoming packet header too long"
+      then return (knownLen, hdrs, BL.empty)
+      else
+        let (!hdrLine, !rest) = C.break (== '\r') peeked
+        in  if BL.null rest || BL.null (C.tail rest)
+              then if BL.length peeked < fromIntegral maxHeaderLength
+                then do
+                  morePeek <- BL.fromStrict <$> intaker chunkSize
+                  parseHdrs knownLen hdrs $ peeked <> morePeek
+                else throwIO
+                  $ EdhPeerError peerSite "incoming packet header too long"
+              else case C.stripPrefix "\r\n" rest of
+                Nothing ->
+                  throwIO $ EdhPeerError peerSite "\\r not followed by \\n"
+                Just !readahead' -> if BL.null hdrLine
+                  then -- reached packet content
+                       return (knownLen, hdrs, readahead')
+                  else
+                    let (!hdrNameBytes, !hdrRest) = C.break (== ':') hdrLine
+                    in  case BL.stripPrefix ": " hdrRest of
+                          Nothing -> throwIO $ EdhPeerError
+                            peerSite
+                            "missing header field separator (: )"
+                          Just !hdrContentBytes ->
+                            let !hdrName =
+                                    TL.toStrict $ TLE.decodeUtf8 hdrNameBytes
+                                !hdrContent =
+                                    TL.toStrict $ TLE.decodeUtf8 hdrContentBytes
+                                !knownLen' = case hdrName of
+                                  "Content-Length" ->
+                                    read $ T.unpack hdrContent
+                                  _ -> knownLen
+                            in  parseHdrs knownLen'
+                                          ((hdrName, hdrContent) : hdrs)
+                                          readahead'
 
   -- | Considering hardware and network realities, the maximum number of bytes
   -- to receive should be a small power of 2
