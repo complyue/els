@@ -106,8 +106,10 @@ receivePacketStream peerSite !intaker !pktSink !eos = do
   parsePkts !readahead = do
     (contentLen, headers, readahead') <- parseHdrs (-1) [] readahead
     if contentLen < 0
-      then -- normal eos, try mark and done
-           void $ atomically $ tryPutTMVar eos $ Right ()
+      then if null headers && BL.null readahead
+        -- normal eos, try mark and done
+        then void $ atomically $ tryPutTMVar eos $ Right ()
+        else throwIO $ EdhPeerError peerSite "missing Content-Length header"
       else do
         let (content, rest) = BL.splitAt contentLen readahead'
             more2read       = contentLen - BL.length content
