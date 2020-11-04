@@ -6,34 +6,38 @@
  # VSCode workspace session.
  #}
 
-import ( Peer, **_ ) 'net/RT'
-import * 'net/symbols'
-effect import * 'net/effects'
 
+# mocking artifacts those should have been implanted by host
+# module preparation, to give meaningful information to IDEs
+# and/or other tools, for purpose of, e.g. auto completion.
+if false then { # this block is impossible to run
 
-peer ?= Peer()
-console.debug<| 'ELS starter connected - ' ++ peer
+  # process one request/notif/reply from the language server client
+  # all commands will be eval'ed within a sandboxed env based off this module's
+  # scope
+  method processOne() { pass }
+
+  # check end-of-life of the client connection
+  method eol() return false
+
+}
+
 defer {
-  console.debug<| 'Disconnecting ELS starter ' ++ peer
+  console.debug<| 'ELS server done with language server client.'
 }
 
-effect {
-  ; @netPeer = peer
-  ; @dataSink = peer.armChannel( dataChan ?:= 'data' )
-}
+# TODO define artifacts in hosting the execution of incoming
+#      commands
 
 
-{
+# loop forever until eol on error, or stopped elsewhere
+while eol() is false {
 
-  while peer.eol() is false case peer.readCommand() of {
-    # sequence of commands each resulting in nil are expected and let pass here
-    { cmdVal } -> {
-      console.warn<| 'Unexpected cmd from ' ++ peer ++ '\n  ' ++ cmdVal
-      cmdVal = nil # clear it
-    }
+  # note nil result from `sniff()` is silently ignored
+  case processOne() of { pktDict } -> {
+    console.info<| 'ELS pkt:\n  ' ++ pktDict
   }
 
-} @=> { exc } -> {
-  console.warn<| 'Exception by ELS starter ' ++ peer
-  ++ ' error: ' ++ exc
+} $=> { exc } -> {
+  console.error<| 'ELS error: ' ++ desc( exc )
 }

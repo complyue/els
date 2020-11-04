@@ -10,8 +10,10 @@ import           Control.Concurrent
 import           Control.Concurrent.STM
 
 import           Data.Maybe
+import qualified Data.List.NonEmpty            as NE
 import           Data.Text                      ( Text )
 import qualified Data.Text                     as T
+import           Data.Text.Encoding
 import           Data.Dynamic
 
 import           Network.Socket
@@ -21,40 +23,11 @@ import           Network.Socket.ByteString      ( recv
 
 import           Language.Edh.EHI
 
-import           Language.Edh.Net        hiding ( receivePacketStream
-                                                , sendPacket
-                                                )
-
 import           Language.Edh.LS.MicroProto
 
 
 type ClientAddr = Text
 type ClientPort = Int
-
-addrFromObj
-  :: EdhThreadState -> Object -> ((ClientAddr, ClientPort) -> STM ()) -> STM ()
-addrFromObj !ets !addrObj !exit = castObjectStore addrObj >>= \case
-  Nothing         -> throwEdh ets UsageError "unsupported addr object"
-  Just (_, !addr) -> case addr of
-    (AddrInfo _ _ _ _ (SockAddrInet !port !host) _) ->
-      case hostAddressToTuple host of
-        (n1, n2, n3, n4) -> exit
-          ( T.pack
-          $  show n1
-          <> "."
-          <> show n2
-          <> "."
-          <> show n3
-          <> "."
-          <> show n4
-          , fromIntegral port
-          )
-    (AddrInfo _ _ _ _ (SockAddrInet6 !port _ (n1, n2, n3, n4) _) _) -> exit
-      ( T.pack $ show n1 <> ":" <> show n2 <> ":" <> show n3 <> "::" <> show n4
-      , fromIntegral port
-      )
-    _ -> throwEdh ets UsageError "unsupported addr object"
-
 
 -- | Network connection to a languageserver client
 data ClntConn = ClntConn {
@@ -73,8 +46,8 @@ data ClntConn = ClntConn {
   }
 
 
-createCCClass :: Object -> Object -> Scope -> STM Object
-createCCClass !addrClass !peerClass !clsOuterScope =
+createCCClass :: Object -> Scope -> STM Object
+createCCClass !addrClass !clsOuterScope =
   mkHostClass clsOuterScope "Client" (allocEdhObj ccAllocator) []
     $ \ !clsScope -> do
         !mths <- sequence
@@ -94,55 +67,46 @@ createCCClass !addrClass !peerClass !clsOuterScope =
   -- | host constructor CC()
   ccAllocator
     :: "service" !: Text
-    -> "addrSpec" ?: EdhValue
-    -> "port" ?: Int
+    -> "port" !: Int
+    -> "addr" ?: Text
     -> "init" ?: EdhValue
     -> EdhObjectAllocator
-  ccAllocator (mandatoryArg -> !service) (defaultArg (EdhString "127.0.0.1") -> !addrSpec) (defaultArg 3721 -> !ctorPort) (defaultArg nil -> !init_) !ctorExit !etsCtor
+  ccAllocator (mandatoryArg -> !service) (mandatoryArg -> !ctorPort) (defaultArg (  "127.0.0.1") -> !ctorAddr) (defaultArg nil -> !init_) !ctorExit !etsCtor
     = if edh'in'tx etsCtor
       then throwEdh etsCtor
                     UsageError
                     "you don't create network objects within a transaction"
-      else case init_ of
+      else case edhUltimate init_ of
         EdhNil                               -> withInit nil
         mth@(EdhProcedure EdhMethod{} _    ) -> withInit mth
-        mth@(EdhProcedure EdhIntrpr{} _    ) -> withInit mth
         mth@(EdhBoundProc EdhMethod{} _ _ _) -> withInit mth
-        mth@(EdhBoundProc EdhIntrpr{} _ _ _) -> withInit mth
         !badInit -> edhValueDesc etsCtor badInit $ \ !badDesc ->
           throwEdh etsCtor UsageError $ "invalid init: " <> badDesc
    where
-    withInit !__peer_init__ = case addrSpec of
-      EdhObject !addrObj ->
-        addrFromObj etsCtor addrObj $ \(addr, port) -> go addr port
-      EdhString !addr -> go addr ctorPort
-      !badSpec        -> edhValueDesc etsCtor badSpec $ \ !badDesc ->
-        throwEdh etsCtor UsageError $ "bad address: " <> badDesc
-     where
-      go !addr !port = do
-        serviceAddrs <- newEmptyTMVar
-        cnsmrEoL     <- newEmptyTMVar
-        let !client = ClntConn { cc'modu         = service
-                               , cc'client'addr  = addr
-                               , cc'client'port  = fromIntegral port
-                               , cc'client'addrs = serviceAddrs
-                               , cc'eol          = cnsmrEoL
-                               , cc'init         = __peer_init__
-                               }
-        runEdhTx etsCtor $ edhContIO $ do
-          void $ forkFinally
-            (serviceThread client)
-            ( void
-            . atomically
-              -- fill empty addrs if the connection has ever failed
-            . (tryPutTMVar serviceAddrs [] <*)
-              -- mark service end-of-life anyway finally
-            . tryPutTMVar cnsmrEoL
-            )
-          atomically $ ctorExit $ HostStore (toDyn client)
+    withInit !__modu_init__ = do
+      serviceAddrs <- newEmptyTMVar
+      svcEoL       <- newEmptyTMVar
+      let !cc = ClntConn { cc'modu         = service
+                         , cc'client'addr  = ctorAddr
+                         , cc'client'port  = fromIntegral ctorPort
+                         , cc'client'addrs = serviceAddrs
+                         , cc'eol          = svcEoL
+                         , cc'init         = __modu_init__
+                         }
+      runEdhTx etsCtor $ edhContIO $ do
+        void $ forkFinally
+          (serviceThread cc)
+          ( void
+          . atomically
+            -- fill empty addrs if the connection has ever failed
+          . (tryPutTMVar serviceAddrs [] <*)
+            -- mark service end-of-life anyway finally
+          . tryPutTMVar svcEoL
+          )
+        atomically $ ctorExit $ HostStore (toDyn cc)
 
     serviceThread :: ClntConn -> IO ()
-    serviceThread (ClntConn !cnsmrModu !servAddr !servPort !serviceAddrs !cnsmrEoL !__peer_init__)
+    serviceThread (ClntConn !svcModu !servAddr !servPort !serviceAddrs !svcEoL !__modu_init__)
       = do
         addr <- resolveServAddr
         bracket
@@ -156,10 +120,10 @@ createCCClass !addrClass !peerClass !clsOuterScope =
                 <$> tryTakeTMVar serviceAddrs
                 >>= putTMVar serviceAddrs
                 .   (addr :)
-              try (consumeClient (T.pack $ show srvAddr) sock)
+              try (servLanguageClient (T.pack $ show srvAddr) sock)
                 >>= (gracefulClose sock 5000 <*)
                 .   atomically
-                .   tryPutTMVar cnsmrEoL
+                .   tryPutTMVar svcEoL
 
      where
       ctx             = edh'context etsCtor
@@ -173,73 +137,96 @@ createCCClass !addrClass !peerClass !clsOuterScope =
                                 (Just (show servPort))
         return addr
 
-      consumeClient :: Text -> Socket -> IO ()
-      consumeClient !clientId !sock = do
+      servLanguageClient :: Text -> Socket -> IO ()
+      servLanguageClient !clientId !sock = do
         pktSink <- newEmptyTMVarIO
         poq     <- newEmptyTMVarIO
-        chdVar  <- newTVarIO mempty
 
         let
-          !peer = Peer { edh'peer'ident    = clientId
-                       , edh'peer'eol      = cnsmrEoL
-                       , edh'peer'posting  = putTMVar poq
-                       , edh'peer'hosting  = takeTMVar pktSink
-                       , edh'peer'channels = chdVar
-                       }
-          prepConsumer :: EdhModulePreparation
-          prepConsumer !etsModu !exit =
-            edhCreateHostObj peerClass (toDyn peer) [] >>= \ !peerObj -> do
-              -- implant to the module being prepared
-              iopdInsert (AttrByName "peer")
-                         (EdhObject peerObj)
-                         (edh'scope'entity moduScope)
-              -- call the per-connection peer module initialization method in the
-              -- module context (where both contextual this/that are the module
-              -- object)
-              if __peer_init__ == nil
+          ccEoLProc :: EdhHostProc
+          ccEoLProc !exit !ets = tryReadTMVar svcEoL >>= \case
+            Nothing        -> exitEdh ets exit $ EdhBool False
+            Just (Left !e) -> edh'exception'wrapper world e
+              >>= \ !exo -> exitEdh ets exit $ EdhObject exo
+            Just (Right ()) -> exitEdh ets exit $ EdhBool True
+
+          processOneProc :: Scope -> EdhHostProc
+          processOneProc !sbScope !exit !ets =
+            takeTMVar pktSink >>= \(Packet _headers !content) -> do
+              -- interpret the content as command, return as is
+              let !src = decodeUtf8 content
+              runEdhTx etsSandbox
+                $ evalEdh (T.unpack clientId) src
+                $ \ !r _ets -> exitEdh ets exit r
+           where
+            !ctxOrig    = edh'context ets
+            !etsSandbox = ets
+              { edh'context = ctxOrig
+                                { edh'ctx'stack = NE.cons
+                                                    sbScope
+                                                    (edh'ctx'stack ctxOrig)
+                                }
+              }
+
+          -- TODO add mth to send one via poq
+
+          prepService :: EdhModulePreparation
+          prepService !etsModu !exit =
+            mkSandbox etsModu moduObj $ \ !sandboxScope -> do
+
+              -- define and implant procedures to the module being prepared
+              !moduMths <- sequence
+                [ (AttrByName nm, ) <$> mkHostProc moduScope vc nm hp
+                | (nm, vc, hp) <-
+                  [ ("eol", EdhMethod, wrapHostProc ccEoLProc)
+                  , ( "processOne"
+                    , EdhMethod
+                    , wrapHostProc $ processOneProc sandboxScope
+                    )
+                  ]
+                ]
+              iopdUpdate moduMths $ edh'scope'entity moduScope
+
+              -- call the service module initialization method in the module
+              -- context (where both contextual this/that are the module object)
+              if __modu_init__ == nil
                 then exit
                 else
                   edhPrepareCall'
                       etsModu
-                      __peer_init__
+                      __modu_init__
                       (ArgsPack [EdhObject $ edh'scope'this moduScope] odEmpty)
                     $ \ !mkCall -> runEdhTx etsModu $ mkCall $ \_result _ets ->
                         exit
-            where !moduScope = contextScope $ edh'context etsModu
+           where
+            !moduScope = contextScope $ edh'context etsModu
+            !moduObj   = edh'scope'this moduScope
 
         void
           -- run the service module as another program
-          $ forkFinally (runEdhModule' world (T.unpack cnsmrModu) prepConsumer)
+          $ forkFinally (runEdhModule' world (T.unpack svcModu) prepService)
           -- mark client end-of-life with the result anyway
           $ void
           . atomically
-          . tryPutTMVar cnsmrEoL
+          . tryPutTMVar svcEoL
           . void
 
         -- pump commands in, 
         -- make this thread the only one reading the handle
         -- note this won't return, will be asynchronously killed on eol
-        void $ forkIO $ receivePacketStream clientId
-                                            (recv sock)
-                                            pktSink
-                                            cnsmrEoL
+        void $ forkIO $ receivePacketStream clientId (recv sock) pktSink svcEoL
 
         let
           serializeCmdsOut :: IO ()
           serializeCmdsOut =
             atomically
-                (        (Right <$> takeTMVar poq)
-                `orElse` (Left <$> readTMVar cnsmrEoL)
-                )
+                ((Right <$> takeTMVar poq) `orElse` (Left <$> readTMVar svcEoL))
               >>= \case
                     Left _ -> return ()
                     Right !pkt ->
-                      catch
-                          (  sendPacket clientId (sendAll sock) pkt
-                          >> serializeCmdsOut
-                          )
+                      catch (sendPacket (sendAll sock) pkt >> serializeCmdsOut)
                         $ \(e :: SomeException) -> -- mark eol on error
-                            atomically $ void $ tryPutTMVar cnsmrEoL $ Left e
+                            atomically $ void $ tryPutTMVar svcEoL $ Left e
         -- pump commands out,
         -- make this thread the only one writing the handle
         serializeCmdsOut
