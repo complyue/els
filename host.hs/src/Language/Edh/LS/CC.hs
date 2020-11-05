@@ -150,23 +150,13 @@ createCCClass !addrClass !clsOuterScope =
               >>= \ !exo -> exitEdh ets exit $ EdhObject exo
             Just (Right ()) -> exitEdh ets exit $ EdhBool True
 
-          processOneProc :: Scope -> EdhHostProc
-          processOneProc !sbScope !exit !ets =
+          recvOnePktProc :: Scope -> EdhHostProc
+          recvOnePktProc !sandbox !exit !ets =
             takeTMVar pktSink >>= \(Packet _headers !content) -> do
               -- interpret the content as command, return as is
               let !src = decodeUtf8 content
-              runEdhTx etsSandbox
-                $ evalEdh (T.unpack clientId) src
+              runEdhInSandbox ets sandbox (evalEdh (T.unpack clientId) src)
                 $ \ !r _ets -> exitEdh ets exit r
-           where
-            !ctxOrig    = edh'context ets
-            !etsSandbox = ets
-              { edh'context = ctxOrig
-                                { edh'ctx'stack = NE.cons
-                                                    sbScope
-                                                    (edh'ctx'stack ctxOrig)
-                                }
-              }
 
           -- TODO add mth to send one via poq
 
@@ -179,9 +169,9 @@ createCCClass !addrClass !clsOuterScope =
                 [ (AttrByName nm, ) <$> mkHostProc moduScope vc nm hp
                 | (nm, vc, hp) <-
                   [ ("eol", EdhMethod, wrapHostProc ccEoLProc)
-                  , ( "processOne"
+                  , ( "recvOnePkt"
                     , EdhMethod
-                    , wrapHostProc $ processOneProc sandboxScope
+                    , wrapHostProc $ recvOnePktProc sandboxScope
                     )
                   ]
                 ]

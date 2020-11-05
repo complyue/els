@@ -12,12 +12,19 @@
 # and/or other tools, for purpose of, e.g. auto completion.
 if false then { # this block is impossible to run
 
-  # process one request/notif/reply from the language server client
-  # all commands will be eval'ed within a sandboxed env based off this module's
-  # scope
-  method processOne() { pass }
+  {##
+   # receive a request/notif/reply in [JSON-RPC](http://www.jsonrpc.org)
+   # form, from the language server client.
+   #
+   # a packet payload will be eval'ed within a sandboxed Edh env based off
+   # this module's scope, as JSON format is syntactically valid in Edh, the
+   # result will be an Edh dict, as LSP top level will always be a JSON object.
+   #}
+  method recvOnePkt() { pass }
 
-  # check end-of-life of the client connection
+  {##
+   # check end-of-life of the client connection
+   #}
   method eol() return false
 
 }
@@ -34,8 +41,8 @@ defer {
 while eol() is false {
 
   # note nil result from `sniff()` is silently ignored
-  case processOne() of { pktDict } -> {
-    console.info<| 'ELS pkt:\n  ' ++ pktDict
+  case recvOnePkt() of { rpcDict } -> {
+    console.info<| 'ELS rpc:\n  ' ++ rpcDict
   }
 
 } $=> { exc } -> {

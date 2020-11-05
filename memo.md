@@ -1,3 +1,7 @@
+## Language Server Protocol Specification
+
+https://microsoft.github.io/language-server-protocol/specification
+
 ## How vscode client launches a language server process
 
 - It passes `--socket=<port>` on cmdl
