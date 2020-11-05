@@ -10,7 +10,6 @@ import           Control.Concurrent
 import           Control.Concurrent.STM
 
 import           Data.Maybe
-import qualified Data.List.NonEmpty            as NE
 import           Data.Text                      ( Text )
 import qualified Data.Text                     as T
 import           Data.Text.Encoding
