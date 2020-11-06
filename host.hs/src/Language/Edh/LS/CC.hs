@@ -138,8 +138,8 @@ createCCClass !addrClass !clsOuterScope =
 
       servLanguageClient :: Text -> Socket -> IO ()
       servLanguageClient !clientId !sock = do
-        pktSink <- newEmptyTMVarIO
-        poq     <- newEmptyTMVarIO
+        !pktSink <- newEmptyTMVarIO
+        !poq     <- newEmptyTMVarIO
 
         let
           ccEoLProc :: EdhHostProc
@@ -157,7 +157,20 @@ createCCClass !addrClass !clsOuterScope =
               runEdhInSandbox ets sandbox (evalEdh (T.unpack clientId) src)
                 $ \ !r _ets -> exitEdh ets exit r
 
-          -- TODO add mth to send one via poq
+          postOnePktProc :: "rpcOut" !: Text -> RestKwArgs -> EdhHostProc
+          postOnePktProc (mandatoryArg -> !content) !headers !exit !ets = go
+            (odToList headers)
+            []
+           where
+            go
+              :: [(AttrKey, EdhValue)]
+              -> [(HeaderName, HeaderContent)]
+              -> STM ()
+            go [] !hdrs = do
+              void $ tryPutTMVar poq $ textPacket hdrs content
+              exitEdh ets exit nil
+            go ((k, v) : rest) !hdrs =
+              edhValueStr ets v $ \ !sv -> go rest ((attrKeyStr k, sv) : hdrs)
 
           prepService :: EdhModulePreparation
           prepService !etsModu !exit =
@@ -172,9 +185,12 @@ createCCClass !addrClass !clsOuterScope =
                     , EdhMethod
                     , wrapHostProc $ recvOnePktProc sandboxScope
                     )
+                  , ("postOnePkt", EdhMethod, wrapHostProc postOnePktProc)
                   ]
                 ]
-              iopdUpdate moduMths $ edh'scope'entity moduScope
+              let !moduArts =
+                    (AttrByName "clientId", EdhString clientId) : moduMths
+              iopdUpdate moduArts $ edh'scope'entity moduScope
 
               -- call the service module initialization method in the module
               -- context (where both contextual this/that are the module object)

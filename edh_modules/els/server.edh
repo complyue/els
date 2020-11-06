@@ -7,25 +7,32 @@ import * 'net'
 import * 'els/RT'
 
 
+{##
+ # the `start-els` executable (launched by VSCode on-demand e.g.) will connect
+ # to starter service by an ELS, and issue `AttachToClient(<port>)` to request
+ # a connection from this ELS to that socket based language server client, then
+ # language service will be provided over that connection.
+ #}
 export data ELS (
-  # local addr & port to listen for call-for-languageserver-attachment
+  # local addr & port to accept connections from els starters
   c4aAddr = '127.0.0.1', c4aPort = 1707,
 ) {
 
   method __init__(*** _ ) {
-    els = this; # alias self
-    this.server = Server(
-      'els/server', # the service module
+    this.starter = Server(
+      'els/start', # the starter service module
       this.c4aAddr, this.c4aPort,
       init= modu => { # per-connection peer module initialization
-        import * els into modu
+        # expose all exported methods of this els instance there,
+        # to be rpcallable by els starters
+        import * this into modu
       },
     )
-    case this.server.addrs() of {
-      { elsAddr :>_ } -> console.info<| 'Edh Language Server listening: '
-      ++ elsAddr
+    case this.starter.addrs() of {
+      { elsAddr :>_ } -> console.info
+      <| 'Edh Language Server starter service listening: ' ++ elsAddr
       # or the network has failed, propagate the error
-      this.server.join() # this usually throws
+      this.starter.join() # this usually throws
       # in case join() didn't throw, report this error
       error( 'ELS failed listening.' )
     }
@@ -33,7 +40,7 @@ export data ELS (
   }
 
 
-  method join() this.server.join()
+  method join() this.starter.join()
 
   {##
    # meant to be call via rpc, by a starter process connected to this ls
