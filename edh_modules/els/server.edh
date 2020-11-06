@@ -16,33 +16,34 @@ import * 'net'
 
 import * 'els/RT'
 
+# TODO ELS to serve LSP directly as a host class
 
 {##
  # the `start-els` executable (launched by VSCode on-demand e.g.) will connect
- # to starter service by an ELS, and issue `AttachToClient(<port>)` to request
+ # to attacher service by an ELS, and issue `AttachToClient(<port>)` to request
  # a connection from this ELS to that socket based language server client, then
  # language service will be provided over that connection.
  #}
 export data ELS (
   # local port & addr to accept connections from els starters
-  c4aPort = 1707, c4aAddr = '127.0.0.1',
+  port = 1707, addr = '127.0.0.1',
 ) {
 
   method __init__(*** _ ) {
-    this.starter = Server(
-      'els/start', # the starter service module
-      this.c4aAddr, this.c4aPort,
+    this.attacher = Server(
+      'els/attach', # the attacher service module
+      this.addr, this.port,
       init= modu => { # per-connection peer module initialization
         # expose all exported methods of this els instance there,
         # to be rpcallable by els starters
         import * this into modu
       },
     )
-    case this.starter.addrs() of {
+    case this.attacher.addrs() of {
       { elsAddr :>_ } -> console.info
-      <| 'Đ (Edh) Language Server starter service listening: ' ++ elsAddr
+      <| 'Đ (Edh) Language Server attacher service listening: ' ++ elsAddr
       # or the network has failed, propagate the error
-      this.starter.join() # this usually throws
+      this.attacher.join() # this usually throws
       # in case join() didn't throw, report this error
       error( 'Đ (Edh) Language Server failed listening.' )
     }
@@ -50,18 +51,19 @@ export data ELS (
   }
 
 
-  method join() this.starter.join()
+  method join() this.attacher.join()
+
 
   {##
    # meant to be rpcalled by a `start-els` process launched from VSCode, who
    # connects to this ELS. this ELS could have been launched by that starter,
    # in case no other ELS instance already started to provide global language
-   # service on the configured c4aPort/c4aAddr, which is the usual use case.
+   # service on the configured port/addr, which is the usual use case.
    #}
   export method AttachToClient(
     port,
-    addr= '127.0.0.1', service= 'els/server',
-  ) {
+    addr= '127.0.0.1', service= 'els/serve',
+  ) void {
     cc = CC( service, port, addr )
     {
       case cc.addrs() of {

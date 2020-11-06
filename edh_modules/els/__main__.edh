@@ -4,7 +4,10 @@
 
 import * 'els/server'
 
-# listen on specified port, of '127.0.0.1' by default
-els = ELS( 1707 )
+# so it's customizable with a nested .edh file in edh_modules besides cwd
+import (** cfg ) 'els/config'
+
+# start listening
+els = ELS(** cfg )
 # keep the server process running
 els.join()

@@ -152,38 +152,3 @@ executable els
     , stm               >=2.5
     , text
     , transformers
-
-executable start-els
-  main-is:            Main.hs
-  hs-source-dirs:     starter
-  default-language:   Haskell2010
-  default-extensions:
-    NoImplicitPrelude
-    BangPatterns
-    ConstraintKinds
-    DataKinds
-    FlexibleContexts
-    FlexibleInstances
-    GADTs
-    KindSignatures
-    LambdaCase
-    OverloadedStrings
-    ScopedTypeVariables
-    TupleSections
-    TypeApplications
-    TypeOperators
-    ViewPatterns
-
-  ghc-options:        -Wall -threaded -rtsopts "-with-rtsopts=-maxN2 -qg"
-  build-depends:
-    , base              >=4.12
-    , bytestring
-    , edh
-    , els
-    , els-internal
-    , lossless-decimal
-    , mtl
-    , nedh
-    , stm               >=2.5
-    , text
-    , transformers
