@@ -1,5 +1,15 @@
 {##
- # shared Edh language server
+ # shared Đ (Edh) language server
+ #
+ # LSP up to 3.15, assumes that one server serves one tool. No support in the
+ # protocol to share one server between different tools.
+ # Such a sharing would require additional protocol e.g. to lock a document to
+ # support concurrent editing.
+ #
+ # ELS as implemented here assumes server sharing be possible, especially when
+ # debugging the els server functionality, an els process would be started from
+ # the command line before an els client embedded in a VSCode instance is
+ # started.
  #}
 
 import * 'net'
@@ -14,8 +24,8 @@ import * 'els/RT'
  # language service will be provided over that connection.
  #}
 export data ELS (
-  # local addr & port to accept connections from els starters
-  c4aAddr = '127.0.0.1', c4aPort = 1707,
+  # local port & addr to accept connections from els starters
+  c4aPort = 1707, c4aAddr = '127.0.0.1',
 ) {
 
   method __init__(*** _ ) {
@@ -30,11 +40,11 @@ export data ELS (
     )
     case this.starter.addrs() of {
       { elsAddr :>_ } -> console.info
-      <| 'Edh Language Server starter service listening: ' ++ elsAddr
+      <| 'Đ (Edh) Language Server starter service listening: ' ++ elsAddr
       # or the network has failed, propagate the error
       this.starter.join() # this usually throws
       # in case join() didn't throw, report this error
-      error( 'ELS failed listening.' )
+      error( 'Đ (Edh) Language Server failed listening.' )
     }
 
   }
@@ -43,10 +53,40 @@ export data ELS (
   method join() this.starter.join()
 
   {##
-   # meant to be call via rpc, by a starter process connected to this ls
+   # meant to be rpcalled by a `start-els` process launched from VSCode, who
+   # connects to this ELS. this ELS could have been launched by that starter,
+   # in case no other ELS instance already started to provide global language
+   # service on the configured c4aPort/c4aAddr, which is the usual use case.
    #}
-  export method AttachToClient( port, addr= '127.0.0.1' ) {
+  export method AttachToClient(
+    port,
+    addr= '127.0.0.1', service= 'els/server',
+  ) {
+    cc = CC( service, port, addr )
+    {
+      case cc.addrs() of {
+        { ccAddr :>_ } -> console.info
+        <| 'Đ (Edh) Language Server connected to client: ' ++ ccAddr
+        # or the network has failed, propagate the error
+        cc.join() # this usually throws
+        # in case join() didn't throw, report this error
+        error( 'Đ (Edh) Language Server failed connecting to ' ++ port,
+          addr=addr, service=service )
+      }
 
+      # successfully connected
+      # TODO any special treatment for Initialize Request?
+      # https://microsoft.github.io/language-server-protocol/specification#initialize
+
+    } $=> { exc } -> {
+      console.error<| 'Exception by els client connection '
+      ++ cc ++ ' triggered by starter ' ++ perform @netPeer
+      ++ ' error:\n  ' ++ desc( exc )
+
+      # disconnect the client as well as the starter
+      cc.stop()
+      perform @disconnectPeer()
+    }
   }
 
 }

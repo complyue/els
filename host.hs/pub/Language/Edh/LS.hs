@@ -3,17 +3,11 @@ module Language.Edh.LS where
 import           Prelude
 -- import           Debug.Trace
 
-import           Control.Exception
-import           Control.Monad.Reader
-import           Control.Concurrent
-import           Control.Concurrent.STM
-
-import qualified Data.Text                     as T
+import           Control.Monad
 
 import           Language.Edh.EHI
-import           Language.Edh.Net
 
-import           Language.Edh.LS.RtTypes
+import           Language.Edh.LS.CC
 
 
 installLanguageServerBatteries :: EdhWorld -> IO ()
@@ -23,25 +17,29 @@ installLanguageServerBatteries !world =
     -- loosely depend on the @net@ runtime from nedh package
     runEdhTx ets $ importEdhModule "net/RT" $ \case
       EdhObject !moduNetRT -> \_ets ->
-        lookupEdhObjAttr moduNetRT (AttrByName "Peer") >>= \case
-          (_, EdhObject !peerClass) -> do
+        lookupEdhObjAttr moduNetRT (AttrByName "Addr") >>= \case
+          (_, EdhObject !addrClass) -> do
 
             let !moduScope = contextScope $ edh'context ets
 
-            !moduArts <-
+            !ccClass  <- createCCClass addrClass moduScope
+
+            !moduMths <-
               sequence
-                $ [ (nm, ) <$> mkHostProc moduScope mc nm hp
+                $ [ (AttrByName nm, ) <$> mkHostProc moduScope mc nm hp
                   | (nm, mc, hp) <- []
                   ]
 
+            let !moduArts = (AttrByName "CC", EdhObject ccClass) : moduMths
             !artsDict <- EdhDict
-              <$> createEdhDict [ (EdhString k, v) | (k, v) <- moduArts ]
+              <$> createEdhDict [ (attrKeyValue k, v) | (k, v) <- moduArts ]
             flip iopdUpdate (edh'scope'entity moduScope)
-              $  [ (AttrByName k, v) | (k, v) <- moduArts ]
+              $  [ (k, v) | (k, v) <- moduArts ]
               ++ [(AttrByName "__exports__", artsDict)]
 
             exit
-          _ -> error "bug: net/RT provides no Peer class"
+
+          _ -> error "bug: net/RT provides no Addr class"
       _ -> error "bug: importEdhModule returned non-object"
 
 

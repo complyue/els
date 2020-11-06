@@ -1,16 +1,10 @@
-
 {##
- # this is the entry module of Edh Language Server
+ # this is the entry module of Đ (Edh) Language Server
  #}
-
 
 import * 'els/server'
 
-
-els = ELS(
-  # local addr to listen for call-for-lsa
-  '127.0.0.1', 1707,
-)
-
+# listen on specified port, of '127.0.0.1' by default
+els = ELS( 1707 )
 # keep the server process running
 els.join()

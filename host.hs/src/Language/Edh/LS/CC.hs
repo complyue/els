@@ -25,17 +25,17 @@ import           Language.Edh.EHI
 import           Language.Edh.LS.MicroProto
 
 
-type ClientAddr = Text
-type ClientPort = Int
+type LangClntAddr = Text
+type LangClntPort = Int
 
 -- | Network connection to a languageserver client
-data ClntConn = ClntConn {
+data CC = CC {
     -- the import spec of the module to run as the service
       cc'modu :: !Text
-    -- local network interface to bind
-    , cc'client'addr :: !ClientAddr
     -- local network port to bind
-    , cc'client'port :: !ClientPort
+    , cc'client'port :: !LangClntPort
+    -- local network interface to bind
+    , cc'client'addr :: !LangClntAddr
     -- actually connected network addresses
     , cc'client'addrs :: !(TMVar [AddrInfo])
     -- end-of-life status
@@ -47,19 +47,19 @@ data ClntConn = ClntConn {
 
 createCCClass :: Object -> Scope -> STM Object
 createCCClass !addrClass !clsOuterScope =
-  mkHostClass clsOuterScope "Client" (allocEdhObj ccAllocator) []
-    $ \ !clsScope -> do
-        !mths <- sequence
-          [ (AttrByName nm, ) <$> mkHostProc clsScope vc nm hp
-          | (nm, vc, hp) <-
-            [ ("addrs"   , EdhMethod, wrapHostProc addrsProc)
-            , ("eol"     , EdhMethod, wrapHostProc eolProc)
-            , ("join"    , EdhMethod, wrapHostProc joinProc)
-            , ("stop"    , EdhMethod, wrapHostProc stopProc)
-            , ("__repr__", EdhMethod, wrapHostProc reprProc)
-            ]
+  mkHostClass clsOuterScope "CC" (allocEdhObj ccAllocator) [] $ \ !clsScope ->
+    do
+      !mths <- sequence
+        [ (AttrByName nm, ) <$> mkHostProc clsScope vc nm hp
+        | (nm, vc, hp) <-
+          [ ("addrs"   , EdhMethod, wrapHostProc addrsProc)
+          , ("eol"     , EdhMethod, wrapHostProc eolProc)
+          , ("join"    , EdhMethod, wrapHostProc joinProc)
+          , ("stop"    , EdhMethod, wrapHostProc stopProc)
+          , ("__repr__", EdhMethod, wrapHostProc reprProc)
           ]
-        iopdUpdate mths $ edh'scope'entity clsScope
+        ]
+      iopdUpdate mths $ edh'scope'entity clsScope
 
  where
 
@@ -70,7 +70,7 @@ createCCClass !addrClass !clsOuterScope =
     -> "addr" ?: Text
     -> "init" ?: EdhValue
     -> EdhObjectAllocator
-  ccAllocator (mandatoryArg -> !service) (mandatoryArg -> !ctorPort) (defaultArg (  "127.0.0.1") -> !ctorAddr) (defaultArg nil -> !init_) !ctorExit !etsCtor
+  ccAllocator (mandatoryArg -> !service) (mandatoryArg -> !ctorPort) (defaultArg "127.0.0.1" -> !ctorAddr) (defaultArg nil -> !init_) !ctorExit !etsCtor
     = if edh'in'tx etsCtor
       then throwEdh etsCtor
                     UsageError
@@ -85,13 +85,13 @@ createCCClass !addrClass !clsOuterScope =
     withInit !__modu_init__ = do
       serviceAddrs <- newEmptyTMVar
       svcEoL       <- newEmptyTMVar
-      let !cc = ClntConn { cc'modu         = service
-                         , cc'client'addr  = ctorAddr
-                         , cc'client'port  = fromIntegral ctorPort
-                         , cc'client'addrs = serviceAddrs
-                         , cc'eol          = svcEoL
-                         , cc'init         = __modu_init__
-                         }
+      let !cc = CC { cc'modu         = service
+                   , cc'client'port  = fromIntegral ctorPort
+                   , cc'client'addr  = ctorAddr
+                   , cc'client'addrs = serviceAddrs
+                   , cc'eol          = svcEoL
+                   , cc'init         = __modu_init__
+                   }
       runEdhTx etsCtor $ edhContIO $ do
         void $ forkFinally
           (serviceThread cc)
@@ -104,8 +104,8 @@ createCCClass !addrClass !clsOuterScope =
           )
         atomically $ ctorExit $ HostStore (toDyn cc)
 
-    serviceThread :: ClntConn -> IO ()
-    serviceThread (ClntConn !svcModu !servAddr !servPort !serviceAddrs !svcEoL !__modu_init__)
+    serviceThread :: CC -> IO ()
+    serviceThread (CC !svcModu !servPort !servAddr !serviceAddrs !svcEoL !__modu_init__)
       = do
         addr <- resolveServAddr
         bracket
@@ -239,15 +239,15 @@ createCCClass !addrClass !clsOuterScope =
 
   reprProc :: EdhHostProc
   reprProc !exit !ets =
-    withThisHostObj ets $ \(ClntConn !service !addr !port _ _ _) ->
+    withThisHostObj ets $ \(CC !service !port !addr _ _ _) ->
       exitEdh ets exit
         $  EdhString
-        $  "Client("
+        $  "CC("
         <> T.pack (show service)
         <> ", "
-        <> T.pack (show addr)
-        <> ", "
         <> T.pack (show port)
+        <> ", "
+        <> T.pack (show addr)
         <> ")"
 
   addrsProc :: EdhHostProc
