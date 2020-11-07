@@ -167,11 +167,22 @@ createLangServerClass !addrClass !clsOuterScope =
 
           recvOnePktProc :: Scope -> EdhHostProc
           recvOnePktProc !sandbox !exit !ets =
-            takeTMVar pktSink >>= \(Rpc _headers !content) -> do
-              -- interpret the content as command, return as is
-              let !src = decodeUtf8 content
-              runEdhInSandbox ets sandbox (evalEdh (T.unpack clientId) src)
-                $ \ !r _ets -> exitEdh ets exit r
+            (Right <$> takeTMVar pktSink)
+              `orElse` (Left <$> readTMVar clientEoL)
+              >>=      \case
+                         -- reached normal end-of-stream
+                         Left Right{} -> exitEdh ets exit nil
+                         -- previously eol due to error
+                         Left (Left !ex) ->
+                           edh'exception'wrapper (edh'ctx'world $ edh'context ets) ex
+                             >>= \ !exo -> edhThrow ets $ EdhObject exo
+                         Right (Rpc _headers !content) -> do
+                            -- interpret the content as command, return as is
+                           let !src = decodeUtf8 content
+                           runEdhInSandbox ets
+                                           sandbox
+                                           (evalEdh (T.unpack clientId) src)
+                             $ \ !r _ets -> exitEdh ets exit r
 
           postOnePktProc :: "rpcOut" !: Text -> RestKwArgs -> EdhHostProc
           postOnePktProc (mandatoryArg -> !content) !headers !exit !ets = go
@@ -235,7 +246,14 @@ createLangServerClass !addrClass !clsOuterScope =
         -- pump commands in, 
         -- make this thread the only one reading the handle
         -- note this won't return, will be asynchronously killed on eol
-        void $ forkIO $ receiveRpcStream clientId (recv sock) pktSink clientEoL
+        void
+          $ forkFinally
+              (receiveRpcStream clientId (recv sock) pktSink clientEoL)
+            -- mark client end-of-life upon disconnected or err out
+          $ void
+          . atomically
+          . tryPutTMVar clientEoL
+          . void
 
         let
           serializeCmdsOut :: IO ()

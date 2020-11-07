@@ -93,26 +93,28 @@ receiveRpcStream peerSite !intaker !pktSink !eos = do
  where
 
   getExact :: Int64 -> IO (BL.ByteString, B.ByteString)
-  getExact !nbytes64 = intaker nbytes >>= \chunk ->
-    let more2read = nbytes64 - fromIntegral (B.length chunk)
+  getExact !nbytes64 = intaker nbytes >>= \ !chunk ->
+    let !more2read = nbytes64 - fromIntegral (B.length chunk)
     in  if more2read > 0
-          then getExact more2read >>= \(chunk', readahead) ->
-            return (BL.fromStrict chunk <> chunk', readahead)
+          then if B.null chunk
+            then throwIO $ EdhPeerError peerSite "premature disconnection"
+            else getExact more2read >>= \(!chunk', !readahead) ->
+              return (BL.fromStrict chunk <> chunk', readahead)
           else case B.splitAt nbytes chunk of
-            (exact, readahead) -> return (BL.fromStrict exact, readahead)
-    where nbytes = fromIntegral nbytes64
+            (!exact, !readahead) -> return (BL.fromStrict exact, readahead)
+    where !nbytes = fromIntegral nbytes64
 
   parsePkts :: BL.ByteString -> IO ()
   parsePkts !readahead = do
-    (contentLen, headers, readahead') <- parseHdrs (-1) [] readahead
+    (!contentLen, !headers, !readahead') <- parseHdrs (-1) [] readahead
     if contentLen < 0
       then if null headers && BL.null readahead
         -- normal eos, try mark and done
         then void $ atomically $ tryPutTMVar eos $ Right ()
         else throwIO $ EdhPeerError peerSite "missing Content-Length header"
       else do
-        let (content, rest) = BL.splitAt contentLen readahead'
-            more2read       = contentLen - BL.length content
+        let (!content, !rest) = BL.splitAt contentLen readahead'
+            !more2read        = contentLen - BL.length content
         if more2read > 0
           then do
             (morePayload, moreAhead) <- getExact more2read
@@ -129,8 +131,7 @@ receiveRpcStream peerSite !intaker !pktSink !eos = do
                     Right _          -> parsePkts $ BL.fromStrict moreAhead
           else
             atomically
-                ((   Right
-                 <$> putTMVar pktSink (Rpc headers $ BL.toStrict content)
+                ((Right <$> putTMVar pktSink (Rpc headers $ BL.toStrict content)
                  )
                 `orElse` (Left <$> readTMVar eos)
                 )
@@ -145,7 +146,7 @@ receiveRpcStream peerSite !intaker !pktSink !eos = do
     -> BL.ByteString
     -> IO (Int64, RpcHeaders, BL.ByteString)
   parseHdrs !knownLen !hdrs !readahead = do
-    peeked <- if BL.null readahead
+    !peeked <- if BL.null readahead
       then BL.fromStrict <$> intaker chunkSize
       else return readahead
     if BL.null peeked
@@ -155,8 +156,11 @@ receiveRpcStream peerSite !intaker !pktSink !eos = do
         in  if BL.null rest || BL.null (C.tail rest)
               then if BL.length peeked < fromIntegral maxHeaderLength
                 then do
-                  morePeek <- BL.fromStrict <$> intaker chunkSize
-                  parseHdrs knownLen hdrs $ peeked <> morePeek
+                  !morePeek <- BL.fromStrict <$> intaker chunkSize
+                  if BL.null morePeek
+                    then throwIO
+                      $ EdhPeerError peerSite "premature disconnection"
+                    else parseHdrs knownLen hdrs $ peeked <> morePeek
                 else throwIO
                   $ EdhPeerError peerSite "incoming packet header too long"
               else case C.stripPrefix "\r\n" rest of
