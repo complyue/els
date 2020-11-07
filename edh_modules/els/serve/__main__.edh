@@ -50,7 +50,9 @@ defer {
 {
 
   # the effectful utility for various services to post outgoing lsp packets
-  effect method lspPost( rpcDict, **headers ) postOnePkt( repr$ rpcDict, **headers )
+  effect method lspPost( rpcDict, **headers ) {
+    postOnePkt( json$ rpcDict, **headers )
+  }
 
   # global sink of all responses, service threads can choose to perceive this
   globalResponses = sink
@@ -131,7 +133,7 @@ while eol() is false {
 
       case allMethods ?@ mthName of {
         nil -> {
-          postOnePkt( repr$ {
+          postOnePkt( json$ {
               'id' : rpcIn[ 'id' ],
               'error' : {
                 'code' : -32601, # MethodNotFound
@@ -150,12 +152,20 @@ while eol() is false {
       effect rpcRequest = rpcIn
 
       {
+        # treat carefully about the procedure parameters
+        case rpcIn[ 'params' ] of {
+          # note Edh null is a procedure instead of constant
+          null -> args = ()
+          # normal case
+          { args } | type( args ) is DictType -> { pass }
+          # fallback case
+          args = ()
+        }
         # try call the designated lsp method
-        args = rpcIn[ 'params' ] or ()
         mth(** args )
       } $=> { exc } -> {
         # report back for an uncaught exception as internal error
-        postOnePkt( repr$ {
+        postOnePkt( json$ {
             'id' : rpcIn[ 'id' ],
             'error' : {
               'code' : -32603, # InternalError
