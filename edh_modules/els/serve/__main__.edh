@@ -42,26 +42,33 @@ if false then { # this block is impossible to run
 
 }
 
+console.debug<| 'ELS client ' ++ clientId ++ ' connected.'
 defer {
-  console.debug<| 'ELS server done with language server client ' ++ clientId
+  console.debug<| 'ELS done with client ' ++ clientId
 }
 
-# the effectful utility for various services to post outgoing lsp packets
-effect lspPost( rpcDict, **headers ) postOnePkt( repr$ rpcDict, **headers )
+{
 
-# global sink of all responses, service threads can choose to perceive this
-globalResponses = sink
-effect lspResponses = globalResponses
+  # the effectful utility for various services to post outgoing lsp packets
+  effect method lspPost( rpcDict, **headers ) postOnePkt( repr$ rpcDict, **headers )
 
-# response listeners can be registered per request id
-responseListeners = {}
-effect method lspReceiveResponse( idReq, listener ) {
-  responseListeners[ idReq ] = listener
+  # global sink of all responses, service threads can choose to perceive this
+  globalResponses = sink
+  effect lspResponses = globalResponses
+
+  # response listeners can be registered per request id
+  responseListeners = {}
+  effect method lspReceiveResponse( idReq, listener ) {
+    responseListeners[ idReq ] = listener
+  }
+
+  # pull-in all service methods
+  import (** allMethods ) 'els/services'
+
+} $=> { exc } -> {
+  console.error<| 'Failed preparing els service environment: ' ++ desc( exc )
+  rethrow
 }
-
-# pull-in all service methods
-import (** allMethods ) 'els/services'
-
 
 # loop forever until eol on error, or stopped elsewhere
 while eol() is false {

@@ -4,12 +4,14 @@
 
 import * 'els/RT'
 
-# so it's customizable with a nested .edh file in edh_modules besides cwd
+# it's customizable with a nested `els/config.edh`,
+# in `edh_modules` resides in cwd or any upper directory
 import (** cfg ) 'els/config'
 
 # start listening
 els = LangServer(** cfg )
 
+# wait the result, either sucess or failure
 case els.addrs() of {
   { elsAddr :>_ } -> console.info
   <| 'Đ (Edh) Language Server listening: ' ++ elsAddr
@@ -19,5 +21,5 @@ case els.addrs() of {
   error( 'Đ (Edh) Language Server failed listening.' )
 }
 
-# keep the server process running
+# success, keep the server process running
 els.join()
