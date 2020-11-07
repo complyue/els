@@ -1,5 +1,5 @@
 
-module Language.Edh.LS.MicroProto where
+module Language.Edh.LS.BaseLSP where
 
 import           Prelude
 -- import           Debug.Trace
@@ -29,25 +29,25 @@ maxHeaderLength = 600
 
 type HeaderName = Text
 type HeaderContent = Text
-type PacketHeaders = [(HeaderName, HeaderContent)]
-type PacketContent = B.ByteString
-type PacketSink = TMVar Packet
+type RpcHeaders = [(HeaderName, HeaderContent)]
+type RpcContent = B.ByteString
+type RpcSink = TMVar Rpc
 type EndOfStream = TMVar (Either SomeException ())
 
-data Packet = Packet !PacketHeaders !PacketContent
+data Rpc = Rpc !RpcHeaders !RpcContent
   deriving (Eq, Show)
-instance Hashable Packet where
-  hashWithSalt s (Packet headers content) =
+instance Hashable Rpc where
+  hashWithSalt s (Rpc headers content) =
     s `hashWithSalt` headers `hashWithSalt` content
 
 -- | Construct a textual packet.
-textPacket :: PacketHeaders -> Text -> Packet
-textPacket !headers !txt = Packet headers $ TE.encodeUtf8 txt
+textRpc :: RpcHeaders -> Text -> Rpc
+textRpc !headers !txt = Rpc headers $ TE.encodeUtf8 txt
 
 
 -- | Send out a binary packet.
-sendPacket :: (B.ByteString -> IO ()) -> Packet -> IO ()
-sendPacket !outletter (Packet !headers !content) = do
+sendRpc :: (B.ByteString -> IO ()) -> Rpc -> IO ()
+sendRpc !outletter (Rpc !headers !content) = do
   let !pktLen = B.length content
   -- write packet headers
   outletter
@@ -78,9 +78,9 @@ sendPacket !outletter (Packet !headers !content) = do
 --
 -- The caller is responsible to close the handle anyway appropriate, but
 -- only after eos is signaled.
-receivePacketStream
-  :: Text -> (Int -> IO B.ByteString) -> PacketSink -> EndOfStream -> IO ()
-receivePacketStream peerSite !intaker !pktSink !eos = do
+receiveRpcStream
+  :: Text -> (Int -> IO B.ByteString) -> RpcSink -> EndOfStream -> IO ()
+receiveRpcStream peerSite !intaker !pktSink !eos = do
   recvThId <- myThreadId -- async kill the receiving action on eos
   void $ forkIO $ atomically (readTMVar eos) >> killThread recvThId
   catch (parsePkts BL.empty)
@@ -119,7 +119,7 @@ receivePacketStream peerSite !intaker !pktSink !eos = do
             atomically
                 (        (Right <$> putTMVar
                            pktSink
-                           (Packet headers $ BL.toStrict (content <> morePayload))
+                           (Rpc headers $ BL.toStrict (content <> morePayload))
                          )
                 `orElse` (Left <$> readTMVar eos)
                 )
@@ -130,7 +130,7 @@ receivePacketStream peerSite !intaker !pktSink !eos = do
           else
             atomically
                 ((   Right
-                 <$> putTMVar pktSink (Packet headers $ BL.toStrict content)
+                 <$> putTMVar pktSink (Rpc headers $ BL.toStrict content)
                  )
                 `orElse` (Left <$> readTMVar eos)
                 )
@@ -141,9 +141,9 @@ receivePacketStream peerSite !intaker !pktSink !eos = do
 
   parseHdrs
     :: Int64
-    -> PacketHeaders
+    -> RpcHeaders
     -> BL.ByteString
-    -> IO (Int64, PacketHeaders, BL.ByteString)
+    -> IO (Int64, RpcHeaders, BL.ByteString)
   parseHdrs !knownLen !hdrs !readahead = do
     peeked <- if BL.null readahead
       then BL.fromStrict <$> intaker chunkSize

@@ -2,12 +2,22 @@
  # this is the entry module of Đ (Edh) Language Server
  #}
 
-import * 'els/server'
+import * 'els/RT'
 
 # so it's customizable with a nested .edh file in edh_modules besides cwd
 import (** cfg ) 'els/config'
 
 # start listening
-els = ELS(** cfg )
+els = LangServer(** cfg )
+
+case els.addrs() of {
+  { elsAddr :>_ } -> console.info
+  <| 'Đ (Edh) Language Server listening: ' ++ elsAddr
+  # or the network has failed, propagate the error
+  els.join() # this usually throws
+  # in case join() didn't throw, report this error
+  error( 'Đ (Edh) Language Server failed listening.' )
+}
+
 # keep the server process running
 els.join()

@@ -7,7 +7,7 @@ import           Control.Monad
 
 import           Language.Edh.EHI
 
-import           Language.Edh.LS.CC
+import           Language.Edh.LS.LangServer
 
 
 installLanguageServerBatteries :: EdhWorld -> IO ()
@@ -22,7 +22,7 @@ installLanguageServerBatteries !world =
 
             let !moduScope = contextScope $ edh'context ets
 
-            !ccClass  <- createCCClass addrClass moduScope
+            !lsClass  <- createLangServerClass addrClass moduScope
 
             !moduMths <-
               sequence
@@ -30,7 +30,8 @@ installLanguageServerBatteries !world =
                   | (nm, mc, hp) <- []
                   ]
 
-            let !moduArts = (AttrByName "CC", EdhObject ccClass) : moduMths
+            let !moduArts =
+                  (AttrByName "LangServer", EdhObject lsClass) : moduMths
             !artsDict <- EdhDict
               <$> createEdhDict [ (attrKeyValue k, v) | (k, v) <- moduArts ]
             flip iopdUpdate (edh'scope'entity moduScope)
