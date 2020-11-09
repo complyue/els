@@ -22,4 +22,14 @@ case els.addrs() of {
 }
 
 # success, keep the server process running
-els.join()
+
+if debug then {
+  import * 'els/debug'
+
+  # show session count and url list every 5 minutes
+  for _ from console.everySeconds( 300 )
+  do elsDebug.showSessions()
+
+} else {
+  els.join()
+}

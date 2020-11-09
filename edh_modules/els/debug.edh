@@ -1,0 +1,4 @@
+
+import * 'net/repl'
+
+export elsDebug = WebRepl()

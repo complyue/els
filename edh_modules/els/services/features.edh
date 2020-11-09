@@ -1,1 +1,12 @@
 
+export method initialize(*** otherParams ) {
+
+  if debug then elsDebug.replHere()
+
+}
+
+export method shutdown(*** otherParams ) {
+
+  if debug then elsDebug.replHere()
+
+}

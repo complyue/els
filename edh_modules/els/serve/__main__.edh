@@ -6,6 +6,8 @@
  # VSCode workspace session.
  #}
 
+import * 'els/debug'
+
 
 # mocking artifacts those should have been implanted by host
 # module preparation, to give meaningful information to IDEs
@@ -130,9 +132,19 @@ while eol() is false {
         { mthName } | mthName and type( mthName ) is StringType -> { pass }
         _ -> error( 'unexpected lsp JSONRPC method', rpc=rpcIn )
       }
+      # treat carefully about the procedure parameters
+      case rpcIn[ 'params' ] of {
+        # note Edh null is a procedure instead of a constant
+        null -> args = ()
+        # normal case
+        { args } | type( args ) is DictType -> { pass }
+        # fallback case
+        args = ()
+      }
 
       case allMethods ?@ mthName of {
         nil -> {
+          if debug then elsDebug.replHere()
           postOnePkt( json$ {
               'id' : rpcIn[ 'id' ],
               'error' : {
@@ -152,15 +164,6 @@ while eol() is false {
       effect rpcRequest = rpcIn
 
       {
-        # treat carefully about the procedure parameters
-        case rpcIn[ 'params' ] of {
-          # note Edh null is a procedure instead of constant
-          null -> args = ()
-          # normal case
-          { args } | type( args ) is DictType -> { pass }
-          # fallback case
-          args = ()
-        }
         # try call the designated lsp method
         mth(** args )
       } $=> { exc } -> {
