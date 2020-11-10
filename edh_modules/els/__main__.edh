@@ -28,7 +28,7 @@ if debug then {
 
   # show session count and url list every 5 minutes
   for _ from console.everySeconds( 300 )
-  do elsDebug.showSessions()
+  do elsDebug.logSessions()
 
 } else {
   els.join()

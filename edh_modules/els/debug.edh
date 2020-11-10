@@ -1,4 +1,4 @@
 
 import * 'net/repl'
 
-export elsDebug = WebRepl()
+export elsDebug = WebRepl( useSandbox= null$debug )

@@ -201,7 +201,7 @@ createLangServerClass !addrClass !clsOuterScope =
 
           prepService :: EdhModulePreparation
           prepService !etsModu !exit =
-            mkSandbox etsModu moduObj $ \ !sandboxScope -> do
+            mkObjSandbox etsModu moduObj $ \ !sandboxScope -> do
 
               -- define and implant procedures to the module being prepared
               !moduMths <- sequence
