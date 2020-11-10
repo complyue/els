@@ -1,8 +1,52 @@
 
+import * 'els/debug'
+
 export method initialize(*** otherParams ) {
 
-  if debug then elsDebug.replHere()
+  perform lspRespond( {
+      'capabilities' : {
 
+        'textDocumentSync' : {
+          'openClose' : false,
+          'change' : 1, # 0/1/2 None/Full/Incremental
+          'willSave' : true,
+          'willSaveWaitUntil' : true,
+          'save' : true,
+        },
+
+        # TODO impl. them
+        # 'documentSymbolProvider' : false,
+        # 'workspaceSymbolProvider' : false,
+        # 'hoverProvider' : false,
+        # 'declarationProvider' : false,
+        # 'definitionProvider' : false,
+        # 'referencesProvider' : false,
+
+        # todo impl. these ?
+        # 'foldingRangeProvider' : false,
+        # 'renameProvider' : false,
+        # 'selectionRangeProvider' : false,
+        # 'workspaceFolders' : {
+        #   'supported' : false,
+        #   'changeNotifications' : false,
+        # },
+
+      },
+      'serverInfo' : {
+        'name' : 'els',
+        'version' : '0.1.0.pre',
+      },
+  } )
+
+}
+
+export method initialized(*** otherParams ) {
+  perform lspRespond( {} )
+}
+
+txtDoc'didOpen = 'textDocument/didOpen'
+export method @txtDoc'didOpen ( textDocument, ***_ ) {
+  perform lspRespond( {} )
 }
 
 export method shutdown(*** otherParams ) {

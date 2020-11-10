@@ -52,8 +52,13 @@ defer {
 {
 
   # the effectful utility for various services to post outgoing lsp packets
-  effect method lspPost( rpcDict, **headers ) {
-    postOnePkt( json$ rpcDict, **headers )
+  effect method lspRespond( resultDict, **headers ) {
+    reqDict = behave lspRequest
+    outDict = {
+      'id' : reqDict[ 'id' ],
+      'result' : resultDict,
+    }
+    postOnePkt( json$ outDict, **headers )
   }
 
   # global sink of all responses, service threads can choose to perceive this
@@ -92,11 +97,16 @@ while eol() is false {
           { idReq } -> {
             globalResponses <- rpcIn
             case responseListeners[ idReq ] of {
-              { listener } -> {
-                # a listener must return non-null result to be kept installed
-                if not listener( NA, error=rpcErr )
-                then responseListeners[ idReq ] = nil
-              }
+              { listener } -> { {
+                  # a listener must return `true` to be kept installed
+                  if listener( NA, error=rpcErr ) is not true
+                  then responseListeners[ idReq ] = nil
+                } $=> { exc } -> {
+                  console.warn<| 'LSP response listener failed: ' ++ desc( exc )
+                  # uninstall the failing one
+                  ai if esponseListeners[ idReq ] is listener
+                  then responseListeners[ idReq ] = nil
+              } }
               # console.warn<| (
               #   'LSP error not listened: ' ++ rpcErr, rpc=rpcIn
               # )
@@ -113,11 +123,16 @@ while eol() is false {
           { idReq } -> {
             globalResponses <- rpcIn
             case responseListeners[ idReq ] of {
-              { listener } -> {
-                # a listener must return non-null result to be kept installed
-                if not listener( rpcResult )
-                then responseListeners[ idReq ] = nil
-              }
+              { listener } -> { {
+                  # a listener must return `true` to be kept installed
+                  if listener( rpcResult ) is not true
+                  then responseListeners[ idReq ] = nil
+                } $=> { exc } -> {
+                  console.warn<| 'LSP response listener failed: ' ++ desc( exc )
+                  # uninstall the failing one
+                  ai if esponseListeners[ idReq ] is listener
+                  then responseListeners[ idReq ] = nil
+              } }
               # console.warn<| (
               #   'LSP result not listened: ' ++ rpcResult, rpc=rpcIn
               # )
@@ -161,7 +176,7 @@ while eol() is false {
       }
 
       # effectful value of original request
-      effect rpcRequest = rpcIn
+      effect lspRequest = rpcIn
 
       {
         # try call the designated lsp method
