@@ -1,6 +1,6 @@
 export {
 
-  import * './features'
+  import * './lifecycle'
   import * './docsync'
 
 }

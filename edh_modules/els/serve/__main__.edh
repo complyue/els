@@ -93,8 +93,6 @@ while eol() is false {
     # note the scoped block reserves effectful context for the lsp request,
     # e.g. lspRequest
 
-    # console.debug<| 'ELS rpc:\n  ' ++ rpcIn
-
     case rpcIn[ 'jsonrpc' ] of {
       '2.0' -> { pass }
       _ -> error( 'unexpected lsp JSONRPC version', rpc=rpcIn )

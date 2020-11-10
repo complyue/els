@@ -1,7 +1,19 @@
 
 import * 'els/debug'
 
-export method initialize(*** otherParams ) {
+export method initialize(
+  clientInfo= '<unknown>',
+  capabilities= {},
+  workspaceFolders= [],
+  trace= 'off',
+  ***_
+) {
+
+  console.debug<| 'Initializing els for client ' ++ clientInfo
+
+  # uncomment to inspect the parameters and raw request data with a web REPL
+  # req = perform lspRequest
+  # elsDebug.replHere()
 
   perform lspRespond( {
       'capabilities' : {
@@ -15,6 +27,7 @@ export method initialize(*** otherParams ) {
         },
 
         # TODO impl. them
+        # 'foldingRangeProvider' : false,
         # 'documentSymbolProvider' : false,
         # 'workspaceSymbolProvider' : false,
         # 'hoverProvider' : false,
@@ -23,7 +36,6 @@ export method initialize(*** otherParams ) {
         # 'referencesProvider' : false,
 
         # todo impl. these ?
-        # 'foldingRangeProvider' : false,
         # 'renameProvider' : false,
         # 'selectionRangeProvider' : false,
         # 'workspaceFolders' : {
@@ -40,8 +52,10 @@ export method initialize(*** otherParams ) {
 
 }
 
-export method initialized(*** otherParams ) pass
+export method initialized(*** _ ) pass
 
-export method shutdown(*** otherParams ) {
-  perform lspRespond( null )
+export method shutdown(*** _ ) {
+  perform lspRespond( None )
 }
+
+export exit = console.exit
