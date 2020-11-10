@@ -40,17 +40,8 @@ export method initialize(*** otherParams ) {
 
 }
 
-export method initialized(*** otherParams ) {
-  perform lspRespond( {} )
-}
-
-txtDoc'didOpen = 'textDocument/didOpen'
-export method @txtDoc'didOpen ( textDocument, ***_ ) {
-  perform lspRespond( {} )
-}
+export method initialized(*** otherParams ) pass
 
 export method shutdown(*** otherParams ) {
-
-  if debug then elsDebug.replHere()
-
+  perform lspRespond( null )
 }

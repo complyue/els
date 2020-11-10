@@ -1,0 +1,12 @@
+
+import * 'els/debug'
+
+
+mth'name = 'textDocument/didOpen'
+export method @mth'name ( textDocument, ***_ ) {
+  # TODO
+  elsDebug.replHere()
+}
+
+
+mth'name = nil

@@ -51,12 +51,19 @@ defer {
 
 {
 
-  # the effectful utility for various services to post outgoing lsp packets
-  effect method lspRespond( resultDict, **headers ) {
+  {##
+   # for a service method to post a lsp response
+   #}
+  effect method lspRespond( result, **headers ) {
     reqDict = behave lspRequest
+    case reqDict[ 'id' ] of {
+      { idReq } | type( idReq ) ?<= ( DecimalType, StringType, ) -> { pass }
+      debug and elsDebug.replHere()
+      error( 'bug: trying to respond to non-request' )
+    }
     outDict = {
-      'id' : reqDict[ 'id' ],
-      'result' : resultDict,
+      'id' : idReq,
+      'result' : result,
     }
     postOnePkt( json$ outDict, **headers )
   }
@@ -82,116 +89,119 @@ defer {
 # loop forever until eol on error, or stopped elsewhere
 while eol() is false {
 
-  case recvOnePkt() of {@ { rpcIn } -> {
-      console.debug<| 'ELS rpc:\n  ' ++ rpcIn
+  case recvOnePkt() of { rpcIn } -> {@
+    # note the scoped block reserves effectful context for the lsp request,
+    # e.g. lspRequest
 
-      case rpcIn[ 'jsonrpc' ] of {
-        '2.0' -> { pass }
-        _ -> error( 'unexpected lsp JSONRPC version', rpc=rpcIn )
-      }
+    # console.debug<| 'ELS rpc:\n  ' ++ rpcIn
 
-      # in case of error response
-      case rpcIn[ 'error' ] of { rpcErr } -> {
-        case rpcIn[ 'id' ] of {
-          nil -> error( 'lsp error response without id' )
-          { idReq } -> {
-            globalResponses <- rpcIn
-            case responseListeners[ idReq ] of {
-              { listener } -> { {
-                  # a listener must return `true` to be kept installed
-                  if listener( NA, error=rpcErr ) is not true
-                  then responseListeners[ idReq ] = nil
-                } $=> { exc } -> {
-                  console.warn<| 'LSP response listener failed: ' ++ desc( exc )
-                  # uninstall the failing one
-                  ai if esponseListeners[ idReq ] is listener
-                  then responseListeners[ idReq ] = nil
-              } }
-              # console.warn<| (
-              #   'LSP error not listened: ' ++ rpcErr, rpc=rpcIn
-              # )
-            }
+    case rpcIn[ 'jsonrpc' ] of {
+      '2.0' -> { pass }
+      _ -> error( 'unexpected lsp JSONRPC version', rpc=rpcIn )
+    }
+
+    # in case of error response
+    case rpcIn[ 'error' ] of { rpcErr } -> {
+      case rpcIn[ 'id' ] of {
+        nil -> error( 'lsp error response without id' )
+        { idReq } -> {
+          globalResponses <- rpcIn
+          case responseListeners[ idReq ] of {
+            { listener } -> { {
+                # a listener must return `true` to be kept installed
+                if listener( NA, error=rpcErr ) is not true
+                then responseListeners[ idReq ] = nil
+              } $=> { exc } -> {
+                console.warn<| 'LSP response listener failed: ' ++ desc( exc )
+                # uninstall the failing one
+                ai if esponseListeners[ idReq ] is listener
+                then responseListeners[ idReq ] = nil
+            } }
+            # console.warn<| (
+            #   'LSP error not listened: ' ++ rpcErr, rpc=rpcIn
+            # )
           }
         }
-        continue # done with this error response
       }
+      continue # done with this error response
+    }
 
-      # in case of success response
-      case rpcIn[ 'result' ] of { rpcResult } -> {
-        case rpcIn[ 'id' ] of {
-          nil -> error( 'lsp response without id' )
-          { idReq } -> {
-            globalResponses <- rpcIn
-            case responseListeners[ idReq ] of {
-              { listener } -> { {
-                  # a listener must return `true` to be kept installed
-                  if listener( rpcResult ) is not true
-                  then responseListeners[ idReq ] = nil
-                } $=> { exc } -> {
-                  console.warn<| 'LSP response listener failed: ' ++ desc( exc )
-                  # uninstall the failing one
-                  ai if esponseListeners[ idReq ] is listener
-                  then responseListeners[ idReq ] = nil
-              } }
-              # console.warn<| (
-              #   'LSP result not listened: ' ++ rpcResult, rpc=rpcIn
-              # )
-            }
+    # in case of success response
+    case rpcIn[ 'result' ] of { rpcResult } -> {
+      case rpcIn[ 'id' ] of {
+        nil -> error( 'lsp response without id' )
+        { idReq } -> {
+          globalResponses <- rpcIn
+          case responseListeners[ idReq ] of {
+            { listener } -> { {
+                # a listener must return `true` to be kept installed
+                if listener( rpcResult ) is not true
+                then responseListeners[ idReq ] = nil
+              } $=> { exc } -> {
+                console.warn<| 'LSP response listener failed: ' ++ desc( exc )
+                # uninstall the failing one
+                ai if esponseListeners[ idReq ] is listener
+                then responseListeners[ idReq ] = nil
+            } }
+            # console.warn<| (
+            #   'LSP result not listened: ' ++ rpcResult, rpc=rpcIn
+            # )
           }
         }
-        continue # done with this response
       }
+      continue # done with this response
+    }
 
-      # in case of request or notification
-      case rpcIn[ 'method' ] of {
-        { mthName } | mthName and type( mthName ) is StringType -> { pass }
-        _ -> error( 'unexpected lsp JSONRPC method', rpc=rpcIn )
-      }
-      # treat carefully about the procedure parameters
-      case rpcIn[ 'params' ] of {
-        # note Edh null is a procedure instead of a constant
-        null -> args = ()
-        # normal case
-        { args } | type( args ) is DictType -> { pass }
-        # fallback case
-        args = ()
-      }
+    # in case of request or notification
+    case rpcIn[ 'method' ] of {
+      { mthName } | mthName and type( mthName ) is StringType -> { pass }
+      _ -> error( 'unexpected lsp JSONRPC method', rpc=rpcIn )
+    }
+    # treat carefully about the procedure parameters
+    case rpcIn[ 'params' ] of {
+      # note Edh null is a procedure instead of a constant
+      null -> args = ()
+      # normal case
+      { args } | type( args ) is DictType -> { pass }
+      # fallback case
+      args = ()
+    }
 
-      case allMethods ?@ mthName of {
-        nil -> {
-          if debug then elsDebug.replHere()
-          postOnePkt( json$ {
-              'id' : rpcIn[ 'id' ],
-              'error' : {
-                'code' : -32601, # MethodNotFound
-                'message' : 'no such method: ' ++ mthName,
-              },
-          } )
-          continue
-        }
-        { mth } | type( mth ) ?<= [
-          MethodType, HostMethodType,
-        ] -> { pass }
-        _ -> error( 'bug: bad service method type ' ++ type( mth ), rpc=rpcIn )
-      }
-
-      # effectful value of original request
-      effect lspRequest = rpcIn
-
-      {
-        # try call the designated lsp method
-        mth(** args )
-      } $=> { exc } -> {
-        # report back for an uncaught exception as internal error
+    case allMethods ?@ mthName of {
+      nil -> {
+        if debug then elsDebug.replHere()
         postOnePkt( json$ {
             'id' : rpcIn[ 'id' ],
             'error' : {
-              'code' : -32603, # InternalError
-              'message' : str( exc ),
+              'code' : -32601, # MethodNotFound
+              'message' : 'no such method: ' ++ mthName,
             },
         } )
+        continue
       }
-  } @}
+      { mth } | type( mth ) ?<= [
+        MethodType, HostMethodType,
+      ] -> { pass }
+      _ -> error( 'bug: bad service method type ' ++ type( mth ), rpc=rpcIn )
+    }
+
+    # effectful value of original request
+    effect lspRequest = rpcIn
+
+    {
+      # try call the designated lsp method
+      mth(** args )
+    } $=> { exc } -> {
+      # report back for an uncaught exception as internal error
+      postOnePkt( json$ {
+          'id' : rpcIn[ 'id' ],
+          'error' : {
+            'code' : -32603, # InternalError
+            'message' : str( exc ),
+          },
+      } )
+    }
+  @}
 
 } $=> { exc } -> {
   if eol() is false then {
