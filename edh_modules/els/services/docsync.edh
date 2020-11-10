@@ -2,11 +2,6 @@
 import * 'els/debug'
 
 
-mth'name = 'textDocument/didOpen'
-export method @mth'name ( textDocument, ***_ ) {
-  # TODO
-  elsDebug.replHere()
+export method @ 'textDocument/didOpen' ( textDocument, ***_ ) {
+  # elsDebug.replHere()
 }
-
-
-mth'name = nil

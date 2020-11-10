@@ -19,7 +19,7 @@ export method initialize(
       'capabilities' : {
 
         'textDocumentSync' : {
-          'openClose' : false,
+          'openClose' : true,
           'change' : 1, # 0/1/2 None/Full/Incremental
           'willSave' : true,
           'willSaveWaitUntil' : true,
