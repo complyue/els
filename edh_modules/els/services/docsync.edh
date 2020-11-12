@@ -2,6 +2,50 @@
 import * 'els/debug'
 
 
+export wipDocs = {}
+
+
 export method @'textDocument/didOpen' ( textDocument, ***_ ) {
   # elsDebug.replHere()
+}
+
+export method @'textDocument/didSave' ( textDocument, ***_ ) {
+  case textDocument[ 'uri' ] of {
+    { URI( scheme, path ) } | scheme is 'file' -> { pass }
+    debug and elsDebug.replHere()
+    perform lspError( 'unsupported uri' )
+    return nil
+  }
+
+  console.debug<| 'forgetting ' ++ path ++ ' as it get saved.'
+  # forget about it
+  wipDocs[ path ] = nil
+}
+
+export method @'textDocument/didChange' ( textDocument,
+  contentChanges, ***_ ) {
+  case textDocument[ 'uri' ] of {
+    { URI( scheme, path ) } | scheme is 'file' -> { pass }
+    debug and elsDebug.replHere()
+    perform lspError( 'unsupported uri' )
+    return nil
+  }
+
+  version = textDocument[ 'version' ] or 0
+  case contentChanges of {
+    { chg :> moreChgs } | null( moreChgs ) -> { pass }
+    # only Full change is supported by far
+    perform lspError( 'too many changes' )
+    return nil
+  }
+  fileContent = chg[ 'text' ] # should be the only field in case of Full change
+
+  ai case wipDocs[ path ] of {
+    { entry } -> { pass }
+    nil -> wipDocs[ path ] = entry = {}
+  }
+  entry =< {
+    'version': version, 'content': fileContent,
+  }
+
 }

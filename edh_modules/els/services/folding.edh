@@ -1,6 +1,8 @@
 
 import * 'els/debug'
 
+import ( wipDocs, **_ ) './docsync'
+
 
 export method @'textDocument/foldingRange' ( textDocument, ***_ ) {
   case textDocument[ 'uri' ] of {
@@ -10,6 +12,16 @@ export method @'textDocument/foldingRange' ( textDocument, ***_ ) {
     return nil
   }
 
-  # TODO parse path
-  console.info<| 'to parse file ' ++ path
+  fileContent = case wipDocs[ path ] of {
+    { cacheEntry } -> { cacheEntry[ 'content' ] }
+    # TODO LS impl this
+    # readFile( path )
+  }
+
+  # TODO parse fileContent
+  console.info<| 'to parse for folding ranges ' ++ path
+  perform lspRespond( [
+      { 'startLine': 3, 'startCharacter': 0,
+        'endLine': 7, 'endCharacter': 0, }
+  ] )
 }
