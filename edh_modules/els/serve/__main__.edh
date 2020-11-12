@@ -62,8 +62,8 @@ defer {
       error( 'bug: trying to respond to non-request' )
     }
     outDict = {
-      'id' : idReq,
-      'result' : result,
+      'id': idReq,
+      'result': result,
     }
     postOnePkt( json$ outDict, **headers )
   }
@@ -76,10 +76,10 @@ defer {
       error( 'bug: trying to report error to non-request' )
     }
     outDict = {
-      'id' : idReq,
-      'error' : {
-        'code' : code,
-        'message' : str( message ),
+      'id': idReq,
+      'error': {
+        'code': code,
+        'message': str( message ),
       },
     }
     postOnePkt( json$ outDict, **headers )
@@ -186,10 +186,10 @@ while eol() is false {
       nil -> {
         if debug then elsDebug.replHere()
         postOnePkt( json$ {
-            'id' : rpcIn[ 'id' ],
-            'error' : {
-              'code' : -32601, # MethodNotFound
-              'message' : 'no such method: ' ++ mthName,
+            'id': rpcIn[ 'id' ],
+            'error': {
+              'code': -32601, # MethodNotFound
+              'message': 'no such method: ' ++ mthName,
             },
         } )
         continue
@@ -209,10 +209,10 @@ while eol() is false {
     } $=> { exc } -> {
       # report back for an uncaught exception as internal error
       postOnePkt( json$ {
-          'id' : rpcIn[ 'id' ],
-          'error' : {
-            'code' : -32603, # InternalError
-            'message' : str( exc ),
+          'id': rpcIn[ 'id' ],
+          'error': {
+            'code': -32603, # InternalError
+            'message': str( exc ),
           },
       } )
     }
