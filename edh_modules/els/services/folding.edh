@@ -3,11 +3,13 @@ import * 'els/debug'
 
 
 export method @'textDocument/foldingRange' ( textDocument, ***_ ) {
-  case textDocument['uri' ] of {
-    { 'file://' >@ fullPath } -> { pass }
-    perform lspError('unsupported uri schema' )
+  case textDocument[ 'uri' ] of {
+    { URI( scheme, path ) } | scheme is 'file' -> { pass }
+    debug and elsDebug.replHere()
+    perform lspError( 'unsupported uri' )
     return nil
   }
 
-  # TODO parse fullPath
+  # TODO parse path
+  console.info<| 'to parse file ' ++ path
 }
