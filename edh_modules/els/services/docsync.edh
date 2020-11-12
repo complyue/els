@@ -2,6 +2,6 @@
 import * 'els/debug'
 
 
-export method @ 'textDocument/didOpen' ( textDocument, ***_ ) {
+export method @'textDocument/didOpen' ( textDocument, ***_ ) {
   # elsDebug.replHere()
 }

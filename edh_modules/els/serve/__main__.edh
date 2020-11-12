@@ -68,6 +68,23 @@ defer {
     postOnePkt( json$ outDict, **headers )
   }
 
+  effect method lspError( message, code= -32001, **headers ) {
+    reqDict = behave lspRequest
+    case reqDict[ 'id' ] of {
+      { idReq } | type( idReq ) ?<= ( DecimalType, StringType, ) -> { pass }
+      debug and elsDebug.replHere()
+      error( 'bug: trying to report error to non-request' )
+    }
+    outDict = {
+      'id' : idReq,
+      'error' : {
+        'code' : code,
+        'message' : str( message ),
+      },
+    }
+    postOnePkt( json$ outDict, **headers )
+  }
+
   # global sink of all responses, service threads can choose to perceive this
   globalResponses = sink
   effect lspResponses = globalResponses

@@ -1,0 +1,13 @@
+
+import * 'els/debug'
+
+
+export method @'textDocument/foldingRange' ( textDocument, ***_ ) {
+  case textDocument['uri' ] of {
+    { 'file://' >@ fullPath } -> { pass }
+    perform lspError('unsupported uri schema' )
+    return nil
+  }
+
+  # TODO parse fullPath
+}

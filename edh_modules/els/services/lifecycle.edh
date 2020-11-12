@@ -19,15 +19,16 @@ export method initialize(
       'capabilities' : {
 
         'textDocumentSync' : {
-          'openClose' : true,
+          'openClose' : false,
           'change' : 1, # 0/1/2 None/Full/Incremental
           'willSave' : true,
           'willSaveWaitUntil' : true,
-          'save' : true,
+          'save' : false,
         },
 
+        'foldingRangeProvider' : true,
+
         # TODO impl. them
-        # 'foldingRangeProvider' : false,
         # 'documentSymbolProvider' : false,
         # 'workspaceSymbolProvider' : false,
         # 'hoverProvider' : false,
