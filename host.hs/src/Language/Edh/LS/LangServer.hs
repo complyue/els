@@ -32,6 +32,8 @@ data LangServer = LangServer {
       edh'lang'server'modu :: !Text
     -- local network port to bind
     , edh'lang'server'port :: !PortNumber
+    -- max port number to try bind
+    , edh'lang'server'port'max :: !PortNumber
     -- local network interface to bind
     , edh'lang'server'addr :: !Text
     -- actually listened network addresses
@@ -65,11 +67,12 @@ createLangServerClass !addrClass !clsOuterScope =
   -- | host constructor LangServer()
   serverAllocator
     :: "port" ?: Int
+    -> "port'max" ?: Int
     -> "addr" ?: Text
     -> "modu" ?: Text
     -> "init" ?: EdhValue
     -> EdhObjectAllocator
-  serverAllocator (defaultArg 1707 -> !ctorPort) (defaultArg "127.0.0.1" -> !ctorAddr) (defaultArg "els/serve" -> !modu) (defaultArg nil -> !init_) !ctorExit !etsCtor
+  serverAllocator (defaultArg 1707 -> !ctorPort) (defaultArg ctorPort -> port'max) (defaultArg "127.0.0.1" -> !ctorAddr) (defaultArg "els/serve" -> !modu) (defaultArg nil -> !init_) !ctorExit !etsCtor
     = if edh'in'tx etsCtor
       then throwEdh etsCtor
                     UsageError
@@ -84,13 +87,15 @@ createLangServerClass !addrClass !clsOuterScope =
     withInit !__modu_init__ = do
       !servAddrs <- newEmptyTMVar
       !servEoL   <- newEmptyTMVar
-      let !server = LangServer { edh'lang'server'modu   = modu
-                               , edh'lang'server'port   = fromIntegral ctorPort
-                               , edh'lang'server'addr   = ctorAddr
-                               , edh'lang'serving'addrs = servAddrs
-                               , edh'lang'server'eol    = servEoL
-                               , edh'lang'server'init   = __modu_init__
-                               }
+      let !server = LangServer
+            { edh'lang'server'modu     = modu
+            , edh'lang'server'port     = fromIntegral ctorPort
+            , edh'lang'server'port'max = fromIntegral port'max
+            , edh'lang'server'addr     = ctorAddr
+            , edh'lang'serving'addrs   = servAddrs
+            , edh'lang'server'eol      = servEoL
+            , edh'lang'server'init     = __modu_init__
+            }
       runEdhTx etsCtor $ edhContIO $ do
         void $ forkFinally
           (serverThread server)
@@ -105,7 +110,7 @@ createLangServerClass !addrClass !clsOuterScope =
         atomically $ ctorExit $ HostStore (toDyn server)
 
     serverThread :: LangServer -> IO ()
-    serverThread (LangServer !servModu !servPort !servAddr !servAddrs !servEoL !__modu_init__)
+    serverThread (LangServer !servModu !servPort !portMax !servAddr !servAddrs !servEoL !__modu_init__)
       = do
         servThId <- myThreadId
         void $ forkIO $ do -- async terminate the accepter thread on stop signal
@@ -124,12 +129,15 @@ createLangServerClass !addrClass !clsOuterScope =
                                 (Just (show servPort))
         return addr
 
+      tryBind !ssock !addr !port =
+        catch (bind ssock $ addrWithPort addr port) $ \(e :: SomeException) ->
+          if port < portMax then tryBind ssock addr (port + 1) else throw e
       open addr =
         bracketOnError
             (socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr))
             close
           $ \ssock -> do
-              bind ssock $ addrWithPort (addrAddress addr) servPort
+              tryBind ssock (addrAddress addr) servPort
               listen ssock 3 -- todo make this tunable ?
               listenAddr <- getSocketName ssock
               atomically
@@ -276,11 +284,13 @@ createLangServerClass !addrClass !clsOuterScope =
 
   reprProc :: EdhHostProc
   reprProc !exit !ets =
-    withThisHostObj ets $ \(LangServer !modu !port !addr _ _ _) ->
+    withThisHostObj ets $ \(LangServer !modu !port !port'max !addr _ _ _) ->
       exitEdh ets exit
         $  EdhString
         $  "LangServer("
         <> T.pack (show port)
+        <> ", "
+        <> T.pack (show port'max)
         <> ", "
         <> T.pack (show addr)
         <> ", "

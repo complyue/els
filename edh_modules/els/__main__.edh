@@ -21,7 +21,16 @@ case els.addrs() of {
   error( 'Đ (Edh) Language Server failed listening.' )
 }
 
-# success, keep the server process running
+# success, assuming launched by lsc extension, try report actual port to fd 3
+{
+  bytesWritten = sendTextToFd( 3, str( elsAddr.port() ) )
+  console.debug<| 'Reported els port ' ++ elsAddr.port() ++ ' to fd 3 ('
+  ++ bytesWritten ++ ' bytes)'
+} $=> { exc } -> {
+  console.warn<| 'Failed reporting els port ' ++ elsAddr.port() ++ ' to fd 3'
+}
+
+# keep the server process running
 
 if debug then {
   import * 'els/debug'

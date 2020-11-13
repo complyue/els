@@ -7,6 +7,7 @@ import           Control.Monad
 
 import           Language.Edh.EHI
 
+import           Language.Edh.LS.RT
 import           Language.Edh.LS.LangServer
 
 
@@ -27,7 +28,8 @@ installLanguageServerBatteries !world =
             !moduMths <-
               sequence
                 $ [ (AttrByName nm, ) <$> mkHostProc moduScope mc nm hp
-                  | (nm, mc, hp) <- []
+                  | (nm, mc, hp) <-
+                    [("sendTextToFd", EdhMethod, wrapHostProc sendTextToFd)]
                   ]
 
             let !moduArts =
@@ -42,5 +44,4 @@ installLanguageServerBatteries !world =
 
           _ -> error "bug: net/RT provides no Addr class"
       _ -> error "bug: importEdhModule returned non-object"
-
 
