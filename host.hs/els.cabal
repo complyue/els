@@ -71,6 +71,7 @@ library
     , transformers
     , unix
     , unordered-containers
+    , vector
 
 library els-internal
   exposed-modules:
@@ -118,6 +119,7 @@ library els-internal
     , transformers
     , unix
     , unordered-containers
+    , vector
 
 executable els
   main-is:            Main.hs
@@ -153,3 +155,4 @@ executable els
     , stm               >=2.5
     , text
     , transformers
+    , vector
