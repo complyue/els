@@ -190,7 +190,7 @@ createLangServerClass !addrClass !clsOuterScope =
                            let !src = decodeUtf8 content
                            runEdhInSandbox ets
                                            sandbox
-                                           (evalEdh (T.unpack clientId) src)
+                                           (evalEdh ("lsc:" <> clientId) src)
                              $ \ !r _ets -> exitEdh ets exit r
 
           postOnePktProc :: "rpcOut" !: Text -> RestKwArgs -> EdhHostProc
