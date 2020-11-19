@@ -26,58 +26,12 @@ source-repository head
 library
   exposed-modules:
     Language.Edh.LS
-    Language.Edh.Meta.Model
-
-  other-modules:
-
-  hs-source-dirs:     pub
-  default-language:   Haskell2010
-  default-extensions:
-    NoImplicitPrelude
-    BangPatterns
-    ConstraintKinds
-    DataKinds
-    FlexibleContexts
-    FlexibleInstances
-    GADTs
-    KindSignatures
-    LambdaCase
-    OverloadedStrings
-    ScopedTypeVariables
-    TupleSections
-    TypeApplications
-    TypeOperators
-    ViewPatterns
-
-  ghc-options:        -Wall
-  build-depends:
-    , base                  >=4.12
-    , binary
-    , bytestring
-    , clock
-    , containers
-    , directory
-    , edh
-    , els-internal
-    , hashable
-    , lossless-decimal
-    , mtl
-    , nedh
-    , network
-    , scientific
-    , stm                   >=2.5
-    , text
-    , time
-    , transformers
-    , unix
-    , unordered-containers
-    , vector
-
-library els-internal
-  exposed-modules:
     Language.Edh.LS.BaseLSP
     Language.Edh.LS.LangServer
     Language.Edh.LS.RT
+    Language.Edh.Meta.Model
+
+  other-modules:
 
   hs-source-dirs:     src
   default-language:   Haskell2010
@@ -148,7 +102,6 @@ executable els
     , bytestring
     , edh
     , els
-    , els-internal
     , lossless-decimal
     , mtl
     , nedh

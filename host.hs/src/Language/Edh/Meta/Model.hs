@@ -2,16 +2,16 @@ module Language.Edh.Meta.Model where
 
 -- import           Debug.Trace
 
-import           Control.Concurrent.STM
-import           Control.Monad
-import           Control.Monad.ST
-import           Data.HashMap.Strict            ( HashMap )
-import qualified Data.HashMap.Strict           as Map
-import           Data.Vector                    ( Vector )
-import qualified Data.Vector                   as V
-import qualified Data.Vector.Mutable           as MV
-import           Language.Edh.EHI
-import           Prelude
+import Control.Concurrent.STM
+import Control.Monad
+import Control.Monad.ST
+import Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Strict as Map
+import Data.Vector (Vector)
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as MV
+import Language.Edh.EHI
+import Prelude
 
 data EL'Scope = EL'Scope
   { el'scope'src'loc :: !SrcLoc,
