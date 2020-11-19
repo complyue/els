@@ -1,8 +1,0 @@
-cradle:
-  stack:
-
-    - path: "./host.hs/src"
-      component: "els:lib"
-
-    - path: "./host.hs/server/Main.hs"
-      component: "els:exe:els"

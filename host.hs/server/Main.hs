@@ -1,28 +1,22 @@
-
 module Main where
 
-import           Prelude
 -- import           Debug.Trace
 
-import           Control.Monad
-import           Control.Exception
-import           Control.Concurrent
-import           Control.Concurrent.STM
-
-import qualified Data.Text                     as T
-
-import           Language.Edh.EHI
-import           Language.Edh.Net
-
-import           Language.Edh.LS
-
+import Control.Concurrent
+import Control.Concurrent.STM
+import Control.Exception
+import Control.Monad
+import qualified Data.Text as T
+import Language.Edh.EHI
+import Language.Edh.LS
+import Language.Edh.Net
+import Prelude
 
 main :: IO ()
 main = do
   !console <- defaultEdhConsole defaultEdhConsoleSettings
   let !consoleOut = writeTBQueue (consoleIO console) . ConsoleOut
-      runIt       = do
-
+      runIt = do
         world <- createEdhWorld console
         installEdhBatteries world
 
@@ -41,19 +35,21 @@ main = do
             -- clean program halt, all done
             EdhNil -> return ()
             -- unclean program exit
-            _      -> atomically $ do
+            _ -> atomically $ do
               consoleOut "Đ (Edh) language server halted with a result:\n"
-              consoleOut $ (<> "\n") $ case phv of
-                EdhString msg -> msg
-                _             -> T.pack $ show phv
+              consoleOut $
+                (<> "\n") $ case phv of
+                  EdhString msg -> msg
+                  _ -> T.pack $ show phv
 
-  void $ forkFinally runIt $ \ !result -> do
-    case result of
-      Left (e :: SomeException) ->
-        atomically $ consoleOut $ "💥 " <> T.pack (show e)
-      Right _ -> pure ()
-    -- shutdown console IO anyway
-    atomically $ writeTBQueue (consoleIO console) ConsoleShutdown
+  void $
+    forkFinally runIt $ \ !result -> do
+      case result of
+        Left (e :: SomeException) ->
+          atomically $ consoleOut $ "💥 " <> T.pack (show e)
+        Right _ -> pure ()
+      -- shutdown console IO anyway
+      atomically $ writeTBQueue (consoleIO console) ConsoleShutdown
 
   atomically $ consoleOut ">> Đ (Edh) Language Server <<\n"
 
