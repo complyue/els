@@ -25,22 +25,30 @@ sectionSpan (EL'RegionSec region) = el'region'span region
 
 data EL'Scope = EL'Scope
   { el'scope'span :: !SrcRange,
-    -- a new region is created upon each attr definition or deletion
+    -- a scope can have nested scopes, and it at least should have a final
+    -- region to contain all possible annotations and attributes
     --
-    -- sections within a scope appear naturally in source order, so this vector
-    -- can be used with binary search for a target location within this scope
+    -- a new region is created upon each attr definition or deletion,
+    -- consecutive regions within a scope should be ever expanding in src span
+    -- regards
+    --
+    -- sections within a scope appear naturally in source order, we use an
+    -- immutable vector here, so it can be used with binary search to locate
+    -- the section for a target location within this scope
     el'scope'sections :: !(Vector EL'Section)
   }
 
--- | the last region should be the full region with all possible attrs
+-- | the last section of a scope should always be the full region with all
+-- possible attributes
 scopeFullRegion :: EL'Scope -> EL'Region
-scopeFullRegion (EL'Scope _ !secs) = go $ V.length secs - 1
-  where
-    go :: Int -> EL'Region
-    go !i | i < 0 = error "bug: no region in a scope?!"
-    go i = case V.unsafeIndex secs i of
+scopeFullRegion (EL'Scope _ !secs) =
+  if nSecs < 1
+    then error "bug: no section in a scope"
+    else case V.unsafeIndex secs (nSecs - 1) of
       EL'RegionSec !region -> region
-      _ -> go $ i -1
+      _ -> error "bug: last section of a scope not a region"
+  where
+    !nSecs = V.length secs
 
 -- | a consecutive region covers the src range of its predecessor, with a single
 -- add or deletion of an attribute
@@ -48,19 +56,38 @@ scopeFullRegion (EL'Scope _ !secs) = go $ V.length secs - 1
 -- note a change of annotation doesn't create a new region
 --
 -- note the 2 versions of immutable HashMap share as much content as possible in
--- this use case, so is ideally compact
+-- this use case, so they are ideally compact
 data EL'Region = EL'Region
   { el'region'span :: !SrcRange,
     -- | an annotation is created by the (::) operator, with left-hand operand
     -- being the attribute key
-    el'region'annos :: !(HashMap AttrKey EL'Value),
-    -- | an attribute is created by any form of assignment, targeting the
-    -- current scope
-    el'region'attrs :: !(HashMap AttrKey EL'Value)
+    el'region'annos :: !(HashMap AttrKey ExprSrc),
+    -- | an attribute is created by any form of assignment targeting current
+    -- scope, or any form of procedure declaration
+    el'region'attrs :: !(HashMap AttrKey EL'Value),
+    -- | an effectiful attribute is created by any form of assignment targeting
+    -- current scope, or any form of procedure declaration, which follows an
+    -- `effect` keyword, or within a block following an `effect` keyword
+    el'region'effs :: !(HashMap AttrKey EL'Value)
   }
 
+data EL'Class = EL'Class
+  { el'class'scope :: !EL'Scope,
+    -- | an attribute is exported by any form of assignment targeting
+    -- current scope, or any form of procedure declaration, which follows an
+    -- `export` keyword, or within a block following an `export` keyword
+    el'class'exports :: !EL'Exports
+  }
+
+-- | the dict of artifacts by attribute key, for those exported from an object
+-- (a module object or vanilla object), with their order of export preserved
+type EL'Exports = OrderedDict AttrKey EL'Value
+
+-- | an Edh language level value is created by any form of assignment targeting
+-- current scope, or any form of procedure declaration
 data EL'Value = EL'Value
-  { el'value'src :: !ExprSrc,
+  { el'value'span :: !SrcRange,
+    el'value'src :: !ExprSrc,
     el'value'refied :: !(TVar EdhValue)
   }
 
@@ -74,11 +101,11 @@ data EL'Module = EL'Module
     -- | there will be nested scopes appearing in natural source order, within
     -- this root scope of the module
     el'modu'scope :: !EL'Scope,
-    -- | exported artifacts, the order is preserved as artifacts get exported
+    -- | an attribute is exported by any form of assignment targeting
+    -- current scope, or any form of procedure declaration, which follows an
+    -- `export` keyword, or within a block following an `export` keyword
     el'modu'exports :: !EL'Exports
   }
-
-type EL'Exports = OrderedDict AttrKey EL'Value
 
 data EL'Home = EL'Home
   { -- | each parent dir of `edh_modules` is considered an Edh home
