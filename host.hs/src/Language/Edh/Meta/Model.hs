@@ -13,6 +13,60 @@ import Language.Edh.EHI
 import Language.Edh.RtTypes
 import Prelude
 
+data EL'Home = EL'Home
+  { -- | each parent dir of `edh_modules` is considered an Edh home
+    el'home'path :: !Text,
+    -- | loaded modules under this home
+    --
+    -- module name is path (with `.edh` and `/__init__.edh` stripped off), and
+    -- relative to the `edh_modules` dir
+    --
+    -- special case is `/__main__.edh`, from which `.edh` is stripped off, but
+    -- the `__main__` part remains in the module name
+    el'home'modules :: !(TMVar (Map.HashMap ModuleName EL'ModuSlot))
+    -- todo cache configurations per Edh home with more fields
+  }
+
+instance Eq EL'Home where
+  (EL'Home !x'path _) == (EL'Home !y'path _) = x'path == y'path
+
+type ModuleName = Text
+
+data EL'ModuSlot
+  = EL'ModuLoaded !EL'Module
+  | EL'ModuLoading ![StmtSrc]
+  | EL'ModuFailed !EdhValue
+
+-- | Edh module and `.edh` text doc (os file, virtual or physical, local or
+-- remote) be of 1:1 mapping
+data EL'Module = EL'Module
+  { -- | each parent dir of `edh_modules` is considered an Edh home
+    el'modu'home :: !EL'Home,
+    -- | absolute path of the `.edh` src file
+    el'modu'doc :: !SrcDoc,
+    -- | there will be nested scopes appearing in natural source order, within
+    -- this root scope of the module
+    el'modu'scope :: !EL'Scope,
+    -- | an attribute is exported by any form of assignment targeting
+    -- current scope, or any form of procedure declaration, which follows an
+    -- `export` keyword, or within a block following an `export` keyword
+    el'modu'exports :: !EL'Exports
+  }
+
+-- | the dict of artifacts by attribute key, for those exported from an object
+-- (a module object or vanilla object), with their order of export preserved
+--
+-- note re-exported values will have their original module preserved
+type EL'Exports = OrderedDict EL'AttrKey EL'OriginalValue
+
+data EL'OriginalValue = EL'OriginalValue
+  { -- | the original module defined this value
+    el'origin'module :: !EL'Module,
+    -- TODO will this be useful ?
+    -- el'origin'eff'span :: !SrcRange,
+    el'value :: !EL'Value
+  }
+
 data EL'AttrKey = EL'AttrKey
   { el'akey'src :: !AttrAddrSrc,
     el'akey'reified :: !(Maybe AttrKey)
@@ -24,6 +78,14 @@ instance Eq EL'AttrKey where
   EL'AttrKey (AttrAddrSrc addr1 _) Nothing
     == EL'AttrKey (AttrAddrSrc addr2 _) Nothing = addr1 == addr2
   EL'AttrKey {} == EL'AttrKey {} = False -- or hash/eq laws won't hold
+
+instance Ord EL'AttrKey where
+  compare (EL'AttrKey _ (Just k1)) (EL'AttrKey _ (Just k2)) = compare k1 k2
+  compare
+    (EL'AttrKey (AttrAddrSrc addr1 _) Nothing)
+    (EL'AttrKey (AttrAddrSrc addr2 _) Nothing) = compare addr1 addr2
+  compare (EL'AttrKey _ Just {}) (EL'AttrKey _ Nothing) = LT
+  compare (EL'AttrKey _ Nothing) (EL'AttrKey _ Just {}) = GT
 
 instance Hashable EL'AttrKey where
   hashWithSalt s (EL'AttrKey _ (Just key)) =
@@ -43,6 +105,7 @@ data EL'Value
   | -- | a class definition is specially treated in static analysis
     EL'Class
       { el'class'proc :: !ProcDecl,
+        -- | scope of this class
         el'class'scope :: !EL'Scope,
         -- | an attribute is exported by any form of assignment targeting
         -- current scope, or any form of procedure declaration, which follows an
@@ -54,51 +117,9 @@ data EL'Value
       { -- | the class of this object instance
         -- TODO use some other, more proper type for this field ?
         el'obj'class :: !EL'OriginalValue,
-        -- | the src instantiated this object
-        el'obj'inst'src :: !ExprSrc
+        -- | the source expression instantiated this object
+        el'obj'src :: !ExprSrc
       }
-
--- | Edh module and `.edh` text doc (os file, virtual or physical, local or
--- remote) be of 1:1 mapping
-data EL'Module = EL'Module
-  { -- | each parent dir of `edh_modules` is considered an Edh home
-    el'modu'home :: !EL'Home,
-    -- | absolute path of the `.edh` src file
-    el'modu'doc :: !SrcDoc,
-    -- | there will be nested scopes appearing in natural source order, within
-    -- this root scope of the module
-    el'modu'scope :: !EL'Scope,
-    -- | an attribute is exported by any form of assignment targeting
-    -- current scope, or any form of procedure declaration, which follows an
-    -- `export` keyword, or within a block following an `export` keyword
-    el'modu'exports :: !EL'Exports
-  }
-
-data EL'Home = EL'Home
-  { -- | each parent dir of `edh_modules` is considered an Edh home
-    el'home'path :: !Text,
-    -- | loaded modules under this home
-    --
-    -- module name is path (with `.edh` and `/__init__.edh` stripped off), and
-    -- relative to the `edh_modules` dir
-    --
-    -- special case is `/__main__.edh`, from which `.edh` is stripped off, but
-    -- the `__main__` part remains in the module name
-    el'home'modules :: !(TMVar (Map.HashMap ModuleName EL'Module))
-  }
-
-type ModuleName = Text
-
--- | the dict of artifacts by attribute key, for those exported from an object
--- (a module object or vanilla object), with their order of export preserved
-type EL'Exports = OrderedDict AttrKey EL'OriginalValue
-
-data EL'OriginalValue = EL'OriginalValue
-  { el'origin'module :: !EL'Module,
-    el'origin'scope :: !EL'Scope,
-    el'origin'region :: !EL'Region,
-    el'value :: !EL'Value
-  }
 
 data EL'Section = EL'ScopeSec !EL'Scope | EL'RegionSec !EL'Region
 

@@ -1,4 +1,8 @@
-module Language.Edh.LS where
+module Language.Edh.LS
+  ( installLanguageServerBatteries,
+  -- TODO re-export other public artifacts
+  )
+where
 
 -- import           Debug.Trace
 
