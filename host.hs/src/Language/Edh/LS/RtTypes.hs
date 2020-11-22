@@ -13,10 +13,11 @@ import Language.Edh.Meta.Model
 import Prelude
 
 data EL'World = EL'World
-  { -- use a tree map from absolute path to home record, so entry appears
-    -- earlier is shallower
+  { -- use a tree map from absolute path to home record, so nested homes follow
+    -- their respective parent
     el'homes :: !(TMVar (TreeMap.Map Text EL'Home)),
-    el'modu'acts :: !(TVar (Map.HashMap EL'ModuRef (TVar [EL'ModuleAction])))
+    -- | it's end-of-world if this sink goes eos
+    el'announcements :: !EventSink
   }
 
 data EL'ModuRef = EL'ModuRef
@@ -32,22 +33,28 @@ instance Hashable EL'ModuRef where
   hashWithSalt s (EL'ModuRef (EL'Home home'path _home'modus) modu'name) =
     s `hashWithSalt` home'path `hashWithSalt` modu'name
 
-type EL'ModuleAction = EL'ModuSlot -> EL'Analysis
+type EL'ModuProc = EL'ModuSlot -> EL'Analysis
 
-type EL'Analysis = EL'ActExit -> EL'Act
+type EL'Analysis = EL'TxExit -> EL'Tx
 
-type EL'Act = EL'World -> EdhTx
+type EL'TxExit = EdhTx
 
-type EL'ActExit = EdhTx
+type EL'Tx = EL'AnalysisState -> STM ()
 
-el'RunAct :: EL'World -> EdhThreadState -> EL'Act -> STM ()
-el'RunAct !elw !ets !p = p elw ets
-{-# INLINE el'RunAct #-}
+data EL'AnalysisState = EL'AnalysisState
+  { el'world :: !EL'World,
+    el'modu'procs :: !(TVar (Map.HashMap EL'ModuRef (TVar [EL'ModuProc]))),
+    el'ets :: !EdhThreadState
+  }
 
-el'ExitAct :: EL'ActExit -> EdhTx
-el'ExitAct = id
-{-# INLINE el'ExitAct #-}
+el'RunTx :: EL'AnalysisState -> EL'Tx -> STM ()
+el'RunTx !eas !act = act eas
+{-# INLINE el'RunTx #-}
 
-el'Exit :: EdhThreadState -> EL'ActExit -> STM ()
+el'ExitTx :: EL'TxExit -> EL'Tx
+el'ExitTx !exit (EL'AnalysisState _elw _mprocs !ets) = exit ets
+{-# INLINE el'ExitTx #-}
+
+el'Exit :: EdhThreadState -> EL'TxExit -> STM ()
 el'Exit !ets !exit = exit ets
 {-# INLINE el'Exit #-}

@@ -14,34 +14,31 @@ import System.FilePath
 import Prelude
 
 el'RunAnalysis :: EL'World -> EL'Analysis -> EdhTx -> EdhTx
-el'RunAnalysis !elw !ana !anaExit !ets = ana done elw ets
-  where
-    !pmav = el'modu'acts elw
+el'RunAnalysis !elw !ana !anaExit !ets = do
+  !mps <- newTVar Map.empty
+  let doneChk :: STM ()
+      doneChk =
+        swapTVar mps Map.empty >>= \ !mpm ->
+          if Map.null mpm
+            then anaExit ets
+            else driveAnalysis $ Map.toList mpm
+      driveAnalysis :: [(EL'ModuRef, TVar [EL'ModuProc])] -> STM ()
+      driveAnalysis [] = doneChk
+      driveAnalysis ((EL'ModuRef !home !modu'name, !varTxs) : rest) =
+        -- XXX
+        driveAnalysis rest
+  ana (const doneChk) (EL'AnalysisState elw mps ets)
 
-    done _ets =
-      swapTVar pmav Map.empty >>= \ !pmas ->
-        if Map.null pmas
-          then anaExit ets
-          else driveAnalysis $ Map.toList pmas
-
-    driveAnalysis :: [(EL'ModuRef, TVar [EL'ModuleAction])] -> STM ()
-    driveAnalysis [] = done ets
-    driveAnalysis ((EL'ModuRef !home !modu'name, !varActs) : rest) =
-      -- XXX
-      driveAnalysis rest
-
-el'ResolveModule :: Text -> (EL'ModuRef -> EL'Act) -> EL'Act
-el'ResolveModule !moduFile !exit !elw !ets =
-  el'RunAct elw ets $
+el'ResolveModule :: Text -> (EL'ModuRef -> EL'Tx) -> EL'Tx
+el'ResolveModule !moduFile !exit eas@(EL'AnalysisState !elw !mps !ets) =
+  el'RunTx eas $
     exit
       -- XXX
       undefined
 
-el'WithModule :: EL'ModuRef -> EL'ModuleAction -> EL'Act
-el'WithModule !mref !act !elw _ets = do
-  !am <- readTVar mav
-  case Map.lookup mref am of
-    Nothing -> newTVar [act] >>= \ !av -> writeTVar mav $ Map.insert mref av am
+el'WithModule :: EL'ModuRef -> EL'ModuProc -> EL'Tx
+el'WithModule !mref !act eas@(EL'AnalysisState _elw !mps _ets) = do
+  !mpm <- readTVar mps
+  case Map.lookup mref mpm of
+    Nothing -> newTVar [act] >>= \ !av -> writeTVar mps $ Map.insert mref av mpm
     Just !av -> modifyTVar' av (act :)
-  where
-    !mav = el'modu'acts elw
