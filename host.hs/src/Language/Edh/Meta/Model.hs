@@ -15,6 +15,8 @@ import Prelude
 
 data EL'Home = EL'Home
   { -- | each parent dir of `edh_modules` is considered an Edh home
+    --
+    -- an Edh home's path should always be absolute and as canonical as possible
     el'home'path :: !Text,
     -- | loaded modules under this home
     --

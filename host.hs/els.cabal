@@ -58,6 +58,7 @@ library
   build-depends:
     , base                  >=4.12
     , binary
+    , binary-search
     , bytestring
     , clock
     , containers

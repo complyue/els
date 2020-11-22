@@ -6,10 +6,13 @@ import qualified Data.HashMap.Strict as Map
 import qualified Data.Map.Strict as TreeMap
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as MV
 import Language.Edh.EHI
 import Language.Edh.Evaluate
 import Language.Edh.LS.RtTypes
 import Language.Edh.Meta.Model
+import Numeric.Search.Range
 import System.FilePath
 import Prelude
 
@@ -29,12 +32,25 @@ el'RunAnalysis !elw !ana !anaExit !ets = do
         driveAnalysis rest
   ana (const doneChk) (EL'AnalysisState elw mps ets)
 
-el'ResolveModule :: Text -> (EL'ModuRef -> EL'Tx) -> EL'Tx
+el'ResolveModule :: Text -> (Maybe EL'ModuRef -> EL'Tx) -> EL'Tx
 el'ResolveModule !moduFile !exit eas@(EL'AnalysisState !elw !mps !ets) =
-  el'RunTx eas $
-    exit
-      -- XXX
-      undefined
+  el'RunTx eas $ exit Nothing
+  where
+    !moduHomeDir = moduFile
+
+    !homesVar = el'homes elw
+
+    getHome :: STM ()
+    getHome = do
+      !homesVec <- takeTMVar homesVar
+      let !homeIdx =
+            searchFromTo
+              ( \ !i ->
+                  el'home'path (V.unsafeIndex homesVec i) >= moduHomeDir
+              )
+              0
+              (V.length homesVec - 1)
+      return ()
 
 el'WithModule :: EL'ModuRef -> EL'ModuProc -> EL'Tx
 el'WithModule !mref !act eas@(EL'AnalysisState _elw !mps _ets) = do

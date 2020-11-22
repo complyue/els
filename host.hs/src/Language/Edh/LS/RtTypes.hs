@@ -7,15 +7,18 @@ import Data.Hashable
 import qualified Data.Map.Strict as TreeMap
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Vector (Vector)
+import qualified Data.Vector as V
 import Language.Edh.EHI
 import Language.Edh.Evaluate
 import Language.Edh.Meta.Model
 import Prelude
 
 data EL'World = EL'World
-  { -- use a tree map from absolute path to home record, so nested homes follow
-    -- their respective parent
-    el'homes :: !(TMVar (TreeMap.Map Text EL'Home)),
+  { -- this vector of home records should hold the invariant that sorted by
+    -- their respective path, modifications should be mutually exclusive by
+    -- taking from and putting back to this `TMVar`
+    el'homes :: !(TMVar (Vector EL'Home)),
     -- | it's end-of-world if this sink goes eos
     el'announcements :: !EventSink
   }
