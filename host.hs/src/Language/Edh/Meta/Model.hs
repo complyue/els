@@ -70,10 +70,25 @@ data EL'ModuSlot = EL'ModuSlot
     el'modu'stage :: !(TVar EL'ModuStage)
   }
 
+instance Eq EL'ModuSlot where
+  x == y = el'modu'doc x == el'modu'doc y
+
+instance Hashable EL'ModuSlot where
+  hashWithSalt s v =
+    let SrcDoc !absPath = el'modu'doc v
+     in hashWithSalt s absPath
+
 data EL'ModuStage
-  = EL'ModuLoaded !EL'LoadedModule
+  = EL'ModuParsed !EL'ParsedModule
+  | EL'ModuLoaded !EL'LoadedModule
   | EL'ModuResolved !EL'ResolvedModule
   | EL'ModuFailed !EdhValue
+
+data EL'ParsedModule = EL'ParsedModule
+  { el'parsed'stmts :: ![StmtSrc],
+    -- TODO define proper data structures for this
+    el'parsed'diags :: ![Text]
+  }
 
 -- | Edh module and `.edh` text doc (os file, virtual or physical, local or
 -- remote) be of 1:1 mapping
@@ -81,9 +96,7 @@ data EL'LoadedModule = EL'LoadedModule
   { -- | artifacts identified before resolution
     el'loaded'arts :: OrderedDict EL'AttrKey EL'OriginalValue,
     -- | exports identified before resolution
-    el'loaded'exports :: !EL'Artifacts,
-    -- | original source of the module
-    el'module'source :: ![StmtSrc]
+    el'loaded'exports :: !EL'Artifacts
   }
 
 data EL'ResolvedModule = EL'ResolvedModule

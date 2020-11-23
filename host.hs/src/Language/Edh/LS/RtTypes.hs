@@ -19,24 +19,9 @@ data EL'World = EL'World
     -- their respective path, modifications should be mutually exclusive by
     -- taking from and putting back to this `TMVar`
     el'homes :: !(TMVar (Vector EL'Home)),
-    -- | it's end-of-world if this sink goes eos
+    -- | it's end-of-world if this sink goes end-of-stream
     el'announcements :: !EventSink
   }
-
-data EL'ModuRef = EL'ModuRef
-  { el'modu'ref'home :: !EL'Home,
-    el'modu'ref'name :: !ModuleName
-  }
-
-instance Eq EL'ModuRef where
-  (EL'ModuRef !x'home !x'modu'name) == (EL'ModuRef !y'home !y'modu'name) =
-    x'home == y'home && x'modu'name == y'modu'name
-
-instance Hashable EL'ModuRef where
-  hashWithSalt s (EL'ModuRef (EL'Home home'path _home'modus) modu'name) =
-    s `hashWithSalt` home'path `hashWithSalt` modu'name
-
-type EL'ModuProc = EL'ModuSlot -> EL'Analysis
 
 type EL'Analysis = EL'TxExit -> EL'Tx
 
@@ -46,7 +31,9 @@ type EL'Tx = EL'AnalysisState -> STM ()
 
 data EL'AnalysisState = EL'AnalysisState
   { el'world :: !EL'World,
-    el'modu'procs :: !(TVar (Map.HashMap EL'ModuRef (TVar [EL'ModuProc]))),
+    -- | actions scheduled to happen later, they'll be triggered in the reverse
+    -- order as scheduled
+    el'post'actions :: !(TVar [EL'Analysis]),
     el'ets :: !EdhThreadState
   }
 
@@ -55,7 +42,7 @@ el'RunTx !eas !act = act eas
 {-# INLINE el'RunTx #-}
 
 el'ExitTx :: EL'TxExit -> EL'Tx
-el'ExitTx !exit (EL'AnalysisState _elw _mprocs !ets) = exit ets
+el'ExitTx !exit !eas = exit $ el'ets eas
 {-# INLINE el'ExitTx #-}
 
 el'Exit :: EdhThreadState -> EL'TxExit -> STM ()
