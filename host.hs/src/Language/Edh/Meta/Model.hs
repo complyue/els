@@ -18,52 +18,93 @@ data EL'Home = EL'Home
     --
     -- an Edh home's path should always be absolute and as canonical as possible
     el'home'path :: !Text,
-    -- | loaded modules under this home
+    -- | importable modules under this home
     --
-    -- module name is path (with `.edh` and `/__init__.edh` stripped off), and
-    -- relative to the `edh_modules` dir
+    -- a module is importable iif the src file resides inside the `edh_modules`
+    -- subdir under an Edh home root dir, and the file name does not start with
+    -- an underscore char (e.g. named `__main__.edh`), one special case that
+    -- e.g.
+    -- `$edh_home/edh_modules/some/modu/__init__.edh` will shadow
+    -- `$edh_home/edh_modules/some/modu.edh`, assuming the name `some/modu`.
     --
-    -- special case is `/__main__.edh`, from which `.edh` is stripped off, but
-    -- the `__main__` part remains in the module name
-    el'home'modules :: !(TMVar (Map.HashMap ModuleName EL'ModuSlot))
+    -- the name of an importable module is path (with `.edh` and `/__init__.edh`
+    -- stripped off), and relative to the `edh_modules` dir.
+    --
+    -- note all Edh src file should have the extension name `.edh`, and will be
+    -- stripped off from any Edh module name or module path.
+    el'home'modules :: !(TMVar (Map.HashMap ModuleName EL'ModuSlot)),
+    -- | standalone scripts under this home
+    --
+    -- a script is technically a standalone module that not importable, it can
+    -- only be run as an entry module.
+    --
+    -- typical script files reside outside of the `edh_modules` sub dir, one
+    -- speciall case is `__main__.edh` e.g.
+    -- `$edh_home/edh_modules/some/modu/__main__.edh` will be executed when
+    -- `some/modu` is specified as the target module per Edh interpreter run.
+    --
+    -- the advantage of a module target over a file target per running is that
+    -- module resolution machinery is more flexible so you can address installed
+    -- modules while a nested Edh home can have a local file overriding it.
+    --
+    -- the name of a script is path relative to the home root dir, with `.edh`
+    -- extension name preserved, but with the exception of a module script,
+    -- whose script name is the same as its module name.
+    el'home'scripts :: !(TMVar (Map.HashMap ScriptName EL'ModuSlot))
     -- todo cache configurations per Edh home with more fields
   }
 
 instance Eq EL'Home where
-  (EL'Home !x'path _) == (EL'Home !y'path _) = x'path == y'path
+  x == y = el'home'path x == el'home'path y
 
 type ModuleName = Text
 
-data EL'ModuSlot
-  = EL'ModuLoaded !EL'Module
-  | EL'ModuLoading ![StmtSrc]
-  | EL'ModuFailed !EdhValue
+type ScriptName = Text
 
--- | Edh module and `.edh` text doc (os file, virtual or physical, local or
--- remote) be of 1:1 mapping
-data EL'Module = EL'Module
+data EL'ModuSlot = EL'ModuSlot
   { -- | each parent dir of `edh_modules` is considered an Edh home
     el'modu'home :: !EL'Home,
     -- | absolute path of the `.edh` src file
     el'modu'doc :: !SrcDoc,
-    -- | there will be nested scopes appearing in natural source order, within
+    -- | stage of the module
+    el'modu'stage :: !(TVar EL'ModuStage)
+  }
+
+data EL'ModuStage
+  = EL'ModuLoaded !EL'LoadedModule
+  | EL'ModuResolved !EL'ResolvedModule
+  | EL'ModuFailed !EdhValue
+
+-- | Edh module and `.edh` text doc (os file, virtual or physical, local or
+-- remote) be of 1:1 mapping
+data EL'LoadedModule = EL'LoadedModule
+  { -- | artifacts identified before resolution
+    el'loaded'arts :: OrderedDict EL'AttrKey EL'OriginalValue,
+    -- | exports identified before resolution
+    el'loaded'exports :: !EL'Artifacts,
+    -- | original source of the module
+    el'module'source :: ![StmtSrc]
+  }
+
+data EL'ResolvedModule = EL'ResolvedModule
+  { -- | there will be nested scopes appearing in natural source order, within
     -- this root scope of the module
-    el'modu'scope :: !EL'Scope,
+    el'resolved'scope :: !EL'Scope,
+    -- | TODO this useful?
+    -- el'modu'imports :: OrderedDict EL'AttrKey EL'OriginalValue,
     -- | an attribute is exported by any form of assignment targeting
     -- current scope, or any form of procedure declaration, which follows an
     -- `export` keyword, or within a block following an `export` keyword
-    el'modu'exports :: !EL'Exports
+    el'resolved'exports :: !EL'Artifacts
   }
 
--- | the dict of artifacts by attribute key, for those exported from an object
--- (a module object or vanilla object), with their order of export preserved
---
--- note re-exported values will have their original module preserved
-type EL'Exports = OrderedDict EL'AttrKey EL'OriginalValue
+-- | a dict of artifacts by attribute key, with their order of appearance
+-- preserved
+type EL'Artifacts = OrderedDict EL'AttrKey EL'OriginalValue
 
 data EL'OriginalValue = EL'OriginalValue
   { -- | the original module defined this value
-    el'origin'module :: !EL'Module,
+    el'origin'module :: !EL'ModuSlot,
     -- TODO will this be useful ?
     -- el'origin'eff'span :: !SrcRange,
     el'value :: !EL'Value
@@ -112,7 +153,7 @@ data EL'Value
         -- | an attribute is exported by any form of assignment targeting
         -- current scope, or any form of procedure declaration, which follows an
         -- `export` keyword, or within a block following an `export` keyword
-        el'class'exports :: !EL'Exports
+        el'class'exports :: !EL'Artifacts
       }
   | -- | an object instance value is specially treated in static analysis
     EL'Object
