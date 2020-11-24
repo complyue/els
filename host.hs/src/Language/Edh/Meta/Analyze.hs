@@ -204,22 +204,23 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
         edhContIO $
           fsSearch >>= \case
             Left !err -> atomically $ throwEdh ets UsageError err
-            Right (Left (!homePath, !scriptName, !absFile)) ->
+            Right (Left (!homePath, !scriptName, !relBase, !absFile)) ->
               atomically (prepareHome homePath)
                 -- with 2 separate STM txs
-                >>= atomically . goWith scriptName absFile el'home'scripts
-            Right (Right (!homePath, !moduName, !absFile)) ->
+                >>= atomically . goWith scriptName relBase absFile el'home'scripts
+            Right (Right (!homePath, !moduName, !relBase, !absFile)) ->
               atomically (prepareHome homePath)
                 -- with 2 separate STM txs
-                >>= atomically . goWith moduName absFile el'home'modules
+                >>= atomically . goWith moduName relBase absFile el'home'modules
   where
     goWith ::
+      Text ->
       Text ->
       Text ->
       (EL'Home -> TMVar (Map.HashMap ModuleName EL'ModuSlot)) ->
       EL'Home ->
       STM ()
-    goWith !name !absFile !mmField !home =
+    goWith !name !relBase !absFile !mmField !home =
       takeTMVar mmVar >>= \ !mm ->
         case Map.lookup name mm of
           Just !ms ->
@@ -243,6 +244,7 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
             let !ms =
                   EL'ModuSlot
                     home
+                    relBase
                     (SrcDoc absFile)
                     parsed
                     loaded
@@ -281,8 +283,8 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
         ( Either
             Text
             ( Either
-                (Text, ScriptName, Text)
-                (Text, ModuleName, Text)
+                (Text, ScriptName, Text, Text)
+                (Text, ModuleName, Text, Text)
             )
         )
     fsSearch =
@@ -293,15 +295,21 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
                 ( Either
                     Text
                     ( Either
-                        (Text, ScriptName, Text)
-                        (Text, ModuleName, Text)
+                        (Text, ScriptName, Text, Text)
+                        (Text, ModuleName, Text, Text)
                     )
                 )
             go (!dir, !relPath) = case splitFileName dir of
               (!homeDir, "edh_modules") -> case splitFileName relPath of
                 (!moduName, "__main__.edh") ->
                   return $
-                    Right $ Left (T.pack homeDir, T.pack moduName, T.pack absFile)
+                    Right $
+                      Left
+                        ( T.pack homeDir,
+                          T.pack moduName,
+                          T.pack (dir </> moduName),
+                          T.pack absFile
+                        )
                 (!moduName, "__init__.edh") ->
                   let !conflictingFile = dir </> moduName <> ".edh"
                    in doesPathExist conflictingFile >>= \case
@@ -316,6 +324,7 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
                               Right
                                 ( T.pack homeDir,
                                   T.pack moduName,
+                                  T.pack (dir </> moduName),
                                   T.pack absFile
                                 )
                 _ ->
@@ -340,6 +349,7 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
                                     T.stripSuffix ".edh" $
                                       T.pack
                                         relPath,
+                                  T.pack (takeDirectory relPath),
                                   T.pack absFile
                                 )
               (!gpdir, !pdir) ->
@@ -354,9 +364,16 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
                         Left
                           ( T.pack dir,
                             T.pack relPath,
+                            "", -- script module should not do relative import
                             T.pack absFile
                           )
          in go $ splitFileName absFile
+
+el'LocateImportee ::
+  EL'ModuSlot ->
+  Text ->
+  EL'Analysis EL'ModuSlot
+el'LocateImportee !msFrom !impSpec !exit !eas = undefined
 
 el'DoParseModule ::
   EL'ModuSlot ->

@@ -68,6 +68,9 @@ instance Eq EL'Home where
 data EL'ModuSlot = EL'ModuSlot
   { -- | each parent dir of `edh_modules` is considered an Edh home
     el'modu'home :: !EL'Home,
+    -- | the relative base path for this module, relative import will cause
+    -- error if this is set to empty
+    el'modu'rel'base :: !Text,
     -- | absolute path of the `.edh` src file
     el'modu'doc :: !SrcDoc,
     -- fields pertain results from different stages of analysation
