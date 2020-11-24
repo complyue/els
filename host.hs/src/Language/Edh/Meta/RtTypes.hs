@@ -1,18 +1,10 @@
-module Language.Edh.LS.RtTypes where
+module Language.Edh.Meta.RtTypes where
 
 import Control.Concurrent.STM
-import Data.HashMap.Strict (HashMap)
-import qualified Data.HashMap.Strict as Map
-import Data.Hashable
-import qualified Data.Map.Strict as TreeMap
-import Data.Text (Text)
-import qualified Data.Text as T
 import Data.Vector (Vector)
-import qualified Data.Vector as V
 import Language.Edh.EHI
-import Language.Edh.Evaluate
 import Language.Edh.Meta.Model
-import Prelude
+import Prelude ()
 
 data EL'World = EL'World
   { -- this vector of home records should hold the invariant that sorted by

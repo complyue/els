@@ -1,19 +1,15 @@
-module Language.Edh.LS.Analyze where
+module Language.Edh.Meta.Analyze where
 
 import Control.Concurrent.STM
-import Control.Exception
 import Control.Monad
-import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
-import qualified Data.Map.Strict as TreeMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import Language.Edh.EHI
-import Language.Edh.Evaluate
-import Language.Edh.LS.RtTypes
 import Language.Edh.Meta.Model
+import Language.Edh.Meta.RtTypes
 import Numeric.Search.Range
 import System.FilePath
 import Prelude
