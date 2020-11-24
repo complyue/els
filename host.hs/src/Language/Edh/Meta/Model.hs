@@ -54,20 +54,43 @@ data EL'Home = EL'Home
     -- todo cache configurations per Edh home with more fields
   }
 
-instance Eq EL'Home where
-  x == y = el'home'path x == el'home'path y
-
 type ModuleName = Text
 
 type ScriptName = Text
 
+instance Eq EL'Home where
+  x == y = el'home'path x == el'home'path y
+
+-- | Edh module and `.edh` text doc (os file, virtual or physical, local or
+-- remote) be of 1:1 mapping
 data EL'ModuSlot = EL'ModuSlot
   { -- | each parent dir of `edh_modules` is considered an Edh home
     el'modu'home :: !EL'Home,
     -- | absolute path of the `.edh` src file
     el'modu'doc :: !SrcDoc,
-    -- | stage of the module
-    el'modu'stage :: !(TVar EL'ModuStage)
+    -- fields pertain results from different stages of analysation
+    -- the 1st layer of `TMVar` when non-empty means it has been worked on,
+    -- the 2nd layer of the `TMVar` provides awaitable result from the WIP, and
+    -- if non-empty, means the work has already been done.
+    -- clearing the 1st layer `TMVar` invalidates previous analysis work, while
+    -- the 2nd layer `TMVar` should usually not be cleared once filled.
+    el'modu'parsed :: !(TMVar (TMVar EL'ParsedModule)),
+    el'modu'loaded :: !(TMVar (TMVar EL'LoadedModule)),
+    el'modu'resolved :: !(TMVar (TMVar EL'ResolvedModule)),
+    -- | other modules those should be invalidated once this module is changed
+    --
+    -- note a dependant may stop depending on this module due to src changes,
+    -- so cross checking of its `el'modu'dependencies` should be performed and
+    -- have this `el'modu'dependants` updated upon such changes
+    el'modu'dependants :: !(TVar (Map.HashMap EL'ModuSlot Bool)),
+    -- | other modules this module depends on
+    --
+    -- a dependency module's `el'modu'dependants` should be updated marking
+    -- this module as a dependant as well
+    --
+    -- note after invalidated, re-analysation of this module may install a new
+    -- version of this map reflecting dependencies up-to-date
+    el'modu'dependencies :: !(TVar (Map.HashMap EL'ModuSlot Bool))
   }
 
 instance Eq EL'ModuSlot where
@@ -78,25 +101,19 @@ instance Hashable EL'ModuSlot where
     let SrcDoc !absPath = el'modu'doc v
      in hashWithSalt s absPath
 
-data EL'ModuStage
-  = EL'ModuParsed !EL'ParsedModule
-  | EL'ModuLoaded !EL'LoadedModule
-  | EL'ModuResolved !EL'ResolvedModule
-  | EL'ModuFailed !EdhValue
-
 data EL'ParsedModule = EL'ParsedModule
   { el'parsed'stmts :: ![StmtSrc],
-    -- TODO define proper data structures for this
-    el'parsed'diags :: ![Text]
+    -- | diagnostics generated from this stage of analysis
+    el'parsed'diags :: ![(SrcRange, Text)]
   }
 
--- | Edh module and `.edh` text doc (os file, virtual or physical, local or
--- remote) be of 1:1 mapping
 data EL'LoadedModule = EL'LoadedModule
   { -- | artifacts identified before resolution
-    el'loaded'arts :: OrderedDict EL'AttrKey EL'OriginalValue,
+    el'loaded'arts :: OrderedDict EL'AttrKey EL'Value,
     -- | exports identified before resolution
-    el'loaded'exports :: !EL'Artifacts
+    el'loaded'exports :: !EL'Artifacts,
+    -- | diagnostics generated from this stage of analysis
+    el'loaded'diags :: ![(SrcRange, Text)]
   }
 
 data EL'ResolvedModule = EL'ResolvedModule
@@ -104,24 +121,18 @@ data EL'ResolvedModule = EL'ResolvedModule
     -- this root scope of the module
     el'resolved'scope :: !EL'Scope,
     -- | TODO this useful?
-    -- el'modu'imports :: OrderedDict EL'AttrKey EL'OriginalValue,
+    -- el'modu'imports :: OrderedDict EL'AttrKey EL'Value,
     -- | an attribute is exported by any form of assignment targeting
     -- current scope, or any form of procedure declaration, which follows an
     -- `export` keyword, or within a block following an `export` keyword
-    el'resolved'exports :: !EL'Artifacts
+    el'resolved'exports :: !EL'Artifacts,
+    -- | diagnostics generated from this stage of analysis
+    el'resolved'diags :: ![(SrcRange, Text)]
   }
 
 -- | a dict of artifacts by attribute key, with their order of appearance
 -- preserved
-type EL'Artifacts = OrderedDict EL'AttrKey EL'OriginalValue
-
-data EL'OriginalValue = EL'OriginalValue
-  { -- | the original module defined this value
-    el'origin'module :: !EL'ModuSlot,
-    -- TODO will this be useful ?
-    -- el'origin'eff'span :: !SrcRange,
-    el'value :: !EL'Value
-  }
+type EL'Artifacts = OrderedDict EL'AttrKey EL'Value
 
 data EL'AttrKey = EL'AttrKey
   { el'akey'src :: !AttrAddrSrc,
@@ -149,36 +160,58 @@ instance Hashable EL'AttrKey where
   hashWithSalt s (EL'AttrKey (AttrAddrSrc addr _) Nothing) =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` addr
 
--- | represent values other than a class or an object
-data EL'Value = EL'Value
-  { el'value'src :: !ExprSrc,
-    el'value'stage :: !(TVar EL'ValStage)
-    -- -- TODO this usefull ??
-    -- el'value'type :: !(Maybe EdhTypeValue),
-    -- -- staticly decidable value, or nil if unable to
-    -- el'value'refied :: !EdhValue
-  }
+data EL'Value
+  = -- | runtime constant i.e. decidable at analysis time
+    EL'RtConst !EdhValue
+  | -- | runtime value whose reification can not be decided at analysis time
+    EL'RtValue
+      { -- | the original module defined this value
+        el'origin'module :: !EL'ModuSlot,
+        -- | TODO will this be useful ?
+        -- el'origin'eff'span :: !SrcRange,
+        -- | the src expression creating this value
+        el'value'src :: !ExprSrc,
+        -- | staged result however this value is decided
+        el'value'stage :: !(TVar EL'ValStage),
+        -- annotated type of this value, most likely from annotations
+        el'value'type :: !(Maybe EL'Value)
+      }
 
 data EL'ValStage
-  = EL'ParsedValue !ExprSrc
-  | EL'LoadedClass !ProcDecl
-  | EL'ResolvedClass
-      { el'class'name :: EL'AttrKey,
+  = EL'ParsedValue
+  | EL'LoadedClass
+      { el'class'loaded'name :: EL'AttrKey,
         -- | mro
-        el'class'mro :: ![EL'Value],
-        -- | scope of this class
-        el'class'scope :: !EL'Scope,
+        el'class'loaded'mro :: ![EL'Value],
         -- | an attribute is exported by any form of assignment targeting
         -- current scope, or any form of procedure declaration, which follows an
         -- `export` keyword, or within a block following an `export` keyword
-        el'class'exports :: !EL'Artifacts
+        el'class'loaded'exports :: !EL'Artifacts
+      }
+  | EL'ResolvedClass
+      { el'class'resolved'name :: EL'AttrKey,
+        -- | mro
+        el'class'resolved'mro :: ![EL'Value],
+        -- | scope of this class
+        el'class'resolved'scope :: !EL'Scope,
+        -- | an attribute is exported by any form of assignment targeting
+        -- current scope, or any form of procedure declaration, which follows an
+        -- `export` keyword, or within a block following an `export` keyword
+        el'class'resolved'exports :: !EL'Artifacts
       }
   | EL'LoadedObject
       { -- | the class of this object instance
         -- TODO use some other, more proper type for this field ?
-        el'obj'class :: !EL'OriginalValue,
-        -- | the source expression instantiated this object
-        el'obj'src :: !ExprSrc
+        el'obj'loaded'class :: !EL'Value,
+        -- | loaded super instances
+        el'obj'loaded'supers :: ![EL'Value]
+      }
+  | EL'ResolvedObject
+      { -- | the class of this object instance
+        -- TODO use some other, more proper type for this field ?
+        el'obj'resolved'class :: !EL'Value,
+        -- | resolved super instances
+        el'obj'resolved'supers :: ![EL'Value]
       }
 
 data EL'Section = EL'ScopeSec !EL'Scope | EL'RegionSec !EL'Region
@@ -228,9 +261,9 @@ data EL'Region = EL'Region
     el'region'annos :: !(HashMap EL'AttrKey ExprSrc),
     -- | an attribute is created by any form of assignment targeting current
     -- scope, or any form of procedure declaration
-    el'region'attrs :: !(HashMap EL'AttrKey EL'OriginalValue),
+    el'region'attrs :: !(HashMap EL'AttrKey EL'Value),
     -- | an effectiful attribute is created by any form of assignment targeting
     -- current scope, or any form of procedure declaration, which follows an
     -- `effect` keyword, or within a block following an `effect` keyword
-    el'region'effs :: !(HashMap EL'AttrKey EL'OriginalValue)
+    el'region'effs :: !(HashMap EL'AttrKey EL'Value)
   }
