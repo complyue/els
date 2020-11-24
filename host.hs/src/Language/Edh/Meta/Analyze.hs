@@ -1,11 +1,16 @@
 module Language.Edh.Meta.Analyze where
 
 import Control.Concurrent.STM
+import Control.Exception
 import Control.Monad
+import qualified Data.ByteString as B
+import Data.Dynamic
 import qualified Data.HashMap.Strict as Map
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Text.Encoding (Decoding (Some), streamDecodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Vector as V
 import GHC.Conc (unsafeIOToSTM)
 import Language.Edh.EHI
@@ -358,9 +363,34 @@ el'DoParseModule ::
   TMVar EL'ParsedModule ->
   EL'TxExit () ->
   EL'Tx
-el'DoParseModule !ms !pmVar !exit !eas = do
-  void $ tryPutTMVar pmVar undefined -- XXX
-  el'Exit eas exit ()
+el'DoParseModule !ms !pmVar !exit eas@(EL'AnalysisState _elw !ets) =
+  unsafeIOToSTM
+    ( streamDecodeUtf8With lenientDecode
+        <$> B.readFile
+          ( T.unpack
+              moduFile
+          )
+    )
+    >>= \case
+      Some !moduSource _ _ ->
+        parseEdh world moduFile moduSource >>= \case
+          Left !err -> do
+            let !msg = T.pack $ errorBundlePretty err
+                !edhWrapException = edh'exception'wrapper world
+                !edhErr =
+                  EdhError ParseError msg (toDyn nil) $
+                    getEdhErrCtx
+                      0
+                      ets
+            edhWrapException (toException edhErr)
+              >>= \ !exo -> edhThrow ets (EdhObject exo)
+          Right (!stmts, _docCmt) -> do
+            let !parsed = EL'ParsedModule stmts []
+            void $ tryPutTMVar pmVar parsed
+            el'Exit eas exit ()
+  where
+    !world = edh'prog'world $ edh'thread'prog ets
+    SrcDoc !moduFile = el'modu'doc ms
 
 el'DoLoadModule ::
   EL'ModuSlot ->
@@ -368,10 +398,15 @@ el'DoLoadModule ::
   TMVar EL'LoadedModule ->
   EL'TxExit () ->
   EL'Tx
-el'DoLoadModule !ms (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
-  let !loaded = undefined -- XXX
-  void $ tryPutTMVar lmVar loaded
-  el'Exit eas exit ()
+el'DoLoadModule
+  !ms
+  (EL'ParsedModule !stmts _parse'diags)
+  !lmVar
+  !exit
+  eas@(EL'AnalysisState !elw !ets) = do
+    let !loaded = undefined -- XXX
+    void $ tryPutTMVar lmVar loaded
+    el'Exit eas exit ()
 
 el'DoResolveModule ::
   EL'ModuSlot ->
@@ -386,7 +421,7 @@ el'DoResolveModule
   (EL'LoadedModule !arts !exps _load'diags)
   !lmVar
   !exit
-  !eas = do
+  eas@(EL'AnalysisState !elw !ets) = do
     let !resolved = undefined -- XXX
     void $ tryPutTMVar lmVar resolved
     el'Exit eas exit ()
