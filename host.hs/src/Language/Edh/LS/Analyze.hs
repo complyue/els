@@ -171,6 +171,35 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
               (V.length homesVec - 1)
       return ()
 
+el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhTxExit -> EdhTx
+el'InvalidateModule !srcChanged !ms !exit !ets = do
+  when srcChanged $ do
+    void $ tryTakeTMVar $ el'modu'parsed ms
+    void $ tryTakeTMVar $ el'modu'loaded ms
+  void $ tryTakeTMVar $ el'modu'resolved ms
+  writeTVar (el'modu'dependencies ms) Map.empty
+  readTVar (el'modu'dependants ms) >>= invalidateDependants [] . Map.toList
+  where
+    invalidateDependants ::
+      [(EL'ModuSlot, Bool)] ->
+      [(EL'ModuSlot, Bool)] ->
+      STM ()
+    invalidateDependants !upds [] = do
+      unless (null upds) $
+        modifyTVar' (el'modu'dependants ms) $ Map.union (Map.fromList upds)
+      exitEdh ets exit nil
+    invalidateDependants !upds ((!dependant, !hold) : rest) =
+      Map.lookup ms {- HLINT ignore "Redundant <$>" -}
+        <$> readTVar (el'modu'dependencies dependant) >>= \case
+          Just True ->
+            runEdhTx ets $
+              el'InvalidateModule False dependant $ \_ _ets ->
+                invalidateDependants upds rest
+          _ ->
+            if hold
+              then invalidateDependants ((dependant, False) : upds) rest
+              else invalidateDependants upds rest
+
 el'DoParseModule :: EL'ModuSlot -> TMVar EL'ParsedModule -> EdhTxExit -> EdhTx
 el'DoParseModule !ms !pmVar !exit !ets = do
   void $ tryPutTMVar pmVar undefined -- XXX
