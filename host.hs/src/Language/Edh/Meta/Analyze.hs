@@ -372,8 +372,33 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
 el'LocateImportee ::
   EL'ModuSlot ->
   Text ->
-  EL'Analysis EL'ModuSlot
-el'LocateImportee !msFrom !impSpec !exit !eas = undefined
+  EL'Analysis (Either Text EL'ModuSlot)
+el'LocateImportee !msFrom !impSpec !exit !eas =
+  case T.stripPrefix "./" impSpec of
+    Just !relImp ->
+      let !relBase = el'modu'rel'base msFrom
+       in if T.null relBase
+            then
+              let SrcDoc !fromFile = el'modu'doc msFrom
+               in el'Exit eas exit $
+                    Left $
+                      "can not do relative import from "
+                        <> fromFile
+            else
+              let !tgtModuFile = relBase <> relImp <> ".edh"
+               in unsafeIOToSTM (doesFileExist $ T.unpack tgtModuFile) >>= \case
+                    True -> undefined -- XXX
+                    False ->
+                      let !tgtIdxFile = relBase <> relImp <> "/__init__.edh"
+                       in unsafeIOToSTM (doesFileExist $ T.unpack tgtIdxFile)
+                            >>= \case
+                              True -> undefined -- XXX
+                              False ->
+                                el'Exit eas exit $
+                                  Left $
+                                    "import does not exist: "
+                                      <> impSpec
+    Nothing -> undefined -- XXX abs imp
 
 el'DoParseModule ::
   EL'ModuSlot ->
