@@ -20,32 +20,34 @@ data EL'Home = EL'Home
     el'home'path :: !Text,
     -- | importable modules under this home
     --
-    -- a module is importable iif the src file resides inside the `edh_modules`
-    -- subdir under an Edh home root dir, and the file name does not start with
-    -- an underscore char (e.g. named `__main__.edh`), one special case that
-    -- e.g.
-    -- `$edh_home/edh_modules/some/modu/__init__.edh` will shadow
-    -- `$edh_home/edh_modules/some/modu.edh`, assuming the name `some/modu`.
+    -- a usual module is importable, its src file should reside inside the
+    -- `edh_modules` subdir under an Edh home root dir, and the file name
+    -- usually does not start with an underscore char (e.g. `__main__.edh` is
+    -- an entry module thus not importable). one exceptional case that e.g.
+    -- `$edh_home/edh_modules/some/modu/__init__.edh` will assume the name
+    -- `some/modu`, and will conflict with
+    -- `$edh_home/edh_modules/some/modu.edh` if both exist.
     --
-    -- the name of an importable module is path (with `.edh` and `/__init__.edh`
-    -- stripped off), and relative to the `edh_modules` dir.
+    -- the name of an importable module is path with `.edh` and `/__init__.edh`
+    -- stripped off, and relative to the `edh_modules` dir.
     --
     -- note all Edh src file should have the extension name `.edh`, and will be
     -- stripped off from any Edh module name or module path.
     el'home'modules :: !(TMVar (Map.HashMap ModuleName EL'ModuSlot)),
-    -- | standalone scripts under this home
+    -- | standalone script modules under this home
     --
-    -- a script is technically a standalone module that not importable, it can
-    -- only be run as an entry module.
+    -- a script module is technically a standalone module that not importable,
+    -- it can only be run as an entry module.
     --
-    -- typical script files reside outside of the `edh_modules` sub dir, one
+    -- typical script modules reside outside of the `edh_modules` sub dir, one
     -- speciall case is `__main__.edh` e.g.
     -- `$edh_home/edh_modules/some/modu/__main__.edh` will be executed when
     -- `some/modu` is specified as the target module per Edh interpreter run.
     --
-    -- the advantage of a module target over a file target per running is that
+    -- the advantage of a module target over a script target per running is that
     -- module resolution machinery is more flexible so you can address installed
-    -- modules while a nested Edh home can have a local file overriding it.
+    -- modules without knowning where exactly it is located, while a nested Edh
+    -- home can have a local module file overriding one from outer homes.
     --
     -- the name of a script is path relative to the home root dir, with `.edh`
     -- extension name preserved, but with the exception of a module script,
