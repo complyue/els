@@ -23,6 +23,10 @@ data EL'World = EL'World
     el'eow :: !EventSink
   }
 
+el'RunAnalysis :: EL'World -> EL'Analysis a -> EL'TxExit a -> EdhTx
+el'RunAnalysis !elw !ana !exit !ets =
+  el'RunTx (EL'AnalysisState elw ets) (ana exit)
+
 type EL'Analysis a = EL'TxExit a -> EL'Tx
 
 type EL'TxExit a = a -> EL'Tx

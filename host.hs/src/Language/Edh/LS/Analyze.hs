@@ -18,9 +18,34 @@ import Numeric.Search.Range
 import System.FilePath
 import Prelude
 
-el'RunAnalysis :: EL'World -> EL'Analysis a -> EL'TxExit a -> EdhTx
-el'RunAnalysis !elw !ana !exit !ets =
-  el'RunTx (EL'AnalysisState elw ets) (ana exit)
+el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhTxExit -> EdhTx
+el'InvalidateModule !srcChanged !ms !exit !ets = do
+  when srcChanged $ do
+    void $ tryTakeTMVar $ el'modu'parsed ms
+    void $ tryTakeTMVar $ el'modu'loaded ms
+  void $ tryTakeTMVar $ el'modu'resolved ms
+  writeTVar (el'modu'dependencies ms) Map.empty
+  readTVar (el'modu'dependants ms) >>= invalidateDependants [] . Map.toList
+  where
+    invalidateDependants ::
+      [(EL'ModuSlot, Bool)] ->
+      [(EL'ModuSlot, Bool)] ->
+      STM ()
+    invalidateDependants !upds [] = do
+      unless (null upds) $
+        modifyTVar' (el'modu'dependants ms) $ Map.union (Map.fromList upds)
+      exitEdh ets exit nil
+    invalidateDependants !upds ((!dependant, !hold) : rest) =
+      Map.lookup ms {- HLINT ignore "Redundant <$>" -}
+        <$> readTVar (el'modu'dependencies dependant) >>= \case
+          Just True ->
+            runEdhTx ets $
+              el'InvalidateModule False dependant $ \_ _ets ->
+                invalidateDependants upds rest
+          _ ->
+            if hold
+              then invalidateDependants ((dependant, False) : upds) rest
+              else invalidateDependants upds rest
 
 el'ResolveModule :: EL'ModuSlot -> EL'Analysis (TMVar EL'ResolvedModule)
 el'ResolveModule !ms !exit = el'LoadModule ms $
@@ -41,7 +66,11 @@ el'ResolveModule !ms !exit = el'LoadModule ms $
                     forkEdh
                       id
                       ( edhCatchTx
-                          (el'DoResolveModule ms pm lm rmVar)
+                          ( \ !exitTry !etsTry ->
+                              el'RunTx eas {el'ets = etsTry} $
+                                el'DoResolveModule ms pm lm rmVar $ \() _eas ->
+                                  exitEdh etsTry exitTry nil
+                          )
                           endOfEdh
                           $ \ !recover !rethrow !etsCatching ->
                             case edh'ctx'match $ edh'context etsCatching of
@@ -85,8 +114,14 @@ el'LoadModule !ms !exit = el'ParseModule ms $ \ !pmVar !eas ->
                   runEdhTx (el'ets eas) $
                     forkEdh
                       id
-                      ( edhCatchTx (el'DoLoadModule ms pm lmVar) endOfEdh $
-                          \ !recover !rethrow !etsCatching ->
+                      ( edhCatchTx
+                          ( \ !exitTry !etsTry ->
+                              el'RunTx eas {el'ets = etsTry} $
+                                el'DoLoadModule ms pm lmVar $ \() _eas ->
+                                  exitEdh etsTry exitTry nil
+                          )
+                          endOfEdh
+                          $ \ !recover !rethrow !etsCatching ->
                             case edh'ctx'match $ edh'context etsCatching of
                               EdhNil -> do
                                 void $ -- in case it's not filled
@@ -151,7 +186,7 @@ el'ParseModule !ms !exit !eas = goParse
                   endOfEdh
               el'Exit eas exit pmVar
 
-el'LocateModule :: Text -> (EL'ModuSlot -> EL'Tx) -> EL'Tx
+el'LocateModule :: Text -> EL'TxExit EL'ModuSlot -> EL'Tx
 el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
   el'RunTx eas $ exit undefined
   where
@@ -171,35 +206,6 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
               (V.length homesVec - 1)
       return ()
 
-el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhTxExit -> EdhTx
-el'InvalidateModule !srcChanged !ms !exit !ets = do
-  when srcChanged $ do
-    void $ tryTakeTMVar $ el'modu'parsed ms
-    void $ tryTakeTMVar $ el'modu'loaded ms
-  void $ tryTakeTMVar $ el'modu'resolved ms
-  writeTVar (el'modu'dependencies ms) Map.empty
-  readTVar (el'modu'dependants ms) >>= invalidateDependants [] . Map.toList
-  where
-    invalidateDependants ::
-      [(EL'ModuSlot, Bool)] ->
-      [(EL'ModuSlot, Bool)] ->
-      STM ()
-    invalidateDependants !upds [] = do
-      unless (null upds) $
-        modifyTVar' (el'modu'dependants ms) $ Map.union (Map.fromList upds)
-      exitEdh ets exit nil
-    invalidateDependants !upds ((!dependant, !hold) : rest) =
-      Map.lookup ms {- HLINT ignore "Redundant <$>" -}
-        <$> readTVar (el'modu'dependencies dependant) >>= \case
-          Just True ->
-            runEdhTx ets $
-              el'InvalidateModule False dependant $ \_ _ets ->
-                invalidateDependants upds rest
-          _ ->
-            if hold
-              then invalidateDependants ((dependant, False) : upds) rest
-              else invalidateDependants upds rest
-
 el'DoParseModule :: EL'ModuSlot -> TMVar EL'ParsedModule -> EdhTxExit -> EdhTx
 el'DoParseModule !ms !pmVar !exit !ets = do
   void $ tryPutTMVar pmVar undefined -- XXX
@@ -209,25 +215,27 @@ el'DoLoadModule ::
   EL'ModuSlot ->
   EL'ParsedModule ->
   TMVar EL'LoadedModule ->
-  EdhTxExit ->
-  EdhTx
-el'DoLoadModule !ms (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !ets = do
-  void $ tryPutTMVar lmVar undefined -- XXX
-  exitEdh ets exit nil
+  EL'TxExit () ->
+  EL'Tx
+el'DoLoadModule !ms (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
+  let !loaded = undefined -- XXX
+  void $ tryPutTMVar lmVar loaded
+  el'Exit eas exit ()
 
 el'DoResolveModule ::
   EL'ModuSlot ->
   EL'ParsedModule ->
   EL'LoadedModule ->
   TMVar EL'ResolvedModule ->
-  EdhTxExit ->
-  EdhTx
+  EL'TxExit () ->
+  EL'Tx
 el'DoResolveModule
   !ms
   (EL'ParsedModule !stmts _parse'diags)
   (EL'LoadedModule !arts !exps _load'diags)
   !lmVar
   !exit
-  !ets = do
-    void $ tryPutTMVar lmVar undefined -- XXX
-    exitEdh ets exit nil
+  !eas = do
+    let !resolved = undefined -- XXX
+    void $ tryPutTMVar lmVar resolved
+    el'Exit eas exit ()
