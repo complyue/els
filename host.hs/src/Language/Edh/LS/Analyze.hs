@@ -18,7 +18,7 @@ import Numeric.Search.Range
 import System.FilePath
 import Prelude
 
-el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhTxExit -> EdhTx
+el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhTxExit () -> EdhTx
 el'InvalidateModule !srcChanged !ms !exit !ets = do
   when srcChanged $ do
     void $ tryTakeTMVar $ el'modu'parsed ms
@@ -34,7 +34,7 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
     invalidateDependants !upds [] = do
       unless (null upds) $
         modifyTVar' (el'modu'dependants ms) $ Map.union (Map.fromList upds)
-      exitEdh ets exit nil
+      exitEdh ets exit ()
     invalidateDependants !upds ((!dependant, !hold) : rest) =
       Map.lookup ms {- HLINT ignore "Redundant <$>" -}
         <$> readTVar (el'modu'dependencies dependant) >>= \case
@@ -163,8 +163,14 @@ el'ParseModule !ms !exit !eas = goParse
               runEdhTx (el'ets eas) $
                 forkEdh
                   id
-                  ( edhCatchTx (el'DoParseModule ms pmVar) endOfEdh $
-                      \ !recover !rethrow !etsCatching ->
+                  ( edhCatchTx
+                      ( \ !exitTry !etsTry ->
+                          el'RunTx eas {el'ets = etsTry} $
+                            el'DoParseModule ms pmVar $ \() _eas ->
+                              exitEdh etsTry exitTry nil
+                      )
+                      endOfEdh
+                      $ \ !recover !rethrow !etsCatching ->
                         case edh'ctx'match $ edh'context etsCatching of
                           EdhNil -> do
                             void $ -- in case it's not filled
@@ -206,10 +212,14 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
               (V.length homesVec - 1)
       return ()
 
-el'DoParseModule :: EL'ModuSlot -> TMVar EL'ParsedModule -> EdhTxExit -> EdhTx
-el'DoParseModule !ms !pmVar !exit !ets = do
+el'DoParseModule ::
+  EL'ModuSlot ->
+  TMVar EL'ParsedModule ->
+  EL'TxExit () ->
+  EL'Tx
+el'DoParseModule !ms !pmVar !exit !eas = do
   void $ tryPutTMVar pmVar undefined -- XXX
-  exitEdh ets exit nil
+  el'Exit eas exit ()
 
 el'DoLoadModule ::
   EL'ModuSlot ->
