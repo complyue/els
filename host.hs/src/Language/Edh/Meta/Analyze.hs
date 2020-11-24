@@ -3,14 +3,16 @@ module Language.Edh.Meta.Analyze where
 import Control.Concurrent.STM
 import Control.Monad
 import qualified Data.HashMap.Strict as Map
+import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as MV
+import GHC.Conc (unsafeIOToSTM)
 import Language.Edh.EHI
 import Language.Edh.Meta.Model
 import Language.Edh.Meta.RtTypes
 import Numeric.Search.Range
+import System.Directory
 import System.FilePath
 import Prelude
 
@@ -190,23 +192,166 @@ el'ParseModule !ms !exit !eas = goParse
 
 el'LocateModule :: Text -> EL'TxExit EL'ModuSlot -> EL'Tx
 el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
-  el'RunTx eas $ exit undefined
+  if not $ ".edh" `T.isSuffixOf` moduFile
+    then throwEdh ets UsageError $ "Not a .edh file: " <> moduFile
+    else
+      runEdhTx ets $
+        edhContIO $
+          fsSearch >>= \case
+            Left !err -> atomically $ throwEdh ets UsageError err
+            Right (Left (!homePath, !scriptName, !absFile)) ->
+              atomically (prepareHome homePath)
+                -- with 2 separate STM txs
+                >>= atomically . goWith scriptName absFile el'home'scripts
+            Right (Right (!homePath, !moduName, !absFile)) ->
+              atomically (prepareHome homePath)
+                -- with 2 separate STM txs
+                >>= atomically . goWith moduName absFile el'home'modules
   where
-    !moduHomeDir = moduFile
+    goWith ::
+      Text ->
+      Text ->
+      (EL'Home -> TMVar (Map.HashMap ModuleName EL'ModuSlot)) ->
+      EL'Home ->
+      STM ()
+    goWith !name !absFile !mmField !home =
+      takeTMVar mmVar >>= \ !mm ->
+        case Map.lookup name mm of
+          Just !ms ->
+            let SrcDoc !prevDoc = el'modu'doc ms
+             in if prevDoc /= absFile
+                  then
+                    throwEdh ets EvalError $
+                      "bug: conflicting module located "
+                        <> prevDoc
+                        <> " vs "
+                        <> absFile
+                  else do
+                    putTMVar mmVar mm
+                    el'Exit eas exit ms
+          Nothing -> do
+            !parsed <- newEmptyTMVar
+            !loaded <- newEmptyTMVar
+            !resolved <- newEmptyTMVar
+            !dependants <- newTVar Map.empty
+            !dependencies <- newTVar Map.empty
+            let !ms =
+                  EL'ModuSlot
+                    home
+                    (SrcDoc absFile)
+                    parsed
+                    loaded
+                    resolved
+                    dependants
+                    dependencies
+            putTMVar mmVar (Map.insert name ms mm)
+            el'Exit eas exit ms
+      where
+        !mmVar = mmField home
 
-    !homesVar = el'homes elw
+    prepareHome :: Text -> STM EL'Home
+    prepareHome !homePath = do
+      !homesVec <- takeTMVar (el'homes elw)
+      let newHome (vPre, vPost) = do
+            !modus <- newTMVar Map.empty
+            !scripts <- newTMVar Map.empty
+            let !home = EL'Home homePath modus scripts
+            putTMVar (el'homes elw) $ V.force $ vPre V.++ V.cons home vPost
+            return home
+      case searchFromTo
+        ( \ !i ->
+            el'home'path (V.unsafeIndex homesVec i) >= homePath
+        )
+        0
+        (V.length homesVec - 1) of
+        Just !homeIdx ->
+          let !home = V.unsafeIndex homesVec homeIdx
+           in if homePath == el'home'path home
+                then putTMVar (el'homes elw) homesVec >> return home
+                else newHome $ V.splitAt homeIdx homesVec
+        _ -> newHome (homesVec, V.empty)
 
-    getHome :: STM ()
-    getHome = do
-      !homesVec <- takeTMVar homesVar
-      let !homeIdx =
-            searchFromTo
-              ( \ !i ->
-                  el'home'path (V.unsafeIndex homesVec i) >= moduHomeDir
-              )
-              0
-              (V.length homesVec - 1)
-      return ()
+    fsSearch ::
+      IO
+        ( Either
+            Text
+            ( Either
+                (Text, ScriptName, Text)
+                (Text, ModuleName, Text)
+            )
+        )
+    fsSearch =
+      canonicalizePath (T.unpack moduFile) >>= \ !absFile ->
+        let go ::
+              (FilePath, FilePath) ->
+              IO
+                ( Either
+                    Text
+                    ( Either
+                        (Text, ScriptName, Text)
+                        (Text, ModuleName, Text)
+                    )
+                )
+            go (!dir, !relPath) = case splitFileName dir of
+              (!homeDir, "edh_modules") -> case splitFileName relPath of
+                (!moduName, "__main__.edh") ->
+                  return $
+                    Right $ Left (T.pack homeDir, T.pack moduName, T.pack absFile)
+                (!moduName, "__init__.edh") ->
+                  let !conflictingFile = dir </> moduName <> ".edh"
+                   in doesPathExist conflictingFile >>= \case
+                        True ->
+                          return $
+                            Left $
+                              "conflicting "
+                                <> T.pack conflictingFile
+                        False ->
+                          return $
+                            Right $
+                              Right
+                                ( T.pack homeDir,
+                                  T.pack moduName,
+                                  T.pack absFile
+                                )
+                _ ->
+                  let !moduName =
+                        fromMaybe relPath $
+                          stripExtension
+                            ".edh"
+                            relPath
+                      !conflictingFile = dir </> moduName </> "__init__.edh"
+                   in doesPathExist conflictingFile >>= \case
+                        True ->
+                          return $
+                            Left $
+                              "conflicting "
+                                <> T.pack conflictingFile
+                        False ->
+                          return $
+                            Right $
+                              Right
+                                ( T.pack homeDir,
+                                  fromJust $
+                                    T.stripSuffix ".edh" $
+                                      T.pack
+                                        relPath,
+                                  T.pack absFile
+                                )
+              (!gpdir, !pdir) ->
+                doesDirectoryExist (dir </> "edh_modules") >>= \case
+                  False ->
+                    if gpdir == dir -- reached fs root
+                      then return $ Left "not in any edh home"
+                      else go (gpdir, pdir </> relPath)
+                  True ->
+                    return $
+                      Right $
+                        Left
+                          ( T.pack dir,
+                            T.pack relPath,
+                            T.pack absFile
+                          )
+         in go $ splitFileName absFile
 
 el'DoParseModule ::
   EL'ModuSlot ->
