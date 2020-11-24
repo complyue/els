@@ -36,20 +36,22 @@ driveEdhAnalysis !anaExit eas@(EL'AnalysisState _elw !pas !ets) = checkDone
     driveActions [] = checkDone
     driveActions (act : rest) = act (const $ driveActions rest) eas
 
-el'WithResolvedModule :: EL'ModuSlot -> (EL'ResolvedModule -> EL'Analysis) -> EL'TxExit -> EL'Tx
-el'WithResolvedModule !ms !ana !anaExit = advanceStage anaExit
+el'WithResolvedModule ::
+  EL'ModuSlot ->
+  (EL'ResolvedModule -> EL'Analysis) ->
+  EL'Tx
+el'WithResolvedModule !ms !ana = advanceStage (const $ return ())
   where
     advanceStage :: EL'Analysis
     advanceStage !exit !eas =
       readTVar (el'modu'stage ms) >>= \case
-        -- TODO these are still wrong
         EL'ModuParsed !parsed -> do
           el'Postpone advanceStage eas
           el'LoadModule parsed ms exit eas
         EL'ModuLoaded !loaded -> do
           el'Postpone advanceStage eas
           el'ResolveModule loaded ms exit eas
-        EL'ModuResolved !resolved -> ana resolved anaExit eas
+        EL'ModuResolved !resolved -> ana resolved exit eas
         EL'ModuFailed !exv -> edhThrow ets exv
       where
         !ets = el'ets eas

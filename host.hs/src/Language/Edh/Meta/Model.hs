@@ -149,18 +149,23 @@ instance Hashable EL'AttrKey where
   hashWithSalt s (EL'AttrKey (AttrAddrSrc addr _) Nothing) =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` addr
 
-data EL'Value
-  = -- | represent values other than a class or an object
-    EL'Value
-      { el'value'src :: !ExprSrc,
-        -- TODO this usefull ??
-        el'value'type :: !(Maybe EdhTypeValue),
-        -- staticly decidable value, or nil if unable to
-        el'value'refied :: !EdhValue
-      }
-  | -- | a class definition is specially treated in static analysis
-    EL'Class
-      { el'class'proc :: !ProcDecl,
+-- | represent values other than a class or an object
+data EL'Value = EL'Value
+  { el'value'src :: !ExprSrc,
+    el'value'stage :: !(TVar EL'ValStage)
+    -- -- TODO this usefull ??
+    -- el'value'type :: !(Maybe EdhTypeValue),
+    -- -- staticly decidable value, or nil if unable to
+    -- el'value'refied :: !EdhValue
+  }
+
+data EL'ValStage
+  = EL'ParsedValue !ExprSrc
+  | EL'LoadedClass !ProcDecl
+  | EL'ResolvedClass
+      { el'class'name :: EL'AttrKey,
+        -- | mro
+        el'class'mro :: ![EL'Value],
         -- | scope of this class
         el'class'scope :: !EL'Scope,
         -- | an attribute is exported by any form of assignment targeting
@@ -168,8 +173,7 @@ data EL'Value
         -- `export` keyword, or within a block following an `export` keyword
         el'class'exports :: !EL'Artifacts
       }
-  | -- | an object instance value is specially treated in static analysis
-    EL'Object
+  | EL'LoadedObject
       { -- | the class of this object instance
         -- TODO use some other, more proper type for this field ?
         el'obj'class :: !EL'OriginalValue,
