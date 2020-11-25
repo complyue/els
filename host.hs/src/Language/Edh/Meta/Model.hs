@@ -171,6 +171,12 @@ instance Hashable EL'AttrKey where
   hashWithSalt s (EL'AttrKey (AttrAddrSrc addr _) Nothing) =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` addr
 
+el'AttrKey :: AttrAddrSrc -> EL'AttrKey
+el'AttrKey asrc@(AttrAddrSrc !addr _) = case addr of
+  NamedAttr !strName -> EL'AttrKey asrc $ Just $ AttrByName strName
+  QuaintAttr !strName -> EL'AttrKey asrc $ Just $ AttrByName strName
+  SymbolicAttr {} -> EL'AttrKey asrc Nothing
+
 data EL'Value
   = -- | runtime constant i.e. decidable at analysis time
     EL'RtConst !EdhValue

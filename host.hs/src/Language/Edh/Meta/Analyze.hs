@@ -488,7 +488,7 @@ el'DoLoadModule !ms (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
   !diags <- newTVar []
   let !tops = EL'LoadingTopLevels arts exps diags
   el'RunTx eas $
-    el'LoadTopStmts ms stmts tops $ \() _eas -> do
+    el'LoadTopStmts False ms stmts tops $ \_ _eas -> do
       !arts' <- iopdSnapshot arts
       !exps' <- iopdSnapshot exps
       !diags' <- readTVar diags
@@ -503,75 +503,92 @@ data EL'LoadingTopLevels = EL'LoadingTopLevels
   }
 
 el'LoadTopStmts ::
+  Bool ->
   EL'ModuSlot ->
   [StmtSrc] ->
   EL'LoadingTopLevels ->
-  EL'Analysis ()
-el'LoadTopStmts !ms !stmts !tops !exit !eas = go stmts
+  EL'Analysis EL'Value
+el'LoadTopStmts !exporting !ms !stmts !tops !exit !eas = go stmts
   where
     go :: [StmtSrc] -> STM ()
-    go [] = el'Exit eas exit ()
+    go [] = el'Exit eas exit $ EL'RtConst nil
     go (stmt : rest) = el'RunTx eas $
-      el'LoadTopStmt ms stmt tops $ \() _eas' -> go rest
+      el'LoadTopStmt exporting ms stmt tops $ \ !val _eas' -> case rest of
+        [] -> el'Exit eas exit val
+        _ -> go rest
 
 el'LoadTopStmt ::
+  Bool ->
   EL'ModuSlot ->
   StmtSrc ->
   EL'LoadingTopLevels ->
-  EL'Analysis ()
+  EL'Analysis EL'Value
 el'LoadTopStmt
+  !exporting
   !ms
   (StmtSrc !stmt !stmt'span)
   tops@(EL'LoadingTopLevels !arts !exps !diags)
   !exit
   eas@(EL'AnalysisState !elw !ets) = case stmt of
     ExprStmt !expr _docCmt ->
-      el'RunTx eas $ el'LoadTopExpr ms (ExprSrc expr stmt'span) tops exit
-    LetStmt !argsRcvr !argsSndr -> undefined
-    EffectStmt !effs !docCmt -> undefined
+      el'RunTx eas $
+        el'LoadTopExpr exporting ms (ExprSrc expr stmt'span) tops exit
+    LetStmt !argsRcvr !argsSndr -> do
+      -- TODO recognize defines & exports
+      el'Exit eas exit $ EL'RtConst nil
     -- TODO recognize more stmts
-    _ -> el'Exit eas exit ()
+    -- EffectStmt !effs !docCmt -> undefined
+    _ -> el'Exit eas exit $ EL'RtConst nil
 
 el'LoadTopExpr ::
+  Bool ->
   EL'ModuSlot ->
   ExprSrc ->
   EL'LoadingTopLevels ->
-  EL'Analysis ()
+  EL'Analysis EL'Value
 el'LoadTopExpr
+  !exporting
   !ms
-  (ExprSrc !expr !expr'span)
+  xsrc@(ExprSrc !expr !expr'span)
   tops@(EL'LoadingTopLevels !arts !exps !diags)
   !exit
   eas@(EL'AnalysisState !elw !ets) = case expr of
+    ExportExpr !expr' ->
+      el'RunTx eas $ el'LoadTopExpr True ms expr' tops exit
     AtoIsoExpr !expr' ->
-      el'RunTx eas $ el'LoadTopExpr ms expr' tops exit
+      el'RunTx eas $ el'LoadTopExpr exporting ms expr' tops exit
     ParenExpr !expr' ->
-      el'RunTx eas $ el'LoadTopExpr ms expr' tops exit
+      el'RunTx eas $ el'LoadTopExpr exporting ms expr' tops exit
     BlockExpr !stmts ->
-      el'RunTx eas $ el'LoadTopStmts ms stmts tops exit
-    IfExpr !cond !cseq !alt -> undefined
-    CaseExpr !tgtExpr !branchesExpr -> undefined
-    ForExpr !argsRcvr !iterExpr !doStmt -> undefined
-    ExportExpr !exps -> undefined
-    ImportExpr !argsRcvr !srcExpr !maybeInto -> undefined
-    InfixExpr !opSym !lhExpr !rhExpr -> undefined
+      el'RunTx eas $ el'LoadTopStmts exporting ms stmts tops exit
+    IfExpr !cond !cseq !alt ->
+      el'RunTx eas $
+        el'LoadTopExpr exporting ms cond tops $ \ !val _eas -> case val of
+          EL'RtConst !constVal -> edhValueNull ets constVal $ \case
+            False -> el'RunTx eas $ el'LoadTopStmt exporting ms cseq tops exit
+            True -> el'RunTx eas $ case alt of
+              Nothing -> el'ExitTx exit $ EL'RtConst nil
+              Just !elseStmt -> el'LoadTopStmt exporting ms elseStmt tops exit
+          _ -> el'RunTx eas $
+            el'LoadTopStmt exporting ms cseq tops $ \_ -> case alt of
+              Nothing -> \_eas -> rtnParsed {- HLINT ignore "Use const" -}
+              Just !elseStmt -> el'LoadTopStmt exporting ms elseStmt tops $
+                \_ _eas -> rtnParsed
     ClassExpr HostDecl {} -> error "bug: host class declaration"
     ClassExpr
-      pd@( ProcDecl
-             (AttrAddrSrc !addr _)
-             !argsRcvr
-             (StmtSrc !body'stmt _)
-             !proc'loc
-           ) -> undefined
+      (ProcDecl !nameAddr !argsRcvr (StmtSrc !body'stmt _) !proc'loc) -> do
+        let !clsKey = el'AttrKey nameAddr
+            !clsStage = EL'LoadedClass clsKey [] odEmpty
+        !vstage <- newTVar clsStage
+        let !clsVal = EL'RtValue ms xsrc vstage Nothing
+        when exporting $
+          iopdInsert clsKey clsVal exps
+        el'Exit eas exit $ clsVal
     NamespaceExpr HostDecl {} _ -> error "bug: host ns declaration"
     NamespaceExpr
-      pd@( ProcDecl
-             (AttrAddrSrc !addr _)
-             _
-             (StmtSrc !body'stmt _)
-             !proc'loc
-           )
-      !argsSndr -> undefined
+      (ProcDecl !nameAddr _ (StmtSrc !body'stmt _) !proc'loc)
+      !argsSndr ->
+        undefined
     MethodExpr HostDecl {} -> error "bug: host method declaration"
     MethodExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
     GeneratorExpr HostDecl {} -> error "bug: host method declaration"
@@ -582,8 +599,17 @@ el'LoadTopExpr
     ProducerExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
     OpDefiExpr !opFixity !opPrec !opSym !opProc -> undefined
     OpOvrdExpr !opFixity !opPrec !opSym !opProc -> undefined
+    ImportExpr !argsRcvr !srcExpr !maybeInto -> undefined
+    CallExpr !calleeExpr !argsSndr -> undefined
     -- TODO recognize more exprs
-    _ -> el'Exit eas exit ()
+    -- InfixExpr !opSym !lhExpr !rhExpr -> undefined
+    -- CaseExpr !tgtExpr !branchesExpr -> undefined
+    -- ForExpr !argsRcvr !iterExpr !doStmt -> undefined
+    _ -> rtnParsed
+    where
+      rtnParsed = do
+        !vstage <- newTVar EL'ParsedValue
+        el'Exit eas exit $ EL'RtValue ms xsrc vstage Nothing
 
 el'DoResolveModule ::
   EL'ModuSlot ->
