@@ -364,7 +364,7 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
                         Left
                           ( T.pack dir,
                             T.pack relPath,
-                            "", -- script module should not do relative import
+                            T.pack (takeDirectory relPath),
                             T.pack absFile
                           )
          in go $ splitFileName absFile
