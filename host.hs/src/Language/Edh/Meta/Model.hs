@@ -83,7 +83,7 @@ data EL'ModuSlot = EL'ModuSlot
     -- the 1st layer of `TMVar` when non-empty means it has been worked on,
     -- the 2nd layer of the `TMVar` provides awaitable result from the WIP, and
     -- if non-empty, means the work has already been done.
-    -- clearing the 1st layer `TMVar` invalidates previous analysis work, while
+    -- clearing the 1st layer `TMVar` invalidates previous analysis work, `while
     -- the 2nd layer `TMVar` should usually not be cleared once filled.
     el'modu'parsed :: !(TMVar (TMVar EL'ParsedModule)),
     el'modu'loaded :: !(TMVar (TMVar EL'LoadedModule)),
@@ -120,7 +120,7 @@ data EL'ParsedModule = EL'ParsedModule
 
 data EL'LoadedModule = EL'LoadedModule
   { -- | artifacts identified before resolution
-    el'loaded'arts :: OrderedDict EL'AttrKey EL'Value,
+    el'loaded'arts :: !EL'Artifacts,
     -- | exports identified before resolution
     el'loaded'exports :: !EL'Artifacts,
     -- | diagnostics generated from this stage of analysis
@@ -132,7 +132,7 @@ data EL'ResolvedModule = EL'ResolvedModule
     -- this root scope of the module
     el'resolved'scope :: !EL'Scope,
     -- | TODO this useful?
-    -- el'modu'imports :: OrderedDict EL'AttrKey EL'Value,
+    -- el'modu'imports :: !EL'Artifacts,
     -- | an attribute is exported by any form of assignment targeting
     -- current scope, or any form of procedure declaration, which follows an
     -- `export` keyword, or within a block following an `export` keyword

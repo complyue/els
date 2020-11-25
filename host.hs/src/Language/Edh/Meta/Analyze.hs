@@ -195,7 +195,7 @@ el'ParseModule !ms !exit !eas = goParse
                   endOfEdh
               el'Exit eas exit pmVar
 
-el'LocateModule :: Text -> EL'TxExit EL'ModuSlot -> EL'Tx
+el'LocateModule :: Text -> EL'Analysis EL'ModuSlot
 el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
   if not $ ".edh" `T.isSuffixOf` moduFile
     then throwEdh ets UsageError $ "Not a .edh file: " <> moduFile
@@ -447,8 +447,7 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
 el'DoParseModule ::
   EL'ModuSlot ->
   TMVar EL'ParsedModule ->
-  EL'TxExit () ->
-  EL'Tx
+  EL'Analysis ()
 el'DoParseModule !ms !pmVar !exit eas@(EL'AnalysisState _elw !ets) =
   unsafeIOToSTM
     ( streamDecodeUtf8With lenientDecode
@@ -482,25 +481,116 @@ el'DoLoadModule ::
   EL'ModuSlot ->
   EL'ParsedModule ->
   TMVar EL'LoadedModule ->
-  EL'TxExit () ->
-  EL'Tx
-el'DoLoadModule
+  EL'Analysis ()
+el'DoLoadModule !ms (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
+  !arts <- iopdEmpty
+  !exps <- iopdEmpty
+  !diags <- newTVar []
+  let !tops = EL'LoadingTopLevels arts exps diags
+  el'RunTx eas $
+    el'LoadTopStmts ms stmts tops $ \() _eas -> do
+      !arts' <- iopdSnapshot arts
+      !exps' <- iopdSnapshot exps
+      !diags' <- readTVar diags
+      let !loaded = EL'LoadedModule arts' exps' $! reverse diags'
+      void $ tryPutTMVar lmVar loaded
+      el'Exit eas exit ()
+
+data EL'LoadingTopLevels = EL'LoadingTopLevels
+  { el'loading'top'arts :: !(IOPD EL'AttrKey EL'Value),
+    el'loading'exports :: !(IOPD EL'AttrKey EL'Value),
+    el'loading'diags :: !(TVar [(SrcRange, Text)])
+  }
+
+el'LoadTopStmts ::
+  EL'ModuSlot ->
+  [StmtSrc] ->
+  EL'LoadingTopLevels ->
+  EL'Analysis ()
+el'LoadTopStmts !ms !stmts !tops !exit !eas = go stmts
+  where
+    go :: [StmtSrc] -> STM ()
+    go [] = el'Exit eas exit ()
+    go (stmt : rest) = el'RunTx eas $
+      el'LoadTopStmt ms stmt tops $ \() _eas' -> go rest
+
+el'LoadTopStmt ::
+  EL'ModuSlot ->
+  StmtSrc ->
+  EL'LoadingTopLevels ->
+  EL'Analysis ()
+el'LoadTopStmt
   !ms
-  (EL'ParsedModule !stmts _parse'diags)
-  !lmVar
+  (StmtSrc !stmt !stmt'span)
+  tops@(EL'LoadingTopLevels !arts !exps !diags)
   !exit
-  eas@(EL'AnalysisState !elw !ets) = do
-    let !loaded = undefined -- XXX
-    void $ tryPutTMVar lmVar loaded
-    el'Exit eas exit ()
+  eas@(EL'AnalysisState !elw !ets) = case stmt of
+    ExprStmt !expr _docCmt ->
+      el'RunTx eas $ el'LoadTopExpr ms (ExprSrc expr stmt'span) tops exit
+    LetStmt !argsRcvr !argsSndr -> undefined
+    EffectStmt !effs !docCmt -> undefined
+    -- TODO recognize more stmts
+    _ -> el'Exit eas exit ()
+
+el'LoadTopExpr ::
+  EL'ModuSlot ->
+  ExprSrc ->
+  EL'LoadingTopLevels ->
+  EL'Analysis ()
+el'LoadTopExpr
+  !ms
+  (ExprSrc !expr !expr'span)
+  tops@(EL'LoadingTopLevels !arts !exps !diags)
+  !exit
+  eas@(EL'AnalysisState !elw !ets) = case expr of
+    AtoIsoExpr !expr' ->
+      el'RunTx eas $ el'LoadTopExpr ms expr' tops exit
+    ParenExpr !expr' ->
+      el'RunTx eas $ el'LoadTopExpr ms expr' tops exit
+    BlockExpr !stmts ->
+      el'RunTx eas $ el'LoadTopStmts ms stmts tops exit
+    IfExpr !cond !cseq !alt -> undefined
+    CaseExpr !tgtExpr !branchesExpr -> undefined
+    ForExpr !argsRcvr !iterExpr !doStmt -> undefined
+    ExportExpr !exps -> undefined
+    ImportExpr !argsRcvr !srcExpr !maybeInto -> undefined
+    InfixExpr !opSym !lhExpr !rhExpr -> undefined
+    ClassExpr HostDecl {} -> error "bug: host class declaration"
+    ClassExpr
+      pd@( ProcDecl
+             (AttrAddrSrc !addr _)
+             !argsRcvr
+             (StmtSrc !body'stmt _)
+             !proc'loc
+           ) -> undefined
+    NamespaceExpr HostDecl {} _ -> error "bug: host ns declaration"
+    NamespaceExpr
+      pd@( ProcDecl
+             (AttrAddrSrc !addr _)
+             _
+             (StmtSrc !body'stmt _)
+             !proc'loc
+           )
+      !argsSndr -> undefined
+    MethodExpr HostDecl {} -> error "bug: host method declaration"
+    MethodExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    GeneratorExpr HostDecl {} -> error "bug: host method declaration"
+    GeneratorExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    InterpreterExpr HostDecl {} -> error "bug: host method declaration"
+    InterpreterExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    ProducerExpr HostDecl {} -> error "bug: host method declaration"
+    ProducerExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    OpDefiExpr !opFixity !opPrec !opSym !opProc -> undefined
+    OpOvrdExpr !opFixity !opPrec !opSym !opProc -> undefined
+    -- TODO recognize more exprs
+    _ -> el'Exit eas exit ()
 
 el'DoResolveModule ::
   EL'ModuSlot ->
   EL'ParsedModule ->
   EL'LoadedModule ->
   TMVar EL'ResolvedModule ->
-  EL'TxExit () ->
-  EL'Tx
+  EL'Analysis ()
 el'DoResolveModule
   !ms
   (EL'ParsedModule !stmts _parse'diags)
