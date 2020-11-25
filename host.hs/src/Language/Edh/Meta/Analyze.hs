@@ -204,14 +204,14 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
         edhContIO $
           fsSearch >>= \case
             Left !err -> atomically $ throwEdh ets UsageError err
-            Right (Left (!homePath, !scriptName, !relBase, !absFile)) ->
+            Right (Left (!homePath, !scriptName, !relPath, !absFile)) ->
               atomically (prepareHome homePath)
                 -- with 2 separate STM txs
-                >>= atomically . goWith scriptName relBase absFile el'home'scripts
-            Right (Right (!homePath, !moduName, !relBase, !absFile)) ->
+                >>= atomically . goWith scriptName relPath absFile el'home'scripts
+            Right (Right (!homePath, !moduName, !relPath, !absFile)) ->
               atomically (prepareHome homePath)
                 -- with 2 separate STM txs
-                >>= atomically . goWith moduName relBase absFile el'home'modules
+                >>= atomically . goWith moduName relPath absFile el'home'modules
   where
     goWith ::
       Text ->
@@ -220,7 +220,7 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
       (EL'Home -> TMVar (Map.HashMap ModuleName EL'ModuSlot)) ->
       EL'Home ->
       STM ()
-    goWith !name !relBase !absFile !mmField !home =
+    goWith !name !relPath !absFile !mmField !home =
       takeTMVar mmVar >>= \ !mm ->
         case Map.lookup name mm of
           Just !ms ->
@@ -244,7 +244,7 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
             let !ms =
                   EL'ModuSlot
                     home
-                    relBase
+                    relPath
                     (SrcDoc absFile)
                     parsed
                     loaded
@@ -374,31 +374,75 @@ el'LocateImportee ::
   Text ->
   EL'Analysis (Either Text EL'ModuSlot)
 el'LocateImportee !msFrom !impSpec !exit !eas =
-  case T.stripPrefix "./" impSpec of
-    Just !relImp ->
-      let !relBase = el'modu'rel'base msFrom
-       in if T.null relBase
-            then
-              let SrcDoc !fromFile = el'modu'doc msFrom
-               in el'Exit eas exit $
+  if "." `T.isPrefixOf` impSpec
+    then
+      if null relPath
+        then
+          el'Exit eas exit $
+            Left $ "can not do relative import from " <> fromFile
+        else
+          unsafeIOToSTM (findRelImport nomSpec) >>= \case
+            Left !err -> el'Exit eas exit $ Left err
+            Right !moduFile -> el'RunTx eas $
+              el'LocateModule moduFile $ \ !ms ->
+                el'ExitTx exit $ Right ms
+    else
+      unsafeIOToSTM
+        (findAbsImport $ T.unpack $ el'home'path $ el'modu'home msFrom)
+        >>= \case
+          Left !err -> el'Exit eas exit $ Left err
+          Right !moduFile -> el'RunTx eas $
+            el'LocateModule moduFile $ \ !ms ->
+              el'ExitTx exit $ Right ms
+  where
+    relPath = T.unpack $ el'modu'rel'base msFrom
+    SrcDoc fromFile = el'modu'doc msFrom
+    !nomSpec = T.unpack $ normalizeImpSpec impSpec
+    normalizeImpSpec :: Text -> Text
+    normalizeImpSpec = withoutLeadingSlash . withoutTrailingSlash
+    withoutLeadingSlash spec = fromMaybe spec $ T.stripPrefix "/" spec
+    withoutTrailingSlash spec = fromMaybe spec $ T.stripSuffix "/" spec
+
+    findRelImport :: FilePath -> IO (Either Text Text)
+    findRelImport !relImp = do
+      !nomPath <- canonicalizePath $ relPath </> relImp
+      let !edhFilePath = nomPath <> ".edh"
+      doesFileExist edhFilePath >>= \case
+        True -> return $ Right $ T.pack edhFilePath
+        False ->
+          let !edhIdxPath = nomPath </> "__init__.edh"
+           in doesFileExist edhIdxPath >>= \case
+                True -> return $ Right $ T.pack edhIdxPath
+                False ->
+                  return $
                     Left $
-                      "can not do relative import from "
-                        <> fromFile
-            else
-              let !tgtModuFile = relBase <> relImp <> ".edh"
-               in unsafeIOToSTM (doesFileExist $ T.unpack tgtModuFile) >>= \case
-                    True -> undefined -- XXX
-                    False ->
-                      let !tgtIdxFile = relBase <> relImp <> "/__init__.edh"
-                       in unsafeIOToSTM (doesFileExist $ T.unpack tgtIdxFile)
-                            >>= \case
-                              True -> undefined -- XXX
-                              False ->
-                                el'Exit eas exit $
-                                  Left $
-                                    "import does not exist: "
-                                      <> impSpec
-    Nothing -> undefined -- XXX abs imp
+                      "no such module: " <> T.pack (show relImp)
+                        <> " relative to: "
+                        <> T.pack relPath
+
+    findAbsImport :: FilePath -> IO (Either Text Text)
+    findAbsImport !absPkgPath =
+      let !emsDir = absPkgPath </> "edh_modules"
+       in doesDirectoryExist emsDir >>= \case
+            False -> tryParentDir
+            True -> do
+              let !nomPath = emsDir </> nomSpec
+                  !edhFilePath = nomPath <> ".edh"
+              doesFileExist edhFilePath >>= \case
+                True ->
+                  return $ Right $ T.pack edhFilePath
+                False -> do
+                  let !edhIdxPath = nomPath </> "__init__.edh"
+                  doesFileExist edhIdxPath >>= \case
+                    True ->
+                      return $ Right $ T.pack edhIdxPath
+                    False -> tryParentDir
+      where
+        tryParentDir =
+          let !parentPkgPath = takeDirectory absPkgPath
+           in if equalFilePath parentPkgPath absPkgPath
+                then return $ Left $ "no such module: " <> T.pack (show nomSpec)
+                else findAbsImport parentPkgPath
 
 el'DoParseModule ::
   EL'ModuSlot ->
