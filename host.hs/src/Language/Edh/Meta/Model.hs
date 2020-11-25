@@ -200,9 +200,9 @@ data EL'ValStage
       { el'class'loaded'name :: EL'AttrKey,
         -- | mro
         el'class'loaded'mro :: ![EL'Value],
-        -- | an attribute is exported by any form of assignment targeting
-        -- current scope, or any form of procedure declaration, which follows an
-        -- `export` keyword, or within a block following an `export` keyword
+        -- | member artifacts
+        el'class'loaded'arts :: !EL'Artifacts,
+        -- | member artifacts
         el'class'loaded'exports :: !EL'Artifacts
       }
   | EL'ResolvedClass

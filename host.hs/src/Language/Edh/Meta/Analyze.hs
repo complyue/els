@@ -484,9 +484,10 @@ el'DoLoadModule ::
   EL'Analysis ()
 el'DoLoadModule !ms (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
   !arts <- iopdEmpty
+  !exts <- newTVar []
   !exps <- iopdEmpty
   !diags <- newTVar []
-  let !tops = EL'LoadingTopLevels arts exps diags
+  let !tops = EL'LoadingTopLevels arts exts exps diags
   el'RunTx eas $
     el'LoadTopStmts False ms stmts tops $ \_ _eas -> do
       !arts' <- iopdSnapshot arts
@@ -497,7 +498,8 @@ el'DoLoadModule !ms (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
       el'Exit eas exit ()
 
 data EL'LoadingTopLevels = EL'LoadingTopLevels
-  { el'loading'top'arts :: !(IOPD EL'AttrKey EL'Value),
+  { el'loading'arts :: !(IOPD EL'AttrKey EL'Value),
+    el'loading'exts :: !(TVar [EL'Value]),
     el'loading'exports :: !(IOPD EL'AttrKey EL'Value),
     el'loading'diags :: !(TVar [(SrcRange, Text)])
   }
@@ -527,7 +529,7 @@ el'LoadTopStmt
   !exporting
   !ms
   (StmtSrc !stmt !stmt'span)
-  tops@(EL'LoadingTopLevels !arts !exps !diags)
+  tops@(EL'LoadingTopLevels !arts !exts !exps !diags)
   !exit
   eas@(EL'AnalysisState !elw !ets) = case stmt of
     ExprStmt !expr _docCmt ->
@@ -550,7 +552,7 @@ el'LoadTopExpr
   !exporting
   !ms
   xsrc@(ExprSrc !expr !expr'span)
-  tops@(EL'LoadingTopLevels !arts !exps !diags)
+  tops@(EL'LoadingTopLevels !arts !exts !exps !diags)
   !exit
   eas@(EL'AnalysisState !elw !ets) = case expr of
     ExportExpr !expr' ->
@@ -576,14 +578,17 @@ el'LoadTopExpr
                 \_ _eas -> rtnParsed
     ClassExpr HostDecl {} -> error "bug: host class declaration"
     ClassExpr
-      (ProcDecl !nameAddr !argsRcvr (StmtSrc !body'stmt _) !proc'loc) -> do
-        let !clsKey = el'AttrKey nameAddr
-            !clsStage = EL'LoadedClass clsKey [] odEmpty
-        !vstage <- newTVar clsStage
-        let !clsVal = EL'RtValue ms xsrc vstage Nothing
-        when exporting $
-          iopdInsert clsKey clsVal exps
-        el'Exit eas exit $ clsVal
+      (ProcDecl !nameAddr !argsRcvr !pbody !proc'loc) ->
+        el'RunTx eas $
+          el'LoadClass ms pbody tops $ \(!supers, !clsArts, !clsExps) _eas -> do
+            let !clsKey = el'AttrKey nameAddr
+                !mro = supers -- TODO C3 linearization
+                !clsStage = EL'LoadedClass clsKey mro clsArts clsExps
+            !vstage <- newTVar clsStage
+            let !clsVal = EL'RtValue ms xsrc vstage Nothing
+            when exporting $
+              iopdInsert clsKey clsVal exps
+            el'Exit eas exit $ clsVal
     NamespaceExpr HostDecl {} _ -> error "bug: host ns declaration"
     NamespaceExpr
       (ProcDecl !nameAddr _ (StmtSrc !body'stmt _) !proc'loc)
@@ -610,6 +615,31 @@ el'LoadTopExpr
       rtnParsed = do
         !vstage <- newTVar EL'ParsedValue
         el'Exit eas exit $ EL'RtValue ms xsrc vstage Nothing
+
+el'LoadClass ::
+  EL'ModuSlot ->
+  StmtSrc ->
+  EL'LoadingTopLevels ->
+  EL'Analysis ([EL'Value], EL'Artifacts, EL'Artifacts)
+el'LoadClass !ms !pbody !tops !exit !eas = do
+  !arts <- iopdEmpty
+  !exts <- newTVar []
+  !exps <- iopdEmpty
+  el'RunTx eas $
+    el'LoadTopStmts
+      False
+      ms
+      [pbody]
+      tops
+        { el'loading'arts = arts,
+          el'loading'exts = exts,
+          el'loading'exports = exps
+        }
+      $ \_ _eas -> do
+        !arts' <- iopdSnapshot arts
+        !exts' <- readTVar exts
+        !exps' <- iopdSnapshot exps
+        el'Exit eas exit (exts', arts', exps')
 
 el'DoResolveModule ::
   EL'ModuSlot ->
