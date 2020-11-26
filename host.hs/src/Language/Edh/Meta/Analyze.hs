@@ -52,53 +52,51 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
 
 el'ResolveModule :: EL'Analysis (TMVar EL'ResolvedModule)
 el'ResolveModule !exit !eas = el'RunTx eas $
-  el'LoadModule $
-    \ !lmVar -> el'ParseModule $ \ !pmVar _eas -> do
-      !lm <- readTMVar lmVar
-      !pm <- readTMVar pmVar
-      let !mrVar = el'modu'resolved ms
-          goResolve :: STM ()
-          goResolve =
-            tryReadTMVar mrVar >>= \case
-              Just !rmVar -> el'Exit eas exit rmVar
-              Nothing -> do
-                !rmVar <- newEmptyTMVar
-                tryPutTMVar mrVar rmVar >>= \case
-                  False -> goResolve
-                  True -> do
-                    runEdhTx (el'ets eas) $
-                      forkEdh
-                        id
-                        ( edhCatchTx
-                            ( \ !exitTry !etsTry ->
-                                el'RunTx eas {el'ets = etsTry} $
-                                  el'DoResolveModule pm lm rmVar $ \() _eas ->
-                                    exitEdh etsTry exitTry nil
-                            )
-                            endOfEdh
-                            $ \ !recover !rethrow !etsCatching ->
-                              case edh'ctx'match $ edh'context etsCatching of
-                                EdhNil -> do
+  el'ParseModule $ \ !pmVar _eas -> do
+    !pm <- readTMVar pmVar
+    let !mrVar = el'modu'resolved ms
+        goResolve :: STM ()
+        goResolve =
+          tryReadTMVar mrVar >>= \case
+            Just !rmVar -> el'Exit eas exit rmVar
+            Nothing -> do
+              !rmVar <- newEmptyTMVar
+              tryPutTMVar mrVar rmVar >>= \case
+                False -> goResolve
+                True -> do
+                  runEdhTx (el'ets eas) $
+                    forkEdh
+                      id
+                      ( edhCatchTx
+                          ( \ !exitTry !etsTry ->
+                              el'RunTx eas {el'ets = etsTry} $
+                                el'DoResolveModule pm rmVar $ \() _eas ->
+                                  exitEdh etsTry exitTry nil
+                          )
+                          endOfEdh
+                          $ \ !recover !rethrow !etsCatching ->
+                            case edh'ctx'match $ edh'context etsCatching of
+                              EdhNil -> do
+                                void $ -- in case it's not filled
+                                  tryPutTMVar rmVar $
+                                    EL'ResolvedModule
+                                      (EL'Scope noSrcRange V.empty)
+                                      [ (noSrcRange, "<no-load>")
+                                      ]
+                                runEdhTx etsCatching $ rethrow nil
+                              !exv -> edhValueDesc etsCatching exv $
+                                \ !exDesc -> do
                                   void $ -- in case it's not filled
                                     tryPutTMVar rmVar $
                                       EL'ResolvedModule
                                         (EL'Scope noSrcRange V.empty)
-                                        [ (noSrcRange, "<no-load>")
+                                        [ (noSrcRange, exDesc)
                                         ]
-                                  runEdhTx etsCatching $ rethrow nil
-                                !exv -> edhValueDesc etsCatching exv $
-                                  \ !exDesc -> do
-                                    void $ -- in case it's not filled
-                                      tryPutTMVar rmVar $
-                                        EL'ResolvedModule
-                                          (EL'Scope noSrcRange V.empty)
-                                          [ (noSrcRange, exDesc)
-                                          ]
-                                    runEdhTx etsCatching $ recover nil
-                        )
-                        endOfEdh
-                    el'Exit eas exit rmVar
-      goResolve
+                                  runEdhTx etsCatching $ recover nil
+                      )
+                      endOfEdh
+                  el'Exit eas exit rmVar
+    goResolve
   where
     eac = el'context eas
     ms = el'ctx'module eac
@@ -872,15 +870,67 @@ el'LoadClass !tops !pbody !exit !eas = do
 
 el'DoResolveModule ::
   EL'ParsedModule ->
-  EL'LoadedModule ->
   TMVar EL'ResolvedModule ->
   EL'Analysis ()
 el'DoResolveModule
-  (EL'ParsedModule _stmts _parse'diags)
-  (EL'LoadedModule _loaded'arts _loaded'exps _load'diags)
-  !lmVar
+  (EL'ParsedModule !stmts _parse'diags)
+  !rmVar
   !exit
   !eas = do
-    let !resolved = undefined -- XXX
-    void $ tryPutTMVar lmVar resolved
-    el'Exit eas exit ()
+    el'RunTx eas $
+      el'AnalyzeStmts stmts $ \_ _eas -> do
+        let !swip = el'ctx'scope eac
+        !secs <- readTVar $ el'scope'secs'wip swip
+        !region'end <- readTVar $ el'region'end'wip swip
+        !region'annos <- iopdSnapshot $ el'region'annos'wip swip
+        !region'attrs <- iopdSnapshot $ el'region'attrs'wip swip
+        !region'effs <- iopdSnapshot $ el'region'effs'wip swip
+        !diags <- readTVar $ el'scope'diags'wip swip
+        let !fullRegion =
+              EL'RegionSec $
+                EL'Region
+                  { el'region'span = SrcRange beginningSrcPos region'end,
+                    el'region'annos = region'annos,
+                    el'region'attrs = region'attrs,
+                    el'region'effs = region'effs
+                  }
+        let !el'scope =
+              EL'Scope
+                { el'scope'span = SrcRange beginningSrcPos region'end,
+                  el'scope'sections = V.fromList $! reverse $ fullRegion : secs
+                }
+            !resolved = EL'ResolvedModule el'scope $! reverse diags
+        void $ tryPutTMVar rmVar resolved
+        el'Exit eas exit ()
+    where
+      !eac = el'context eas
+
+el'AnalyzeStmts :: [StmtSrc] -> EL'Analysis EL'Value
+el'AnalyzeStmts !stmts !exit !eas = go stmts
+  where
+    go :: [StmtSrc] -> STM ()
+    go [] = el'Exit eas exit $ EL'Const nil
+    go (stmt : rest) = el'RunTx eas $
+      el'AnalyzeStmt stmt $ \ !val _eas' -> case rest of
+        [] -> el'Exit eas exit val
+        _ -> go rest
+
+el'AnalyzeStmt :: StmtSrc -> EL'Analysis EL'Value
+el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
+  -- ExprStmt !expr _docCmt ->
+  --   el'RunTx eas $
+  --     el'AnalyzeExpr (ExprSrc expr stmt'span) exit
+  -- LetStmt _argsRcvr _argsSndr -> do
+  --   -- TODO recognize defines & exports
+  --   el'Exit eas exit $ EL'Const nil
+  ExtendsStmt _superExpr -> do
+    case el'ctx'outers eac of
+      [] -> modifyTVar' diags ((stmt'span, "extends from module") :)
+      _ -> return ()
+    el'Exit eas exit $ EL'Const nil
+  -- TODO recognize more stmts
+  -- EffectStmt !effs !docCmt -> undefined
+  _ -> el'Exit eas exit $ EL'Const nil
+  where
+    !eac = el'context eas
+    diags = el'scope'diags'wip $ el'ctx'scope eac

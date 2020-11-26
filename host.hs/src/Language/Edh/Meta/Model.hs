@@ -4,7 +4,6 @@ module Language.Edh.Meta.Model where
 
 import Control.Concurrent.STM
 import Data.HashMap.Strict (HashMap)
-import qualified Data.HashMap.Strict as Map
 import Data.Hashable
 import Data.Text (Text)
 import Data.Vector (Vector)
@@ -33,7 +32,7 @@ data EL'Home = EL'Home
     --
     -- note all Edh src file should have the extension name `.edh`, and will be
     -- stripped off from any Edh module name or module path.
-    el'home'modules :: !(TMVar (Map.HashMap ModuleName EL'ModuSlot)),
+    el'home'modules :: !(TMVar (HashMap ModuleName EL'ModuSlot)),
     -- | standalone script modules under this home
     --
     -- a script module is technically a standalone module, only importable with
@@ -54,7 +53,7 @@ data EL'Home = EL'Home
     -- `.edh` extension preserved, but with the exception of a `__main__.edh`
     -- module script, whose script name is the same as the module path of its
     -- parent dir.
-    el'home'scripts :: !(TMVar (Map.HashMap ScriptName EL'ModuSlot))
+    el'home'scripts :: !(TMVar (HashMap ScriptName EL'ModuSlot))
     -- todo cache configurations per Edh home with more fields
   }
 
@@ -111,7 +110,7 @@ data EL'ModuSlot = EL'ModuSlot
     -- note a dependant may stop depending on this module due to src changes,
     -- so cross checking of its `el'modu'dependencies` should be performed and
     -- have this `el'modu'dependants` updated upon such changes
-    el'modu'dependants :: !(TVar (Map.HashMap EL'ModuSlot Bool)),
+    el'modu'dependants :: !(TVar (HashMap EL'ModuSlot Bool)),
     -- | other modules this module depends on
     --
     -- a dependency module's `el'modu'dependants` should be updated marking
@@ -119,7 +118,7 @@ data EL'ModuSlot = EL'ModuSlot
     --
     -- note after invalidated, re-analysation of this module may install a new
     -- version of this map reflecting dependencies up-to-date
-    el'modu'dependencies :: !(TVar (Map.HashMap EL'ModuSlot Bool))
+    el'modu'dependencies :: !(TVar (HashMap EL'ModuSlot Bool))
   }
 
 instance Eq EL'ModuSlot where
@@ -282,22 +281,19 @@ scopeFullRegion (EL'Scope _ !secs) =
     !nSecs = V.length secs
 
 -- | a consecutive region covers the src range of its predecessor, with a single
--- add or deletion of an attribute
+-- addition or deletion of an attribute
 --
 -- note a change of annotation doesn't create a new region
---
--- note the 2 versions of immutable HashMap share as much content as possible in
--- this use case, so they are ideally compact
 data EL'Region = EL'Region
   { el'region'span :: !SrcRange,
     -- | an annotation is created by the (::) operator, with left-hand operand
     -- being the attribute key
-    el'region'annos :: !(HashMap EL'AttrKey ExprSrc),
+    el'region'annos :: !(OrderedDict EL'AttrKey EL'Value),
     -- | an attribute is created by any form of assignment targeting current
     -- scope, or any form of procedure declaration
-    el'region'attrs :: !(HashMap EL'AttrKey EL'Value),
+    el'region'attrs :: !(OrderedDict EL'AttrKey EL'Value),
     -- | an effectiful attribute is created by any form of assignment targeting
     -- current scope, or any form of procedure declaration, which follows an
     -- `effect` keyword, or within a block following an `effect` keyword
-    el'region'effs :: !(HashMap EL'AttrKey EL'Value)
+    el'region'effs :: !(OrderedDict EL'AttrKey EL'Value)
   }

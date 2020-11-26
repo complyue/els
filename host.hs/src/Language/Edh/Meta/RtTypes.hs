@@ -17,12 +17,33 @@ data EL'World = EL'World
   }
 
 el'RunAnalysis :: EL'World -> EL'ModuSlot -> EL'Analysis a -> EL'TxExit a -> EdhTx
-el'RunAnalysis !elw !ms !ana !exit !ets =
+el'RunAnalysis !elw !ms !ana !exit !ets = do
+  !exts <- newTVar []
+  !exps <- iopdEmpty
+  !diags <- newTVar []
+  !secs <- newTVar []
+  !region'end <- newTVar beginningSrcPos
+  !region'annos <- iopdEmpty
+  !region'attrs <- iopdEmpty
+  !region'effs <- iopdEmpty
   el'RunTx
     ( EL'AnalysisState
         elw
         EL'Context
           { el'ctx'module = ms,
+            el'ctx'scope =
+              EL'ScopeWIP
+                { el'scope'is'class'wip = False,
+                  el'scope'exts'wip = exts,
+                  el'scope'exps'wip = exps,
+                  el'scope'diags'wip = diags,
+                  el'scope'secs'wip = secs,
+                  el'region'end'wip = region'end,
+                  el'region'annos'wip = region'annos,
+                  el'region'attrs'wip = region'attrs,
+                  el'region'effs'wip = region'effs
+                },
+            el'ctx'outers = [],
             el'ctx'pure = False,
             el'ctx'exporting = False,
             el'ctx'eff'defining = False
@@ -44,10 +65,47 @@ data EL'AnalysisState = EL'AnalysisState
   }
 
 data EL'Context = EL'Context
-  { el'ctx'module :: !EL'ModuSlot,
+  { -- | the context module
+    el'ctx'module :: !EL'ModuSlot,
+    --
+
+    -- | current scope work-in-progress
+    el'ctx'scope :: !EL'ScopeWIP,
+    -- | lexical outer scopes work-in-progress
+    el'ctx'outers :: ![EL'ScopeWIP],
+    --
+
+    -- | whether it's discouraged for procedure definitions or similar
+    -- expressions from installing their results as attributes into the
+    -- context scope
     el'ctx'pure :: !Bool,
+    -- | whether running within an exporting stmt
     el'ctx'exporting :: !Bool,
+    -- | whether running within an effect stmt
     el'ctx'eff'defining :: !Bool
+  }
+
+data EL'ScopeWIP = EL'ScopeWIP
+  { -- | if this scope wip is for a class
+    el'scope'is'class'wip :: !Bool,
+    -- | all `extends` (i.e. super objects) appeared lately
+    el'scope'exts'wip :: !(TVar [EL'Value]),
+    -- | exported artifacts lately
+    el'scope'exps'wip :: !(IOPD EL'AttrKey EL'Value),
+    -- | diagnostics generated lately
+    el'scope'diags'wip :: !(TVar [(SrcRange, Text)]),
+    --
+
+    -- | accumulated sections lately
+    el'scope'secs'wip :: !(TVar [EL'Section]),
+    -- | latest end position known lately
+    el'region'end'wip :: !(TVar SrcPos),
+    -- | all annotations encountered lately
+    el'region'annos'wip :: !(IOPD EL'AttrKey EL'Value),
+    -- | all attributes encountered lately
+    el'region'attrs'wip :: !(IOPD EL'AttrKey EL'Value),
+    -- | all effectful artifacts encountered lately
+    el'region'effs'wip :: !(IOPD EL'AttrKey EL'Value)
   }
 
 el'RunTx :: EL'AnalysisState -> EL'Tx -> STM ()
