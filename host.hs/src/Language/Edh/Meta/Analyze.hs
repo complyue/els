@@ -517,7 +517,7 @@ el'LoadTopStmts :: EL'LoadingTopLevels -> [StmtSrc] -> EL'Analysis EL'Value
 el'LoadTopStmts !tops !stmts !exit !eas = go stmts
   where
     go :: [StmtSrc] -> STM ()
-    go [] = el'Exit eas exit $ EL'RtConst nil
+    go [] = el'Exit eas exit $ EL'Const nil
     go (stmt : rest) = el'RunTx eas $
       el'LoadTopStmt tops stmt $ \ !val _eas' -> case rest of
         [] -> el'Exit eas exit val
@@ -534,22 +534,22 @@ el'LoadTopStmt
         el'LoadTopExpr tops (ExprSrc expr stmt'span) exit
     LetStmt _argsRcvr _argsSndr -> do
       -- TODO recognize defines & exports
-      el'Exit eas exit $ EL'RtConst nil
+      el'Exit eas exit $ EL'Const nil
     ExtendsStmt !superExpr -> el'RunTx eas $
       el'LoadTopExpr tops superExpr $ \ !superVal _eas -> do
         case superVal of
-          EL'RtApk (EL'ArgsPack !supers !kwargs)
+          EL'Apk (EL'ArgsPack !supers !kwargs)
             | odNull kwargs ->
               modifyTVar' exts (++ supers)
-          EL'RtValue {} ->
+          EL'Value {} ->
             -- TODO validate it really be an object
             modifyTVar' exts (++ [superVal])
           -- TODO elaborate the error msg
           _ -> modifyTVar' diags ((stmt'span, "invalid super") :)
-        el'Exit eas exit $ EL'RtConst nil
+        el'Exit eas exit $ EL'Const nil
     -- TODO recognize more stmts
     -- EffectStmt !effs !docCmt -> undefined
-    _ -> el'Exit eas exit $ EL'RtConst nil
+    _ -> el'Exit eas exit $ EL'Const nil
 
 el'LoadTopExpr :: EL'LoadingTopLevels -> ExprSrc -> EL'Analysis EL'Value
 el'LoadTopExpr
@@ -566,16 +566,16 @@ el'LoadTopExpr
       el'RunTx eas $ el'LoadTopExpr tops expr' exit
     ArgsPackExpr !argSenders ->
       el'RunTx eas $
-        el'LoadTopApk tops argSenders $ exit . EL'RtApk
+        el'LoadTopApk tops argSenders $ exit . EL'Apk
     BlockExpr !stmts ->
       el'RunTx eas $ el'LoadTopStmts tops stmts exit
     IfExpr !cond !cseq !alt ->
       el'RunTx eas $
         el'LoadTopExpr tops cond $ \ !val _eas -> case val of
-          EL'RtConst !constVal -> edhValueNull ets constVal $ \case
+          EL'Const !constVal -> edhValueNull ets constVal $ \case
             False -> el'RunTx eas $ el'LoadTopStmt tops cseq exit
             True -> el'RunTx eas $ case alt of
-              Nothing -> el'ExitTx exit $ EL'RtConst nil
+              Nothing -> el'ExitTx exit $ EL'Const nil
               Just !elseStmt -> el'LoadTopStmt tops elseStmt exit
           _ -> el'RunTx eas $
             el'LoadTopStmt tops cseq $ \_ -> case alt of
@@ -590,11 +590,11 @@ el'LoadTopExpr
       !mthStageVar <- newTVar EL'ParsedValue
       let !mthKey = el'AttrKey nameAddr
           !mthVal =
-            EL'RtValue
+            EL'Value
               ms
               xsrc
               mthStageVar
-              (Just $ EL'RtConst $ EdhType MethodType)
+              (Just MethodType)
       when (el'ctx'exporting eac) $
         iopdInsert mthKey mthVal exps
       el'Exit eas exit mthVal
@@ -603,11 +603,11 @@ el'LoadTopExpr
       !mthStageVar <- newTVar EL'ParsedValue
       let !mthKey = el'AttrKey nameAddr
           !mthVal =
-            EL'RtValue
+            EL'Value
               ms
               xsrc
               mthStageVar
-              (Just $ EL'RtConst $ EdhType GeneratorType)
+              (Just GeneratorType)
       when (el'ctx'exporting eac) $
         iopdInsert mthKey mthVal exps
       el'Exit eas exit mthVal
@@ -616,11 +616,11 @@ el'LoadTopExpr
       !mthStageVar <- newTVar EL'ParsedValue
       let !mthKey = el'AttrKey nameAddr
           !mthVal =
-            EL'RtValue
+            EL'Value
               ms
               xsrc
               mthStageVar
-              (Just $ EL'RtConst $ EdhType InterpreterType)
+              (Just InterpreterType)
       when (el'ctx'exporting eac) $
         iopdInsert mthKey mthVal exps
       el'Exit eas exit mthVal
@@ -629,11 +629,11 @@ el'LoadTopExpr
       !mthStageVar <- newTVar EL'ParsedValue
       let !mthKey = el'AttrKey nameAddr
           !mthVal =
-            EL'RtValue
+            EL'Value
               ms
               xsrc
               mthStageVar
-              (Just $ EL'RtConst $ EdhType ProducerType)
+              (Just ProducerType)
       when (el'ctx'exporting eac) $
         iopdInsert mthKey mthVal exps
       el'Exit eas exit mthVal
@@ -641,11 +641,11 @@ el'LoadTopExpr
       !opStageVar <- newTVar EL'ParsedValue
       let !opKey = el'AttrKey opAddr
           !opVal =
-            EL'RtValue
+            EL'Value
               ms
               xsrc
               opStageVar
-              (Just $ EL'RtConst $ EdhType OperatorType)
+              (Just OperatorType)
       when (el'ctx'exporting eac) $
         iopdInsert opKey opVal exps
       el'Exit eas exit opVal
@@ -653,11 +653,11 @@ el'LoadTopExpr
       !opStageVar <- newTVar EL'ParsedValue
       let !opKey = el'AttrKey opAddr
           !opVal =
-            EL'RtValue
+            EL'Value
               ms
               xsrc
               opStageVar
-              (Just $ EL'RtConst $ EdhType OperatorType)
+              (Just OperatorType)
       when (el'ctx'exporting eac) $
         iopdInsert opKey opVal exps
       el'Exit eas exit opVal
@@ -699,10 +699,10 @@ el'LoadTopExpr
                     )
                     clsExps
             !clsStageVar <- newTVar clsStage
-            let !clsVal = EL'RtValue ms xsrc clsStageVar Nothing
+            let !clsVal = EL'Value ms xsrc clsStageVar Nothing
                 !nsoStage = EL'LoadedObject clsVal supers
             !nsoStageVar <- newTVar nsoStage
-            let !nsoVal = EL'RtValue ms xsrc nsoStageVar Nothing
+            let !nsoVal = EL'Value ms xsrc nsoStageVar Nothing
             when (el'ctx'exporting eac) $
               iopdInsert clsKey nsoVal exps
             el'Exit eas exit nsoVal
@@ -716,7 +716,7 @@ el'LoadTopExpr
             !artStageVar <- newTVar EL'ParsedValue
             let !artKey = el'AttrKey addr
                 !artVal =
-                  EL'RtValue
+                  EL'Value
                     ms
                     rhExprSrc
                     artStageVar
@@ -747,7 +747,7 @@ el'LoadTopExpr
       !ms = el'ctx'module eac
       rtnParsed = do
         !vstage <- newTVar EL'ParsedValue
-        el'Exit eas exit $ EL'RtValue ms xsrc vstage Nothing
+        el'Exit eas exit $ EL'Value ms xsrc vstage Nothing
 
       loadClass ::
         AttrAddrSrc ->
@@ -767,7 +767,7 @@ el'LoadTopExpr
                   )
                   clsExps
           !clsStageVar <- newTVar clsStage
-          let !clsVal = EL'RtValue ms xsrc clsStageVar Nothing
+          let !clsVal = EL'Value ms xsrc clsStageVar Nothing
           when (el'ctx'exporting eac) $
             iopdInsert clsKey clsVal exps
           el'Exit eas exit clsVal
@@ -780,7 +780,7 @@ el'LoadTopExpr
             !vstage <- newTVar EL'ParsedValue
             return
               ( el'AttrKey addr,
-                EL'RtValue
+                EL'Value
                   ms
                   (ExprSrc (AttrExpr (DirectRef addr)) addr'span)
                   vstage
@@ -833,12 +833,12 @@ el'LoadTopApk !tops !argSenders !exit !eas = go [] [] argSenders
         el'LoadTopExpr tops expr $
           \ !val _eas -> case val of
             -- todo special treatment?
-            EL'RtConst {} -> go (val : loadedArgs) loadedKwArgs rest
+            EL'Const {} -> go (val : loadedArgs) loadedKwArgs rest
             _ -> go (val : loadedArgs) loadedKwArgs rest
       SendKwArg !addr !expr -> el'RunTx easApk $
         el'LoadTopExpr tops expr $
           \ !val _eas -> case val of
-            EL'RtConst {} ->
+            EL'Const {} ->
               -- todo special treatment?
               go loadedArgs ((el'AttrKey addr, val) : loadedKwArgs) rest
             _ -> go loadedArgs ((el'AttrKey addr, val) : loadedKwArgs) rest

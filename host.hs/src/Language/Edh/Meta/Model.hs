@@ -180,11 +180,11 @@ data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict EL'AttrKey EL'Value)
 
 data EL'Value
   = -- | runtime constant i.e. decidable at analysis time
-    EL'RtConst !EdhValue
+    EL'Const !EdhValue
   | -- | apk not fully decidable at analysis time
-    EL'RtApk !EL'ArgsPack
+    EL'Apk !EL'ArgsPack
   | -- | runtime value whose reification can not be decided at analysis time
-    EL'RtValue
+    EL'Value
       { -- | the original module defined this value
         el'origin'module :: !EL'ModuSlot,
         -- | TODO will this be useful ?
@@ -193,12 +193,13 @@ data EL'Value
         el'value'src :: !ExprSrc,
         -- | staged result however this value is decided
         el'value'stage :: !(TVar EL'ValStage),
-        -- annotated type of this value, most likely from annotations
-        el'value'type :: !(Maybe EL'Value)
+        -- type if possibly decidable at analysis time
+        el'value'type :: !(Maybe EdhTypeValue)
       }
 
 data EL'ValStage
   = EL'ParsedValue
+  | EL'AnnotatedValue !EL'Value
   | EL'LoadedClass
       { el'class'loaded'name :: EL'AttrKey,
         -- | supers
