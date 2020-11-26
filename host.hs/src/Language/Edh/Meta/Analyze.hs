@@ -50,110 +50,118 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
               then invalidateDependants ((dependant, False) : upds) rest
               else invalidateDependants upds rest
 
-el'ResolveModule :: EL'ModuSlot -> EL'Analysis (TMVar EL'ResolvedModule)
-el'ResolveModule !ms !exit = el'LoadModule ms $
-  \ !lmVar -> el'ParseModule ms $ \ !pmVar !eas -> do
-    !lm <- readTMVar lmVar
-    !pm <- readTMVar pmVar
-    let !mrVar = el'modu'resolved ms
-        goResolve :: STM ()
-        goResolve =
-          tryReadTMVar mrVar >>= \case
-            Just !rmVar -> el'Exit eas exit rmVar
-            Nothing -> do
-              !rmVar <- newEmptyTMVar
-              tryPutTMVar mrVar rmVar >>= \case
-                False -> goResolve
-                True -> do
-                  runEdhTx (el'ets eas) $
-                    forkEdh
-                      id
-                      ( edhCatchTx
-                          ( \ !exitTry !etsTry ->
-                              el'RunTx eas {el'ets = etsTry} $
-                                el'DoResolveModule ms pm lm rmVar $ \() _eas ->
-                                  exitEdh etsTry exitTry nil
-                          )
-                          endOfEdh
-                          $ \ !recover !rethrow !etsCatching ->
-                            case edh'ctx'match $ edh'context etsCatching of
-                              EdhNil -> do
-                                void $ -- in case it's not filled
-                                  tryPutTMVar rmVar $
-                                    EL'ResolvedModule
-                                      (EL'Scope noSrcRange V.empty)
-                                      odEmpty
-                                      [ (noSrcRange, "<no-load>")
-                                      ]
-                                runEdhTx etsCatching $ rethrow nil
-                              !exv -> edhValueDesc etsCatching exv $
-                                \ !exDesc -> do
+el'ResolveModule :: EL'Analysis (TMVar EL'ResolvedModule)
+el'ResolveModule !exit !eas = el'RunTx eas $
+  el'LoadModule $
+    \ !lmVar -> el'ParseModule $ \ !pmVar _eas -> do
+      !lm <- readTMVar lmVar
+      !pm <- readTMVar pmVar
+      let !mrVar = el'modu'resolved ms
+          goResolve :: STM ()
+          goResolve =
+            tryReadTMVar mrVar >>= \case
+              Just !rmVar -> el'Exit eas exit rmVar
+              Nothing -> do
+                !rmVar <- newEmptyTMVar
+                tryPutTMVar mrVar rmVar >>= \case
+                  False -> goResolve
+                  True -> do
+                    runEdhTx (el'ets eas) $
+                      forkEdh
+                        id
+                        ( edhCatchTx
+                            ( \ !exitTry !etsTry ->
+                                el'RunTx eas {el'ets = etsTry} $
+                                  el'DoResolveModule ms pm lm rmVar $ \() _eas ->
+                                    exitEdh etsTry exitTry nil
+                            )
+                            endOfEdh
+                            $ \ !recover !rethrow !etsCatching ->
+                              case edh'ctx'match $ edh'context etsCatching of
+                                EdhNil -> do
                                   void $ -- in case it's not filled
                                     tryPutTMVar rmVar $
                                       EL'ResolvedModule
                                         (EL'Scope noSrcRange V.empty)
                                         odEmpty
-                                        [ (noSrcRange, exDesc)
+                                        [ (noSrcRange, "<no-load>")
                                         ]
-                                  runEdhTx etsCatching $ recover nil
-                      )
-                      endOfEdh
-                  el'Exit eas exit rmVar
-    goResolve
+                                  runEdhTx etsCatching $ rethrow nil
+                                !exv -> edhValueDesc etsCatching exv $
+                                  \ !exDesc -> do
+                                    void $ -- in case it's not filled
+                                      tryPutTMVar rmVar $
+                                        EL'ResolvedModule
+                                          (EL'Scope noSrcRange V.empty)
+                                          odEmpty
+                                          [ (noSrcRange, exDesc)
+                                          ]
+                                    runEdhTx etsCatching $ recover nil
+                        )
+                        endOfEdh
+                    el'Exit eas exit rmVar
+      goResolve
+  where
+    eac = el'context eas
+    ms = el'ctx'module eac
 
-el'LoadModule :: EL'ModuSlot -> EL'Analysis (TMVar EL'LoadedModule)
-el'LoadModule !ms !exit = el'ParseModule ms $ \ !pmVar !eas ->
-  readTMVar pmVar >>= \ !pm ->
-    let !mlVar = el'modu'loaded ms
-        goLoad :: STM ()
-        goLoad =
-          tryReadTMVar mlVar >>= \case
-            Just !lmVar -> el'Exit eas exit lmVar
-            Nothing -> do
-              !lmVar <- newEmptyTMVar
-              tryPutTMVar mlVar lmVar >>= \case
-                False -> goLoad
-                True -> do
-                  runEdhTx (el'ets eas) $
-                    forkEdh
-                      id
-                      ( edhCatchTx
-                          ( \ !exitTry !etsTry ->
-                              el'RunTx eas {el'ets = etsTry} $
-                                el'DoLoadModule ms pm lmVar $ \() _eas ->
-                                  exitEdh etsTry exitTry nil
-                          )
-                          endOfEdh
-                          $ \ !recover !rethrow !etsCatching ->
-                            case edh'ctx'match $ edh'context etsCatching of
-                              EdhNil -> do
-                                void $ -- in case it's not filled
-                                  tryPutTMVar lmVar $
-                                    EL'LoadedModule
-                                      odEmpty
-                                      odEmpty
-                                      [ (noSrcRange, "<no-load>")
-                                      ]
-                                runEdhTx etsCatching $ rethrow nil
-                              !exv -> edhValueDesc etsCatching exv $
-                                \ !exDesc -> do
+el'LoadModule :: EL'Analysis (TMVar EL'LoadedModule)
+el'LoadModule !exit !eas = el'RunTx eas $
+  el'ParseModule $ \ !pmVar _eas ->
+    readTMVar pmVar >>= \ !pm ->
+      let !mlVar = el'modu'loaded ms
+          goLoad :: STM ()
+          goLoad =
+            tryReadTMVar mlVar >>= \case
+              Just !lmVar -> el'Exit eas exit lmVar
+              Nothing -> do
+                !lmVar <- newEmptyTMVar
+                tryPutTMVar mlVar lmVar >>= \case
+                  False -> goLoad
+                  True -> do
+                    runEdhTx (el'ets eas) $
+                      forkEdh
+                        id
+                        ( edhCatchTx
+                            ( \ !exitTry !etsTry ->
+                                el'RunTx eas {el'ets = etsTry} $
+                                  el'DoLoadModule pm lmVar $ \() _eas ->
+                                    exitEdh etsTry exitTry nil
+                            )
+                            endOfEdh
+                            $ \ !recover !rethrow !etsCatching ->
+                              case edh'ctx'match $ edh'context etsCatching of
+                                EdhNil -> do
                                   void $ -- in case it's not filled
                                     tryPutTMVar lmVar $
                                       EL'LoadedModule
                                         odEmpty
                                         odEmpty
-                                        [ (noSrcRange, exDesc)
+                                        [ (noSrcRange, "<no-load>")
                                         ]
-                                  runEdhTx etsCatching $ recover nil
-                      )
-                      endOfEdh
-                  el'Exit eas exit lmVar
-     in goLoad
-
-el'ParseModule :: EL'ModuSlot -> EL'Analysis (TMVar EL'ParsedModule)
-el'ParseModule !ms !exit !eas = goParse
+                                  runEdhTx etsCatching $ rethrow nil
+                                !exv -> edhValueDesc etsCatching exv $
+                                  \ !exDesc -> do
+                                    void $ -- in case it's not filled
+                                      tryPutTMVar lmVar $
+                                        EL'LoadedModule
+                                          odEmpty
+                                          odEmpty
+                                          [ (noSrcRange, exDesc)
+                                          ]
+                                    runEdhTx etsCatching $ recover nil
+                        )
+                        endOfEdh
+                    el'Exit eas exit lmVar
+       in goLoad
   where
-    !mpVar = el'modu'parsed ms
+    eac = el'context eas
+    ms = el'ctx'module eac
+
+el'ParseModule :: EL'Analysis (TMVar EL'ParsedModule)
+el'ParseModule !exit !eas = goParse
+  where
+    !mpVar = el'modu'parsed $ el'ctx'module $ el'context eas
     goParse :: STM ()
     goParse =
       tryReadTMVar mpVar >>= \case
@@ -169,7 +177,7 @@ el'ParseModule !ms !exit !eas = goParse
                   ( edhCatchTx
                       ( \ !exitTry !etsTry ->
                           el'RunTx eas {el'ets = etsTry} $
-                            el'DoParseModule ms pmVar $ \() _eas ->
+                            el'DoParseModule pmVar $ \() _eas ->
                               exitEdh etsTry exitTry nil
                       )
                       endOfEdh
@@ -195,8 +203,8 @@ el'ParseModule !ms !exit !eas = goParse
                   endOfEdh
               el'Exit eas exit pmVar
 
-el'LocateModule :: Text -> EL'Analysis EL'ModuSlot
-el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
+el'LocateModule :: EL'World -> Text -> EdhTxExit EL'ModuSlot -> EdhTx
+el'LocateModule !elw !moduFile !exit !ets =
   if not $ ".edh" `T.isSuffixOf` moduFile
     then throwEdh ets UsageError $ "Not a .edh file: " <> moduFile
     else
@@ -234,7 +242,7 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
                         <> absFile
                   else do
                     putTMVar mmVar mm
-                    el'Exit eas exit ms
+                    exitEdh ets exit ms
           Nothing -> do
             !parsed <- newEmptyTMVar
             !loaded <- newEmptyTMVar
@@ -252,7 +260,7 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
                     dependants
                     dependencies
             putTMVar mmVar (Map.insert name ms mm)
-            el'Exit eas exit ms
+            exitEdh ets exit ms
       where
         !mmVar = mmField home
 
@@ -369,11 +377,8 @@ el'LocateModule !moduFile !exit eas@(EL'AnalysisState !elw !ets) =
                           )
          in go $ splitFileName absFile
 
-el'LocateImportee ::
-  EL'ModuSlot ->
-  Text ->
-  EL'Analysis (Either Text EL'ModuSlot)
-el'LocateImportee !msFrom !impSpec !exit !eas =
+el'LocateImportee :: Text -> EL'Analysis (Either Text EL'ModuSlot)
+el'LocateImportee !impSpec !exit !eas =
   if "." `T.isPrefixOf` impSpec
     then
       if null relPath
@@ -383,18 +388,22 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
         else
           unsafeIOToSTM (findRelImport nomSpec) >>= \case
             Left !err -> el'Exit eas exit $ Left err
-            Right !moduFile -> el'RunTx eas $
-              el'LocateModule moduFile $ \ !ms ->
-                el'ExitTx exit $ Right ms
+            Right !moduFile -> runEdhTx ets $
+              el'LocateModule elw moduFile $ \ !ms _ets ->
+                el'Exit eas exit $ Right ms
     else
       unsafeIOToSTM
         (findAbsImport $ T.unpack $ el'home'path $ el'modu'home msFrom)
         >>= \case
           Left !err -> el'Exit eas exit $ Left err
-          Right !moduFile -> el'RunTx eas $
-            el'LocateModule moduFile $ \ !ms ->
-              el'ExitTx exit $ Right ms
+          Right !moduFile -> runEdhTx ets $
+            el'LocateModule elw moduFile $ \ !ms _ets ->
+              el'Exit eas exit $ Right ms
   where
+    elw = el'world eas
+    ets = el'ets eas
+    eac = el'context eas
+    msFrom = el'ctx'module eac
     relPath = T.unpack $ el'modu'rel'base msFrom
     SrcDoc fromFile = el'modu'doc msFrom
     !nomSpec = T.unpack $ normalizeImpSpec impSpec
@@ -444,11 +453,8 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
                 then return $ Left $ "no such module: " <> T.pack (show nomSpec)
                 else findAbsImport parentPkgPath
 
-el'DoParseModule ::
-  EL'ModuSlot ->
-  TMVar EL'ParsedModule ->
-  EL'Analysis ()
-el'DoParseModule !ms !pmVar !exit eas@(EL'AnalysisState _elw !ets) =
+el'DoParseModule :: TMVar EL'ParsedModule -> EL'Analysis ()
+el'DoParseModule !pmVar !exit eas@(EL'AnalysisState _elw !eac !ets) =
   unsafeIOToSTM
     ( streamDecodeUtf8With lenientDecode
         <$> B.readFile
@@ -475,120 +481,118 @@ el'DoParseModule !ms !pmVar !exit eas@(EL'AnalysisState _elw !ets) =
             el'Exit eas exit ()
   where
     !world = edh'prog'world $ edh'thread'prog ets
-    SrcDoc !moduFile = el'modu'doc ms
+    SrcDoc !moduFile = el'modu'doc $ el'ctx'module eac
 
-el'DoLoadModule ::
-  EL'ModuSlot ->
-  EL'ParsedModule ->
-  TMVar EL'LoadedModule ->
-  EL'Analysis ()
-el'DoLoadModule !ms (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
+el'DoLoadModule :: EL'ParsedModule -> TMVar EL'LoadedModule -> EL'Analysis ()
+el'DoLoadModule (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
   !arts <- iopdEmpty
   !exts <- newTVar []
   !exps <- iopdEmpty
   !diags <- newTVar []
   let !tops = EL'LoadingTopLevels arts exts exps diags
   el'RunTx eas $
-    el'LoadTopStmts False ms stmts tops $ \_ _eas -> do
-      !arts' <- iopdSnapshot arts
-      !exps' <- iopdSnapshot exps
-      !diags' <- readTVar diags
-      let !loaded = EL'LoadedModule arts' exps' $! reverse diags'
-      void $ tryPutTMVar lmVar loaded
-      el'Exit eas exit ()
+    el'LoadTopStmts
+      stmts
+      tops
+      $ \_ _eas -> do
+        !arts' <- iopdSnapshot arts
+        !exps' <- iopdSnapshot exps
+        !diags' <- readTVar diags
+        let !loaded = EL'LoadedModule arts' exps' $! reverse diags'
+        void $ tryPutTMVar lmVar loaded
+        el'Exit eas exit ()
 
 data EL'LoadingTopLevels = EL'LoadingTopLevels
-  { el'loading'arts :: !(IOPD EL'AttrKey EL'Value),
+  { -- | toplevel artifacts defined
+    el'loading'arts :: !(IOPD EL'AttrKey EL'Value),
+    -- | all `extends` (i.e. super objects) appeared at toplevel
     el'loading'exts :: !(TVar [EL'Value]),
+    -- | exported artifacts at toplevel
     el'loading'exports :: !(IOPD EL'AttrKey EL'Value),
+    -- | diagnostics generated during loading
     el'loading'diags :: !(TVar [(SrcRange, Text)])
   }
 
-el'LoadTopStmts ::
-  Bool ->
-  EL'ModuSlot ->
-  [StmtSrc] ->
-  EL'LoadingTopLevels ->
-  EL'Analysis EL'Value
-el'LoadTopStmts !exporting !ms !stmts !tops !exit !eas = go stmts
+el'LoadTopStmts :: [StmtSrc] -> EL'LoadingTopLevels -> EL'Analysis EL'Value
+el'LoadTopStmts !stmts !tops !exit !eas = go stmts
   where
     go :: [StmtSrc] -> STM ()
     go [] = el'Exit eas exit $ EL'RtConst nil
     go (stmt : rest) = el'RunTx eas $
-      el'LoadTopStmt exporting ms stmt tops $ \ !val _eas' -> case rest of
+      el'LoadTopStmt stmt tops $ \ !val _eas' -> case rest of
         [] -> el'Exit eas exit val
         _ -> go rest
 
-el'LoadTopStmt ::
-  Bool ->
-  EL'ModuSlot ->
-  StmtSrc ->
-  EL'LoadingTopLevels ->
-  EL'Analysis EL'Value
+el'LoadTopStmt :: StmtSrc -> EL'LoadingTopLevels -> EL'Analysis EL'Value
 el'LoadTopStmt
-  !exporting
-  !ms
   (StmtSrc !stmt !stmt'span)
   tops@(EL'LoadingTopLevels !arts !exts !exps !diags)
   !exit
-  eas@(EL'AnalysisState !elw !ets) = case stmt of
+  eas@(EL'AnalysisState !elw !eac !ets) = case stmt of
     ExprStmt !expr _docCmt ->
       el'RunTx eas $
-        el'LoadTopExpr exporting ms (ExprSrc expr stmt'span) tops exit
+        el'LoadTopExpr (ExprSrc expr stmt'span) tops exit
     LetStmt !argsRcvr !argsSndr -> do
       -- TODO recognize defines & exports
       el'Exit eas exit $ EL'RtConst nil
+    ExtendsStmt !superExpr -> el'RunTx eas $
+      el'LoadTopExpr superExpr tops $ \ !superVal _eas -> do
+        case superVal of
+          EL'ArgsPack !supers !kwargs
+            | odNull kwargs ->
+              modifyTVar' exts (++ supers)
+          EL'RtValue {} ->
+            modifyTVar' exts (++ [superVal])
+          -- TODO elaborate the error msg
+          _ -> modifyTVar' diags ((stmt'span, "invalid super") :)
+        el'Exit eas exit $ EL'RtConst nil
     -- TODO recognize more stmts
     -- EffectStmt !effs !docCmt -> undefined
     _ -> el'Exit eas exit $ EL'RtConst nil
 
-el'LoadTopExpr ::
-  Bool ->
-  EL'ModuSlot ->
-  ExprSrc ->
-  EL'LoadingTopLevels ->
-  EL'Analysis EL'Value
+el'LoadTopExpr :: ExprSrc -> EL'LoadingTopLevels -> EL'Analysis EL'Value
 el'LoadTopExpr
-  !exporting
-  !ms
   xsrc@(ExprSrc !expr !expr'span)
   tops@(EL'LoadingTopLevels !arts !exts !exps !diags)
   !exit
-  eas@(EL'AnalysisState !elw !ets) = case expr of
+  eas@(EL'AnalysisState !elw !eac !ets) = case expr of
     ExportExpr !expr' ->
-      el'RunTx eas $ el'LoadTopExpr True ms expr' tops exit
+      el'RunTx eas {el'context = (el'context eas) {el'ctx'exporting = True}} $
+        el'LoadTopExpr expr' tops exit
     AtoIsoExpr !expr' ->
-      el'RunTx eas $ el'LoadTopExpr exporting ms expr' tops exit
+      el'RunTx eas $ el'LoadTopExpr expr' tops exit
     ParenExpr !expr' ->
-      el'RunTx eas $ el'LoadTopExpr exporting ms expr' tops exit
+      el'RunTx eas $ el'LoadTopExpr expr' tops exit
+    ArgsPackExpr !argSenders ->
+      -- XXX
+      undefined
     BlockExpr !stmts ->
-      el'RunTx eas $ el'LoadTopStmts exporting ms stmts tops exit
+      el'RunTx eas $ el'LoadTopStmts stmts tops exit
     IfExpr !cond !cseq !alt ->
       el'RunTx eas $
-        el'LoadTopExpr exporting ms cond tops $ \ !val _eas -> case val of
+        el'LoadTopExpr cond tops $ \ !val _eas -> case val of
           EL'RtConst !constVal -> edhValueNull ets constVal $ \case
-            False -> el'RunTx eas $ el'LoadTopStmt exporting ms cseq tops exit
+            False -> el'RunTx eas $ el'LoadTopStmt cseq tops exit
             True -> el'RunTx eas $ case alt of
               Nothing -> el'ExitTx exit $ EL'RtConst nil
-              Just !elseStmt -> el'LoadTopStmt exporting ms elseStmt tops exit
+              Just !elseStmt -> el'LoadTopStmt elseStmt tops exit
           _ -> el'RunTx eas $
-            el'LoadTopStmt exporting ms cseq tops $ \_ -> case alt of
+            el'LoadTopStmt cseq tops $ \_ -> case alt of
               Nothing -> \_eas -> rtnParsed {- HLINT ignore "Use const" -}
-              Just !elseStmt -> el'LoadTopStmt exporting ms elseStmt tops $
+              Just !elseStmt -> el'LoadTopStmt elseStmt tops $
                 \_ _eas -> rtnParsed
     ClassExpr HostDecl {} -> error "bug: host class declaration"
     ClassExpr
       (ProcDecl !nameAddr !argsRcvr !pbody !proc'loc) ->
         el'RunTx eas $
-          el'LoadClass ms pbody tops $ \(!supers, !clsArts, !clsExps) _eas -> do
+          el'LoadClass pbody tops $ \(!supers, !clsArts, !clsExps) _eas -> do
             let !clsKey = el'AttrKey nameAddr
-                !mro = supers -- TODO C3 linearization
-                !clsStage = EL'LoadedClass clsKey mro clsArts clsExps
+                !clsStage = EL'LoadedClass clsKey supers clsArts clsExps
             !vstage <- newTVar clsStage
-            let !clsVal = EL'RtValue ms xsrc vstage Nothing
-            when exporting $
+            let !clsVal = EL'RtValue (el'ctx'module eac) xsrc vstage Nothing
+            when (el'ctx'exporting eac) $
               iopdInsert clsKey clsVal exps
-            el'Exit eas exit $ clsVal
+            el'Exit eas exit clsVal
     NamespaceExpr HostDecl {} _ -> error "bug: host ns declaration"
     NamespaceExpr
       (ProcDecl !nameAddr _ (StmtSrc !body'stmt _) !proc'loc)
@@ -614,21 +618,26 @@ el'LoadTopExpr
     where
       rtnParsed = do
         !vstage <- newTVar EL'ParsedValue
-        el'Exit eas exit $ EL'RtValue ms xsrc vstage Nothing
+        el'Exit eas exit $ EL'RtValue (el'ctx'module eac) xsrc vstage Nothing
 
 el'LoadClass ::
-  EL'ModuSlot ->
   StmtSrc ->
   EL'LoadingTopLevels ->
   EL'Analysis ([EL'Value], EL'Artifacts, EL'Artifacts)
-el'LoadClass !ms !pbody !tops !exit !eas = do
+el'LoadClass !pbody !tops !exit !eas = do
   !arts <- iopdEmpty
   !exts <- newTVar []
   !exps <- iopdEmpty
-  el'RunTx eas $
-    el'LoadTopStmts
-      False
-      ms
+  el'RunTx
+    eas
+      { el'context =
+          eac
+            { el'ctx'pure = False,
+              el'ctx'exporting = False,
+              el'ctx'eff'defining = False
+            }
+      }
+    $ el'LoadTopStmts
       [pbody]
       tops
         { el'loading'arts = arts,
@@ -640,6 +649,8 @@ el'LoadClass !ms !pbody !tops !exit !eas = do
         !exts' <- readTVar exts
         !exps' <- iopdSnapshot exps
         el'Exit eas exit (exts', arts', exps')
+  where
+    eac = el'context eas
 
 el'DoResolveModule ::
   EL'ModuSlot ->
@@ -653,7 +664,7 @@ el'DoResolveModule
   (EL'LoadedModule !arts !exps _load'diags)
   !lmVar
   !exit
-  eas@(EL'AnalysisState !elw !ets) = do
+  eas@(EL'AnalysisState !elw !eac !ets) = do
     let !resolved = undefined -- XXX
     void $ tryPutTMVar lmVar resolved
     el'Exit eas exit ()

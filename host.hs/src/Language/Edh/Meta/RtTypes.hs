@@ -4,7 +4,7 @@ import Control.Concurrent.STM
 import Data.Vector (Vector)
 import Language.Edh.EHI
 import Language.Edh.Meta.Model
-import Prelude ()
+import Prelude
 
 data EL'World = EL'World
   { -- this vector of home records should hold the invariant that sorted by
@@ -15,9 +15,20 @@ data EL'World = EL'World
     el'eow :: !EventSink
   }
 
-el'RunAnalysis :: EL'World -> EL'Analysis a -> EL'TxExit a -> EdhTx
-el'RunAnalysis !elw !ana !exit !ets =
-  el'RunTx (EL'AnalysisState elw ets) (ana exit)
+el'RunAnalysis :: EL'World -> EL'ModuSlot -> EL'Analysis a -> EL'TxExit a -> EdhTx
+el'RunAnalysis !elw !ms !ana !exit !ets =
+  el'RunTx
+    ( EL'AnalysisState
+        elw
+        EL'Context
+          { el'ctx'module = ms,
+            el'ctx'pure = False,
+            el'ctx'exporting = False,
+            el'ctx'eff'defining = False
+          }
+        ets
+    )
+    (ana exit)
 
 type EL'Analysis a = EL'TxExit a -> EL'Tx
 
@@ -27,7 +38,15 @@ type EL'Tx = EL'AnalysisState -> STM ()
 
 data EL'AnalysisState = EL'AnalysisState
   { el'world :: !EL'World,
+    el'context :: !EL'Context,
     el'ets :: !EdhThreadState
+  }
+
+data EL'Context = EL'Context
+  { el'ctx'module :: !EL'ModuSlot,
+    el'ctx'pure :: !Bool,
+    el'ctx'exporting :: !Bool,
+    el'ctx'eff'defining :: !Bool
   }
 
 el'RunTx :: EL'AnalysisState -> EL'Tx -> STM ()

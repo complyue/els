@@ -180,6 +180,8 @@ el'AttrKey asrc@(AttrAddrSrc !addr _) = case addr of
 data EL'Value
   = -- | runtime constant i.e. decidable at analysis time
     EL'RtConst !EdhValue
+  | -- | apk not fully decidable at analysis time
+    EL'ArgsPack [EL'Value] (OrderedDict EL'AttrKey EL'Value)
   | -- | runtime value whose reification can not be decided at analysis time
     EL'RtValue
       { -- | the original module defined this value
@@ -198,8 +200,8 @@ data EL'ValStage
   = EL'ParsedValue
   | EL'LoadedClass
       { el'class'loaded'name :: EL'AttrKey,
-        -- | mro
-        el'class'loaded'mro :: ![EL'Value],
+        -- | supers
+        el'class'loaded'supers :: ![EL'Value],
         -- | member artifacts
         el'class'loaded'arts :: !EL'Artifacts,
         -- | member artifacts
