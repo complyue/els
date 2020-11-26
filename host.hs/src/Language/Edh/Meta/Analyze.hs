@@ -72,7 +72,7 @@ el'ResolveModule !exit !eas = el'RunTx eas $
                         ( edhCatchTx
                             ( \ !exitTry !etsTry ->
                                 el'RunTx eas {el'ets = etsTry} $
-                                  el'DoResolveModule ms pm lm rmVar $ \() _eas ->
+                                  el'DoResolveModule pm lm rmVar $ \() _eas ->
                                     exitEdh etsTry exitTry nil
                             )
                             endOfEdh
@@ -203,7 +203,7 @@ el'ParseModule !exit !eas = goParse
                   endOfEdh
               el'Exit eas exit pmVar
 
-el'LocateModule :: EL'World -> Text -> EdhTxExit EL'ModuSlot -> EdhTx
+el'LocateModule :: EL'World -> Text -> EdhProc EL'ModuSlot
 el'LocateModule !elw !moduFile !exit !ets =
   if not $ ".edh" `T.isSuffixOf` moduFile
     then throwEdh ets UsageError $ "Not a .edh file: " <> moduFile
