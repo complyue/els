@@ -584,38 +584,97 @@ el'LoadTopExpr
                 \_ _eas -> rtnParsed
     --
 
-    --
+    -- procedure definitions
     MethodExpr HostDecl {} -> error "bug: host method declaration"
-    MethodExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    MethodExpr (ProcDecl !nameAddr _ _ _) -> do
+      !mthStageVar <- newTVar EL'ParsedValue
+      let !mthKey = el'AttrKey nameAddr
+          !mthVal =
+            EL'RtValue
+              ms
+              xsrc
+              mthStageVar
+              (Just $ EL'RtConst $ EdhType MethodType)
+      when (el'ctx'exporting eac) $
+        iopdInsert mthKey mthVal exps
+      el'Exit eas exit mthVal
     GeneratorExpr HostDecl {} -> error "bug: host method declaration"
-    GeneratorExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    GeneratorExpr (ProcDecl !nameAddr _ _ _) -> do
+      !mthStageVar <- newTVar EL'ParsedValue
+      let !mthKey = el'AttrKey nameAddr
+          !mthVal =
+            EL'RtValue
+              ms
+              xsrc
+              mthStageVar
+              (Just $ EL'RtConst $ EdhType GeneratorType)
+      when (el'ctx'exporting eac) $
+        iopdInsert mthKey mthVal exps
+      el'Exit eas exit mthVal
     InterpreterExpr HostDecl {} -> error "bug: host method declaration"
-    InterpreterExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    InterpreterExpr (ProcDecl !nameAddr _ _ _) -> do
+      !mthStageVar <- newTVar EL'ParsedValue
+      let !mthKey = el'AttrKey nameAddr
+          !mthVal =
+            EL'RtValue
+              ms
+              xsrc
+              mthStageVar
+              (Just $ EL'RtConst $ EdhType InterpreterType)
+      when (el'ctx'exporting eac) $
+        iopdInsert mthKey mthVal exps
+      el'Exit eas exit mthVal
     ProducerExpr HostDecl {} -> error "bug: host method declaration"
-    ProducerExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
-    OpDefiExpr !opFixity !opPrec !opSym !opProc -> undefined
-    OpOvrdExpr !opFixity !opPrec !opSym !opProc ->
-      undefined --
+    ProducerExpr (ProcDecl !nameAddr _ _ _) -> do
+      !mthStageVar <- newTVar EL'ParsedValue
+      let !mthKey = el'AttrKey nameAddr
+          !mthVal =
+            EL'RtValue
+              ms
+              xsrc
+              mthStageVar
+              (Just $ EL'RtConst $ EdhType ProducerType)
+      when (el'ctx'exporting eac) $
+        iopdInsert mthKey mthVal exps
+      el'Exit eas exit mthVal
+    OpDefiExpr _opFixity _opPrec !opSym (ProcDecl !opAddr _ _ _) -> do
+      !opStageVar <- newTVar EL'ParsedValue
+      let !opKey = el'AttrKey opAddr
+          !opVal =
+            EL'RtValue
+              ms
+              xsrc
+              opStageVar
+              (Just $ EL'RtConst $ EdhType OperatorType)
+      when (el'ctx'exporting eac) $
+        iopdInsert opKey opVal exps
+      el'Exit eas exit opVal
+    OpOvrdExpr _opFixity _opPrec !opSym (ProcDecl !opAddr _ _ _) -> do
+      !opStageVar <- newTVar EL'ParsedValue
+      let !opKey = el'AttrKey opAddr
+          !opVal =
+            EL'RtValue
+              ms
+              xsrc
+              opStageVar
+              (Just $ EL'RtConst $ EdhType OperatorType)
+      when (el'ctx'exporting eac) $
+        iopdInsert opKey opVal exps
+      el'Exit eas exit opVal
+    --
 
     -- class definition
     ClassExpr HostDecl {} -> error "bug: host class declaration"
     ClassExpr (ProcDecl !nameAddr !argsRcvr !pbody _proc'loc) -> case argsRcvr of
       -- a normal class
-      WildReceiver ->
-        el'RunTx eas $
-          el'LoadClass tops pbody $ \(!supers, !clsArts, !clsExps) _eas -> do
-            let !clsKey = el'AttrKey nameAddr
-                !clsStage = EL'LoadedClass clsKey supers clsArts clsExps
-            !clsStageVar <- newTVar clsStage
-            let !clsVal = EL'RtValue ms xsrc clsStageVar Nothing
-            when (el'ctx'exporting eac) $
-              iopdInsert clsKey clsVal exps
-            el'Exit eas exit clsVal
+      WildReceiver -> loadClass nameAddr odEmpty odEmpty pbody
       -- a data class (ADT)
-      PackReceiver !ars ->
-        undefined --
-      SingleReceiver !ar ->
-        undefined --
+      PackReceiver !ars -> do
+        !dfArts <- recvDataClassFields ars
+        loadClass nameAddr odEmpty dfArts pbody
+      SingleReceiver !ar -> do
+        !dfArts <- recvDataClassFields [ar]
+        loadClass nameAddr odEmpty dfArts pbody
 
     -- namespace definition
     NamespaceExpr HostDecl {} _ -> error "bug: host ns declaration"
@@ -626,46 +685,38 @@ el'LoadTopExpr
           !pbody
           _proc'loc
         )
-      !argSenders ->
-        el'RunTx eas $
-          el'LoadClass tops pbody $ \(!supers, !clsArts, !clsExps) _eas ->
-            el'RunTx eas $
-              el'LoadTopApk tops argSenders $
-                \(EL'ArgsPack !args !kwargs)
-                 _eas ->
-                    do
-                      unless (null args) $
-                        modifyTVar'
-                          diags
-                          ((name'span, "positional arg to namespace") :)
-                      let !clsKey = el'AttrKey nameAddr
-                          !clsStage =
-                            EL'LoadedClass
-                              clsKey
-                              []
-                              ( odFromList $ odToList kwargs ++ odToList clsArts
-                              )
-                              clsExps
+      !argSenders -> el'RunTx eas $
+        el'LoadTopApk tops argSenders $ \(EL'ArgsPack !args !kwargs) ->
+          el'LoadClass tops pbody $ \(!supers, !clsArts, !clsExps) _eas -> do
+            unless (null args) $
+              modifyTVar' diags ((name'span, "positional arg to namespace") :)
+            let !clsKey = el'AttrKey nameAddr
+                !clsStage =
+                  EL'LoadedClass
+                    clsKey
+                    []
+                    ( odFromList $ odToList kwargs ++ odToList clsArts
+                    )
+                    clsExps
+            !clsStageVar <- newTVar clsStage
+            let !clsVal = EL'RtValue ms xsrc clsStageVar Nothing
+                !nsoStage = EL'LoadedObject clsVal supers
+            !nsoStageVar <- newTVar nsoStage
+            let !nsoVal = EL'RtValue ms xsrc nsoStageVar Nothing
+            when (el'ctx'exporting eac) $
+              iopdInsert clsKey nsoVal exps
+            el'Exit eas exit nsoVal
 
-                      !clsStageVar <- newTVar clsStage
-                      let !clsVal = EL'RtValue ms xsrc clsStageVar Nothing
-                          !nsoStage = EL'LoadedObject clsVal supers
-                      !nsoStageVar <- newTVar nsoStage
-                      let !nsoVal = EL'RtValue ms xsrc nsoStageVar Nothing
-                      when (el'ctx'exporting eac) $
-                        iopdInsert clsKey nsoVal exps
-                      el'Exit eas exit nsoVal
-
-    -- operators, some carry assignment semantics
+    -- operator application, some carry assignment semantics
     InfixExpr !opSym !lhExpr !rhExpr ->
       -- TODO handle operators do assignment i.e. (=), also (:=), and other
       -- assignment-likes (+=) (-=) ...
       undefined --
 
     -- importing
-    ImportExpr !argsRcvr !srcExpr !maybeInto ->
-      -- TODO feasible to load re-exports?
-      undefined --
+    -- ImportExpr !argsRcvr !srcExpr !maybeInto ->
+    --   -- TODO feasible to load re-exports during loading stage?
+    --   undefined --
 
     -- TODO recognize more exprs
     -- CaseExpr !tgtExpr !branchesExpr -> undefined
@@ -677,6 +728,64 @@ el'LoadTopExpr
       rtnParsed = do
         !vstage <- newTVar EL'ParsedValue
         el'Exit eas exit $ EL'RtValue ms xsrc vstage Nothing
+
+      loadClass ::
+        AttrAddrSrc ->
+        EL'Artifacts ->
+        EL'Artifacts ->
+        StmtSrc ->
+        STM ()
+      loadClass !nameAddr !preArts !postArts !pbody = el'RunTx eas $
+        el'LoadClass tops pbody $ \(!supers, !clsArts, !clsExps) _eas -> do
+          let !clsKey = el'AttrKey nameAddr
+              !clsStage =
+                EL'LoadedClass
+                  clsKey
+                  supers
+                  ( odFromList $
+                      odToList preArts ++ odToList clsArts ++ odToList postArts
+                  )
+                  clsExps
+          !clsStageVar <- newTVar clsStage
+          let !clsVal = EL'RtValue ms xsrc clsStageVar Nothing
+          when (el'ctx'exporting eac) $
+            iopdInsert clsKey clsVal exps
+          el'Exit eas exit clsVal
+
+      recvDataClassFields :: [ArgReceiver] -> STM EL'Artifacts
+      recvDataClassFields !rcvrs = go [] rcvrs
+        where
+          entry :: AttrAddrSrc -> STM (EL'AttrKey, EL'Value)
+          entry addr@(AttrAddrSrc _ !addr'span) = do
+            !vstage <- newTVar EL'ParsedValue
+            return
+              ( el'AttrKey addr,
+                EL'RtValue
+                  ms
+                  (ExprSrc (AttrExpr (DirectRef addr)) addr'span)
+                  vstage
+                  Nothing
+              )
+          go !entries [] = return $ odFromList $ reverse entries
+          go !entries (rcvr : rest) = case rcvr of
+            RecvArg addr@(AttrAddrSrc _ !addr'span) !asAttr _ -> do
+              case asAttr of
+                Nothing -> return ()
+                Just {} ->
+                  modifyTVar'
+                    diags
+                    ((addr'span, "renaming data class field") :)
+              !e <- entry addr
+              go (e : entries) rest
+            RecvRestPosArgs !addr -> do
+              !e <- entry addr
+              go (e : entries) rest
+            RecvRestKwArgs !addr -> do
+              !e <- entry addr
+              go (e : entries) rest
+            RecvRestPkArgs !addr -> do
+              !e <- entry addr
+              go (e : entries) rest
 
 el'LoadTopApk :: EL'LoadingTopLevels -> ArgsPacker -> EL'Analysis EL'ArgsPack
 el'LoadTopApk !tops !argSenders !exit !eas = go [] [] argSenders
