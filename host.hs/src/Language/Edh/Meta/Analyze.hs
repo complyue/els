@@ -553,7 +553,7 @@ el'LoadTopStmt
 
 el'LoadTopExpr :: EL'LoadingTopLevels -> ExprSrc -> EL'Analysis EL'Value
 el'LoadTopExpr
-  tops@(EL'LoadingTopLevels !arts !exts !exps !diags)
+  tops@(EL'LoadingTopLevels _arts _exts !exps !diags)
   xsrc@(ExprSrc !expr _expr'span)
   !exit
   eas@(EL'AnalysisState _elw !eac !ets) = case expr of
@@ -637,7 +637,7 @@ el'LoadTopExpr
       when (el'ctx'exporting eac) $
         iopdInsert mthKey mthVal exps
       el'Exit eas exit mthVal
-    OpDefiExpr _opFixity _opPrec !opSym (ProcDecl !opAddr _ _ _) -> do
+    OpDefiExpr _opFixity _opPrec _opSym (ProcDecl !opAddr _ _ _) -> do
       !opStageVar <- newTVar EL'ParsedValue
       let !opKey = el'AttrKey opAddr
           !opVal =
@@ -649,7 +649,7 @@ el'LoadTopExpr
       when (el'ctx'exporting eac) $
         iopdInsert opKey opVal exps
       el'Exit eas exit opVal
-    OpOvrdExpr _opFixity _opPrec !opSym (ProcDecl !opAddr _ _ _) -> do
+    OpOvrdExpr _opFixity _opPrec _opSym (ProcDecl !opAddr _ _ _) -> do
       !opStageVar <- newTVar EL'ParsedValue
       let !opKey = el'AttrKey opAddr
           !opVal =
@@ -708,10 +708,30 @@ el'LoadTopExpr
             el'Exit eas exit nsoVal
 
     -- operator application, some carry assignment semantics
-    InfixExpr !opSym !lhExpr !rhExpr ->
-      -- TODO handle operators do assignment i.e. (=), also (:=), and other
-      -- assignment-likes (+=) (-=) ...
-      undefined --
+    InfixExpr !opSym (ExprSrc !lhExpr _lh'span) !rhExprSrc ->
+      if "=" `T.isSuffixOf` opSym
+        then -- handle operators do assignment i.e. (=), also (:=), and other
+        case lhExpr of -- assignment-likes (+=) (-=) ...
+          AttrExpr (DirectRef !addr) -> do
+            !artStageVar <- newTVar EL'ParsedValue
+            let !artKey = el'AttrKey addr
+                !artVal =
+                  EL'RtValue
+                    ms
+                    rhExprSrc
+                    artStageVar
+                    Nothing
+            when (el'ctx'exporting eac) $
+              iopdInsert artKey artVal exps
+            el'Exit eas exit artVal
+          _ -> rtnParsed
+        else --
+        -- if "::" == opSym --
+        --   then -- annotation
+        --     undefined
+        --   else --
+          rtnParsed
+    --
 
     -- importing
     -- ImportExpr !argsRcvr !srcExpr !maybeInto ->
@@ -823,9 +843,9 @@ el'LoadTopApk !tops !argSenders !exit !eas = go [] [] argSenders
               go loadedArgs ((el'AttrKey addr, val) : loadedKwArgs) rest
             _ -> go loadedArgs ((el'AttrKey addr, val) : loadedKwArgs) rest
       -- TODO handle args unpacking
-      UnpackPosArgs !addr -> go loadedArgs loadedKwArgs rest
-      UnpackKwArgs !addr -> go loadedArgs loadedKwArgs rest
-      UnpackPkArgs !addr -> go loadedArgs loadedKwArgs rest
+      UnpackPosArgs _addr -> go loadedArgs loadedKwArgs rest
+      UnpackKwArgs _addr -> go loadedArgs loadedKwArgs rest
+      UnpackPkArgs _addr -> go loadedArgs loadedKwArgs rest
 
 el'LoadClass ::
   EL'LoadingTopLevels ->
