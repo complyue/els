@@ -87,6 +87,25 @@ data EL'ModuSlot = EL'ModuSlot
     el'modu'parsed :: !(TMVar (TMVar EL'ParsedModule)),
     el'modu'loaded :: !(TMVar (TMVar EL'LoadedModule)),
     el'modu'resolved :: !(TMVar (TMVar EL'ResolvedModule)),
+    -- | finalized exports from this module
+    --
+    -- CAVEAT: this won't be filled until all dependencies this module is
+    --         re-exporting are resolved, blindly waiting on this in case of
+    --         cyclic imports may cause deadlock, thus process killed by GHC
+    --         RTS once detected
+    el'modu'exports :: !(TMVar EL'Artifacts),
+    -- | the set of exports for this module will be updated respecting
+    -- re-exports from specific dependency modules, the latest known exports
+    -- will be broadcasted through this channel
+    --
+    -- usually you'd want to:
+    --    Right <$> tryReadTMVar (el'modu'exports ms)
+    --      `orElse`
+    --    Left <$> readTChan dupOfUpdChan
+    --
+    -- CAVEAT: dup the `TChan` to read it! it should always be a broadcast
+    --         channel, i.e. reading it directly will always `retry`
+    el'modu'exports'upd :: !(TChan EL'Artifacts),
     -- | other modules those should be invalidated once this module is changed
     --
     -- note a dependant may stop depending on this module due to src changes,
@@ -130,12 +149,6 @@ data EL'ResolvedModule = EL'ResolvedModule
   { -- | there will be nested scopes appearing in natural source order, within
     -- this root scope of the module
     el'resolved'scope :: !EL'Scope,
-    -- | TODO this useful?
-    -- el'modu'imports :: !EL'Artifacts,
-    -- | an attribute is exported by any form of assignment targeting
-    -- current scope, or any form of procedure declaration, which follows an
-    -- `export` keyword, or within a block following an `export` keyword
-    el'resolved'exports :: !EL'Artifacts,
     -- | diagnostics generated from this stage of analysis
     el'resolved'diags :: ![(SrcRange, Text)]
   }

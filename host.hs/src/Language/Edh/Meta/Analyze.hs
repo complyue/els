@@ -83,7 +83,6 @@ el'ResolveModule !exit !eas = el'RunTx eas $
                                     tryPutTMVar rmVar $
                                       EL'ResolvedModule
                                         (EL'Scope noSrcRange V.empty)
-                                        odEmpty
                                         [ (noSrcRange, "<no-load>")
                                         ]
                                   runEdhTx etsCatching $ rethrow nil
@@ -93,7 +92,6 @@ el'ResolveModule !exit !eas = el'RunTx eas $
                                       tryPutTMVar rmVar $
                                         EL'ResolvedModule
                                           (EL'Scope noSrcRange V.empty)
-                                          odEmpty
                                           [ (noSrcRange, exDesc)
                                           ]
                                     runEdhTx etsCatching $ recover nil
@@ -247,6 +245,8 @@ el'LocateModule !elw !moduFile !exit !ets =
             !parsed <- newEmptyTMVar
             !loaded <- newEmptyTMVar
             !resolved <- newEmptyTMVar
+            !exports <- newEmptyTMVar
+            !exps'upd <- newBroadcastTChan
             !dependants <- newTVar Map.empty
             !dependencies <- newTVar Map.empty
             let !ms =
@@ -257,6 +257,8 @@ el'LocateModule !elw !moduFile !exit !ets =
                     parsed
                     loaded
                     resolved
+                    exports
+                    exps'upd
                     dependants
                     dependencies
             putTMVar mmVar (Map.insert name ms mm)
