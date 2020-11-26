@@ -492,8 +492,8 @@ el'DoLoadModule (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
   let !tops = EL'LoadingTopLevels arts exts exps diags
   el'RunTx eas $
     el'LoadTopStmts
-      stmts
       tops
+      stmts
       $ \_ _eas -> do
         !arts' <- iopdSnapshot arts
         !exps' <- iopdSnapshot exps
@@ -513,30 +513,30 @@ data EL'LoadingTopLevels = EL'LoadingTopLevels
     el'loading'diags :: !(TVar [(SrcRange, Text)])
   }
 
-el'LoadTopStmts :: [StmtSrc] -> EL'LoadingTopLevels -> EL'Analysis EL'Value
-el'LoadTopStmts !stmts !tops !exit !eas = go stmts
+el'LoadTopStmts :: EL'LoadingTopLevels -> [StmtSrc] -> EL'Analysis EL'Value
+el'LoadTopStmts !tops !stmts !exit !eas = go stmts
   where
     go :: [StmtSrc] -> STM ()
     go [] = el'Exit eas exit $ EL'RtConst nil
     go (stmt : rest) = el'RunTx eas $
-      el'LoadTopStmt stmt tops $ \ !val _eas' -> case rest of
+      el'LoadTopStmt tops stmt $ \ !val _eas' -> case rest of
         [] -> el'Exit eas exit val
         _ -> go rest
 
-el'LoadTopStmt :: StmtSrc -> EL'LoadingTopLevels -> EL'Analysis EL'Value
+el'LoadTopStmt :: EL'LoadingTopLevels -> StmtSrc -> EL'Analysis EL'Value
 el'LoadTopStmt
-  (StmtSrc !stmt !stmt'span)
   tops@(EL'LoadingTopLevels _arts !exts _exps !diags)
+  (StmtSrc !stmt !stmt'span)
   !exit
   !eas = case stmt of
     ExprStmt !expr _docCmt ->
       el'RunTx eas $
-        el'LoadTopExpr (ExprSrc expr stmt'span) tops exit
+        el'LoadTopExpr tops (ExprSrc expr stmt'span) exit
     LetStmt _argsRcvr _argsSndr -> do
       -- TODO recognize defines & exports
       el'Exit eas exit $ EL'RtConst nil
     ExtendsStmt !superExpr -> el'RunTx eas $
-      el'LoadTopExpr superExpr tops $ \ !superVal _eas -> do
+      el'LoadTopExpr tops superExpr $ \ !superVal _eas -> do
         case superVal of
           EL'ArgsPack !supers !kwargs
             | odNull kwargs ->
@@ -550,42 +550,42 @@ el'LoadTopStmt
     -- EffectStmt !effs !docCmt -> undefined
     _ -> el'Exit eas exit $ EL'RtConst nil
 
-el'LoadTopExpr :: ExprSrc -> EL'LoadingTopLevels -> EL'Analysis EL'Value
+el'LoadTopExpr :: EL'LoadingTopLevels -> ExprSrc -> EL'Analysis EL'Value
 el'LoadTopExpr
-  xsrc@(ExprSrc !expr _expr'span)
   tops@(EL'LoadingTopLevels !arts !exts !exps !diags)
+  xsrc@(ExprSrc !expr _expr'span)
   !exit
   eas@(EL'AnalysisState _elw !eac !ets) = case expr of
     ExportExpr !expr' ->
       el'RunTx eas {el'context = (el'context eas) {el'ctx'exporting = True}} $
-        el'LoadTopExpr expr' tops exit
+        el'LoadTopExpr tops expr' exit
     AtoIsoExpr !expr' ->
-      el'RunTx eas $ el'LoadTopExpr expr' tops exit
+      el'RunTx eas $ el'LoadTopExpr tops expr' exit
     ParenExpr !expr' ->
-      el'RunTx eas $ el'LoadTopExpr expr' tops exit
+      el'RunTx eas $ el'LoadTopExpr tops expr' exit
     ArgsPackExpr !argSenders ->
       -- XXX
       undefined
     BlockExpr !stmts ->
-      el'RunTx eas $ el'LoadTopStmts stmts tops exit
+      el'RunTx eas $ el'LoadTopStmts tops stmts exit
     IfExpr !cond !cseq !alt ->
       el'RunTx eas $
-        el'LoadTopExpr cond tops $ \ !val _eas -> case val of
+        el'LoadTopExpr tops cond $ \ !val _eas -> case val of
           EL'RtConst !constVal -> edhValueNull ets constVal $ \case
-            False -> el'RunTx eas $ el'LoadTopStmt cseq tops exit
+            False -> el'RunTx eas $ el'LoadTopStmt tops cseq exit
             True -> el'RunTx eas $ case alt of
               Nothing -> el'ExitTx exit $ EL'RtConst nil
-              Just !elseStmt -> el'LoadTopStmt elseStmt tops exit
+              Just !elseStmt -> el'LoadTopStmt tops elseStmt exit
           _ -> el'RunTx eas $
-            el'LoadTopStmt cseq tops $ \_ -> case alt of
+            el'LoadTopStmt tops cseq $ \_ -> case alt of
               Nothing -> \_eas -> rtnParsed {- HLINT ignore "Use const" -}
-              Just !elseStmt -> el'LoadTopStmt elseStmt tops $
+              Just !elseStmt -> el'LoadTopStmt tops elseStmt $
                 \_ _eas -> rtnParsed
     ClassExpr HostDecl {} -> error "bug: host class declaration"
     ClassExpr
       (ProcDecl !nameAddr !argsRcvr !pbody !proc'loc) ->
         el'RunTx eas $
-          el'LoadClass pbody tops $ \(!supers, !clsArts, !clsExps) _eas -> do
+          el'LoadClass tops pbody $ \(!supers, !clsArts, !clsExps) _eas -> do
             let !clsKey = el'AttrKey nameAddr
                 !clsStage = EL'LoadedClass clsKey supers clsArts clsExps
             !vstage <- newTVar clsStage
@@ -621,10 +621,10 @@ el'LoadTopExpr
         el'Exit eas exit $ EL'RtValue (el'ctx'module eac) xsrc vstage Nothing
 
 el'LoadClass ::
-  StmtSrc ->
   EL'LoadingTopLevels ->
+  StmtSrc ->
   EL'Analysis ([EL'Value], EL'Artifacts, EL'Artifacts)
-el'LoadClass !pbody !tops !exit !eas = do
+el'LoadClass !tops !pbody !exit !eas = do
   !arts <- iopdEmpty
   !exts <- newTVar []
   !exps <- iopdEmpty
@@ -638,12 +638,12 @@ el'LoadClass !pbody !tops !exit !eas = do
             }
       }
     $ el'LoadTopStmts
-      [pbody]
       tops
         { el'loading'arts = arts,
           el'loading'exts = exts,
           el'loading'exports = exps
         }
+      [pbody]
       $ \_ _eas -> do
         !arts' <- iopdSnapshot arts
         !exts' <- readTVar exts
