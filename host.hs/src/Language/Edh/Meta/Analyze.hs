@@ -491,7 +491,7 @@ el'DoLoadModule (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
   !exts <- newTVar []
   !exps <- iopdEmpty
   !diags <- newTVar []
-  let !tops = EL'LoadingTopLevels arts exts exps diags
+  let !tops = EL'TopLevels arts exts exps diags
   el'RunTx eas $
     el'LoadTopStmts
       tops
@@ -504,18 +504,7 @@ el'DoLoadModule (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
         void $ tryPutTMVar lmVar loaded
         el'Exit eas exit ()
 
-data EL'LoadingTopLevels = EL'LoadingTopLevels
-  { -- | toplevel artifacts defined
-    el'loading'arts :: !(IOPD EL'AttrKey EL'Value),
-    -- | all `extends` (i.e. super objects) appeared at toplevel
-    el'loading'exts :: !(TVar [EL'Value]),
-    -- | exported artifacts at toplevel
-    el'loading'exports :: !(IOPD EL'AttrKey EL'Value),
-    -- | diagnostics generated during loading
-    el'loading'diags :: !(TVar [(SrcRange, Text)])
-  }
-
-el'LoadTopStmts :: EL'LoadingTopLevels -> [StmtSrc] -> EL'Analysis EL'Value
+el'LoadTopStmts :: EL'TopLevels -> [StmtSrc] -> EL'Analysis EL'Value
 el'LoadTopStmts !tops !stmts !exit !eas = go stmts
   where
     go :: [StmtSrc] -> STM ()
@@ -525,9 +514,9 @@ el'LoadTopStmts !tops !stmts !exit !eas = go stmts
         [] -> el'Exit eas exit val
         _ -> go rest
 
-el'LoadTopStmt :: EL'LoadingTopLevels -> StmtSrc -> EL'Analysis EL'Value
+el'LoadTopStmt :: EL'TopLevels -> StmtSrc -> EL'Analysis EL'Value
 el'LoadTopStmt
-  tops@(EL'LoadingTopLevels _arts !exts _exps !diags)
+  tops@(EL'TopLevels _arts !exts _exps !diags)
   (StmtSrc !stmt !stmt'span)
   !exit
   !eas = case stmt of
@@ -553,9 +542,9 @@ el'LoadTopStmt
     -- EffectStmt !effs !docCmt -> undefined
     _ -> el'Exit eas exit $ EL'Const nil
 
-el'LoadTopExpr :: EL'LoadingTopLevels -> ExprSrc -> EL'Analysis EL'Value
+el'LoadTopExpr :: EL'TopLevels -> ExprSrc -> EL'Analysis EL'Value
 el'LoadTopExpr
-  tops@(EL'LoadingTopLevels _arts _exts !exps !diags)
+  tops@(EL'TopLevels _arts _exts !exps !diags)
   xsrc@(ExprSrc !expr _expr'span)
   !exit
   eas@(EL'AnalysisState _elw !eac !ets) = case expr of
@@ -809,7 +798,7 @@ el'LoadTopExpr
               !e <- entry addr
               go (e : entries) rest
 
-el'LoadTopApk :: EL'LoadingTopLevels -> ArgsPacker -> EL'Analysis EL'ArgsPack
+el'LoadTopApk :: EL'TopLevels -> ArgsPacker -> EL'Analysis EL'ArgsPack
 el'LoadTopApk !tops !argSenders !exit !eas = go [] [] argSenders
   where
     !eac = el'context eas
@@ -850,7 +839,7 @@ el'LoadTopApk !tops !argSenders !exit !eas = go [] [] argSenders
       UnpackPkArgs _addr -> go loadedArgs loadedKwArgs rest
 
 el'LoadClass ::
-  EL'LoadingTopLevels ->
+  EL'TopLevels ->
   StmtSrc ->
   EL'Analysis ([EL'Value], EL'Artifacts, EL'Artifacts)
 el'LoadClass !tops !pbody !exit !eas = do
@@ -868,9 +857,9 @@ el'LoadClass !tops !pbody !exit !eas = do
       }
     $ el'LoadTopStmts
       tops
-        { el'loading'arts = arts,
-          el'loading'exts = exts,
-          el'loading'exports = exps
+        { el'top'arts = arts,
+          el'top'exts = exts,
+          el'top'exps = exps
         }
       [pbody]
       $ \_ _eas -> do

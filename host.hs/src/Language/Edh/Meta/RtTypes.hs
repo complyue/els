@@ -1,6 +1,7 @@
 module Language.Edh.Meta.RtTypes where
 
 import Control.Concurrent.STM
+import Data.Text (Text)
 import Data.Vector (Vector)
 import Language.Edh.EHI
 import Language.Edh.Meta.Model
@@ -60,3 +61,14 @@ el'ExitTx !exit !a !eas = exit a eas
 el'Exit :: EL'AnalysisState -> EL'TxExit a -> a -> STM ()
 el'Exit !eas !exit !a = exit a eas
 {-# INLINE el'Exit #-}
+
+data EL'TopLevels = EL'TopLevels
+  { -- | toplevel artifacts defined
+    el'top'arts :: !(IOPD EL'AttrKey EL'Value),
+    -- | all `extends` (i.e. super objects) appeared at toplevel
+    el'top'exts :: !(TVar [EL'Value]),
+    -- | exported artifacts at toplevel
+    el'top'exps :: !(IOPD EL'AttrKey EL'Value),
+    -- | diagnostics generated during analyzing
+    el'top'diags :: !(TVar [(SrcRange, Text)])
+  }
