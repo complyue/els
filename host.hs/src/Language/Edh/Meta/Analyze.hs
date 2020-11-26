@@ -542,6 +542,7 @@ el'LoadTopStmt
             | odNull kwargs ->
               modifyTVar' exts (++ supers)
           EL'RtValue {} ->
+            -- TODO validate it really be an object
             modifyTVar' exts (++ [superVal])
           -- TODO elaborate the error msg
           _ -> modifyTVar' diags ((stmt'span, "invalid super") :)
@@ -564,8 +565,8 @@ el'LoadTopExpr
     ParenExpr !expr' ->
       el'RunTx eas $ el'LoadTopExpr tops expr' exit
     ArgsPackExpr !argSenders ->
-      -- XXX
-      undefined
+      el'RunTx eas $
+        el'LoadTopApk tops argSenders exit
     BlockExpr !stmts ->
       el'RunTx eas $ el'LoadTopStmts tops stmts exit
     IfExpr !cond !cseq !alt ->
@@ -581,6 +582,16 @@ el'LoadTopExpr
               Nothing -> \_eas -> rtnParsed {- HLINT ignore "Use const" -}
               Just !elseStmt -> el'LoadTopStmt tops elseStmt $
                 \_ _eas -> rtnParsed
+    MethodExpr HostDecl {} -> error "bug: host method declaration"
+    MethodExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    GeneratorExpr HostDecl {} -> error "bug: host method declaration"
+    GeneratorExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    InterpreterExpr HostDecl {} -> error "bug: host method declaration"
+    InterpreterExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    ProducerExpr HostDecl {} -> error "bug: host method declaration"
+    ProducerExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
+    OpDefiExpr !opFixity !opPrec !opSym !opProc -> undefined
+    OpOvrdExpr !opFixity !opPrec !opSym !opProc -> undefined
     ClassExpr HostDecl {} -> error "bug: host class declaration"
     ClassExpr
       (ProcDecl !nameAddr !argsRcvr !pbody !proc'loc) ->
@@ -598,27 +609,62 @@ el'LoadTopExpr
       (ProcDecl !nameAddr _ (StmtSrc !body'stmt _) !proc'loc)
       !argsSndr ->
         undefined
-    MethodExpr HostDecl {} -> error "bug: host method declaration"
-    MethodExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
-    GeneratorExpr HostDecl {} -> error "bug: host method declaration"
-    GeneratorExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
-    InterpreterExpr HostDecl {} -> error "bug: host method declaration"
-    InterpreterExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
-    ProducerExpr HostDecl {} -> error "bug: host method declaration"
-    ProducerExpr pd@(ProcDecl (AttrAddrSrc !addr _) _ _ _) -> undefined
-    OpDefiExpr !opFixity !opPrec !opSym !opProc -> undefined
-    OpOvrdExpr !opFixity !opPrec !opSym !opProc -> undefined
-    ImportExpr !argsRcvr !srcExpr !maybeInto -> undefined
-    CallExpr !calleeExpr !argsSndr -> undefined
+    InfixExpr !opSym !lhExpr !rhExpr ->
+      -- TODO handle operators do assignment i.e. (=), also (:=), and other
+      -- assignment-likes (+=) (-=) ...
+      undefined
+    ImportExpr !argsRcvr !srcExpr !maybeInto ->
+      -- TODO feasible to load re-exports?
+      undefined
     -- TODO recognize more exprs
-    -- InfixExpr !opSym !lhExpr !rhExpr -> undefined
     -- CaseExpr !tgtExpr !branchesExpr -> undefined
     -- ForExpr !argsRcvr !iterExpr !doStmt -> undefined
+    -- CallExpr !calleeExpr !argsSndr -> undefined
     _ -> rtnParsed
     where
       rtnParsed = do
         !vstage <- newTVar EL'ParsedValue
         el'Exit eas exit $ EL'RtValue (el'ctx'module eac) xsrc vstage Nothing
+
+el'LoadTopApk :: EL'LoadingTopLevels -> ArgsPacker -> EL'Analysis EL'Value
+el'LoadTopApk !tops !argSenders !exit !eas = go [] [] argSenders
+  where
+    !eac = el'context eas
+    !easApk =
+      eas
+        { el'context =
+            eac
+              { el'ctx'pure = True,
+                el'ctx'exporting = False,
+                el'ctx'eff'defining = False
+              }
+        }
+    go ::
+      [EL'Value] ->
+      [(EL'AttrKey, EL'Value)] ->
+      [ArgSender] ->
+      STM ()
+    go !loadedArgs !loadedKwArgs [] =
+      el'Exit eas exit $
+        EL'ArgsPack (reverse loadedArgs) (odFromList $ reverse loadedKwArgs)
+    go !loadedArgs !loadedKwArgs (argSender : rest) = case argSender of
+      SendPosArg !expr -> el'RunTx easApk $
+        el'LoadTopExpr tops expr $
+          \ !val _eas -> case val of
+            -- todo special treatment?
+            EL'RtConst {} -> go (val : loadedArgs) loadedKwArgs rest
+            _ -> go (val : loadedArgs) loadedKwArgs rest
+      SendKwArg !addr !expr -> el'RunTx easApk $
+        el'LoadTopExpr tops expr $
+          \ !val _eas -> case val of
+            EL'RtConst {} ->
+              -- todo special treatment?
+              go loadedArgs ((el'AttrKey addr, val) : loadedKwArgs) rest
+            _ -> go loadedArgs ((el'AttrKey addr, val) : loadedKwArgs) rest
+      -- TODO handle args unpacking
+      UnpackPosArgs !addr -> go loadedArgs loadedKwArgs rest
+      UnpackKwArgs !addr -> go loadedArgs loadedKwArgs rest
+      UnpackPkArgs !addr -> go loadedArgs loadedKwArgs rest
 
 el'LoadClass ::
   EL'LoadingTopLevels ->
