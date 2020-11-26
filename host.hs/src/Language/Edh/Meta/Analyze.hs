@@ -485,7 +485,7 @@ el'DoParseModule !pmVar !exit eas@(EL'AnalysisState _elw !eac !ets) =
 
 el'DoLoadModule :: EL'ParsedModule -> TMVar EL'LoadedModule -> EL'Analysis ()
 el'DoLoadModule (EL'ParsedModule !stmts _parse'diags) !lmVar !exit !eas = do
-  !arts <- iopdEmpty
+  !arts <- iopdEmpty {- HLINT ignore "Reduce duplication" -}
   !exts <- newTVar []
   !exps <- iopdEmpty
   !diags <- newTVar []
@@ -526,13 +526,13 @@ el'LoadTopStmts !stmts !tops !exit !eas = go stmts
 el'LoadTopStmt :: StmtSrc -> EL'LoadingTopLevels -> EL'Analysis EL'Value
 el'LoadTopStmt
   (StmtSrc !stmt !stmt'span)
-  tops@(EL'LoadingTopLevels !arts !exts !exps !diags)
+  tops@(EL'LoadingTopLevels _arts !exts _exps !diags)
   !exit
-  eas@(EL'AnalysisState !elw !eac !ets) = case stmt of
+  !eas = case stmt of
     ExprStmt !expr _docCmt ->
       el'RunTx eas $
         el'LoadTopExpr (ExprSrc expr stmt'span) tops exit
-    LetStmt !argsRcvr !argsSndr -> do
+    LetStmt _argsRcvr _argsSndr -> do
       -- TODO recognize defines & exports
       el'Exit eas exit $ EL'RtConst nil
     ExtendsStmt !superExpr -> el'RunTx eas $
@@ -552,10 +552,10 @@ el'LoadTopStmt
 
 el'LoadTopExpr :: ExprSrc -> EL'LoadingTopLevels -> EL'Analysis EL'Value
 el'LoadTopExpr
-  xsrc@(ExprSrc !expr !expr'span)
+  xsrc@(ExprSrc !expr _expr'span)
   tops@(EL'LoadingTopLevels !arts !exts !exps !diags)
   !exit
-  eas@(EL'AnalysisState !elw !eac !ets) = case expr of
+  eas@(EL'AnalysisState _elw !eac !ets) = case expr of
     ExportExpr !expr' ->
       el'RunTx eas {el'context = (el'context eas) {el'ctx'exporting = True}} $
         el'LoadTopExpr expr' tops exit
@@ -653,18 +653,16 @@ el'LoadClass !pbody !tops !exit !eas = do
     eac = el'context eas
 
 el'DoResolveModule ::
-  EL'ModuSlot ->
   EL'ParsedModule ->
   EL'LoadedModule ->
   TMVar EL'ResolvedModule ->
   EL'Analysis ()
 el'DoResolveModule
-  !ms
-  (EL'ParsedModule !stmts _parse'diags)
-  (EL'LoadedModule !arts !exps _load'diags)
+  (EL'ParsedModule _stmts _parse'diags)
+  (EL'LoadedModule _loaded'arts _loaded'exps _load'diags)
   !lmVar
   !exit
-  eas@(EL'AnalysisState !elw !eac !ets) = do
+  !eas = do
     let !resolved = undefined -- XXX
     void $ tryPutTMVar lmVar resolved
     el'Exit eas exit ()

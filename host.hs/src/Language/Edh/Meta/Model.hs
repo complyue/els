@@ -10,7 +10,6 @@ import Data.Text (Text)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Language.Edh.EHI
-import Language.Edh.RtTypes
 import Prelude
 
 data EL'Home = EL'Home
