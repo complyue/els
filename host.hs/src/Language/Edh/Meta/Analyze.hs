@@ -547,7 +547,7 @@ el'LoadTopExpr
   !exit
   eas@(EL'AnalysisState _elw !eac !ets) = case expr of
     ExportExpr !expr' ->
-      el'RunTx eas {el'context = (el'context eas) {el'ctx'exporting = True}} $
+      el'RunTx eas {el'context = eac {el'ctx'exporting = True}} $
         el'LoadTopExpr tops expr' exit
     AtoIsoExpr !expr' ->
       el'RunTx eas $ el'LoadTopExpr tops expr' exit
@@ -917,9 +917,9 @@ el'AnalyzeStmts !stmts !exit !eas = go stmts
 
 el'AnalyzeStmt :: StmtSrc -> EL'Analysis EL'Value
 el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
-  -- ExprStmt !expr _docCmt ->
-  --   el'RunTx eas $
-  --     el'AnalyzeExpr (ExprSrc expr stmt'span) exit
+  ExprStmt !expr _docCmt ->
+    el'RunTx eas $
+      el'AnalyzeExpr (ExprSrc expr stmt'span) exit
   -- LetStmt _argsRcvr _argsSndr -> do
   --   -- TODO recognize defines & exports
   --   el'Exit eas exit $ EL'Const nil
@@ -928,9 +928,50 @@ el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
       [] -> modifyTVar' diags ((stmt'span, "extends from module") :)
       _ -> return ()
     el'Exit eas exit $ EL'Const nil
+  EffectStmt !effs _docCmt ->
+    el'RunTx eas {el'context = eac {el'ctx'eff'defining = True}} $
+      el'AnalyzeExpr effs $ \_ -> el'ExitTx exit $ EL'Const nil
+  --
+
   -- TODO recognize more stmts
-  -- EffectStmt !effs !docCmt -> undefined
   _ -> el'Exit eas exit $ EL'Const nil
   where
     !eac = el'context eas
     diags = el'scope'diags'wip $ el'ctx'scope eac
+
+el'AnalyzeExpr :: ExprSrc -> EL'Analysis EL'Value
+el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
+  ExportExpr !expr' ->
+    el'RunTx eas {el'context = eac {el'ctx'exporting = True}} $
+      el'AnalyzeExpr expr' exit
+  --
+
+  -- importing
+  ImportExpr !argsRcvr impSpec@(ExprSrc !specExpr spec'span) !maybeInto ->
+    case maybeInto of
+      Just !intoExpr ->
+        rtnParsed -- TODO handle re-targeted import
+      Nothing -> case specExpr of
+        LitExpr (StringLiteral !impSpec) -> undefined
+        AttrExpr {} ->
+          el'RunTx eas $ -- obj import
+            el'AnalyzeExpr impSpec $ \ !impFromVal -> do
+              -- TODO validate it is object type, import from it
+              el'ExitTx exit impFromVal
+        _ -> do
+          modifyTVar' diags ((spec'span, "bad import spec") :)
+          el'Exit eas exit $ EL'Const nil
+  --
+
+  -- TODO recognize more exprs
+  -- CaseExpr !tgtExpr !branchesExpr -> undefined
+  -- ForExpr !argsRcvr !iterExpr !doStmt -> undefined
+  -- CallExpr !calleeExpr !argsSndr -> undefined
+  _ -> rtnParsed
+  where
+    !eac = el'context eas
+    diags = el'scope'diags'wip $ el'ctx'scope eac
+    !ms = el'ctx'module eac
+    rtnParsed = do
+      !vstage <- newTVar EL'ParsedValue
+      el'Exit eas exit $ EL'Value ms xsrc vstage Nothing
