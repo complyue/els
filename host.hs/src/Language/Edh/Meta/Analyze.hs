@@ -952,7 +952,21 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
       Just !intoExpr ->
         rtnParsed -- TODO handle re-targeted import
       Nothing -> case specExpr of
-        LitExpr (StringLiteral !impSpec) -> undefined
+        LitExpr (StringLiteral !litSpec) -> el'RunTx eas $
+          el'LocateImportee litSpec $ \ !impResult _eas -> case impResult of
+            Left !err -> do
+              modifyTVar' diags ((spec'span, err) :)
+              el'Exit eas exit $ EL'Const nil
+            Right !msFrom -> el'RunTx
+              eas
+                { el'context = eac {el'ctx'module = msFrom}
+                }
+              $ el'ResolveModule $ \_resolvedImportee _eas ->
+                tryReadTMVar (el'modu'exports msFrom) >>= \case
+                  Just !expsFrom ->
+                    undefined -- TODO importee already resolved
+                  Nothing ->
+                    undefined -- TODO importee not resolved yet
         AttrExpr {} ->
           el'RunTx eas $ -- obj import
             el'AnalyzeExpr impSpec $ \ !impFromVal -> do
