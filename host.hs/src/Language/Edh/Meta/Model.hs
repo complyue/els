@@ -193,26 +193,26 @@ data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict EL'AttrKey EL'Value)
 data EL'Value
   = -- | runtime constant i.e. decidable at analysis time
     EL'Const !EdhValue
-  | -- | apk not fully decidable at analysis time
+  | -- | apk at analysis time
+    -- TODO should an apk with every element decidable to be an `EL'Const` ?
     EL'Apk !EL'ArgsPack
-  | -- | runtime value whose reification can not be decided at analysis time
+  | -- | runtime value with info gradually decided at analysis time
     EL'Value
-      { -- | the original module defined this value
+      { -- | the original module defines this value
         el'origin'module :: !EL'ModuSlot,
-        -- | TODO will this be useful ?
-        -- el'origin'eff'span :: !SrcRange,
-        -- | the src expression creating this value
-        el'value'src :: !ExprSrc,
         -- | staged result however this value is decided
         el'value'stage :: !(TVar EL'ValStage),
-        -- type if possibly decidable at analysis time
+        -- value type if possibly decidable at analysis time
         el'value'type :: !(Maybe EdhTypeValue)
       }
 
 data EL'ValStage
-  = EL'ParsedValue
-  | EL'AnnotatedValue !EL'Value
-  | EL'LoadedClass
+  = -- | a value from an expression
+    EL'ExpressedValue !ExprSrc
+  | -- | a value defined to an addresssor key, with possibly annotated type
+    EL'DefinedValue !EL'AttrKey !(Maybe EL'Value)
+  | -- | a class with all info known per the loading stage
+    EL'LoadedClass
       { el'class'loaded'name :: EL'AttrKey,
         -- | supers
         el'class'loaded'supers :: ![EL'Value],
@@ -221,7 +221,8 @@ data EL'ValStage
         -- | member artifacts
         el'class'loaded'exports :: !EL'Artifacts
       }
-  | EL'ResolvedClass
+  | -- | a class with all info known per the resolving stage
+    EL'ResolvedClass
       { el'class'resolved'name :: EL'AttrKey,
         -- | mro
         el'class'resolved'mro :: ![EL'Value],
@@ -232,14 +233,16 @@ data EL'ValStage
         -- `export` keyword, or within a block following an `export` keyword
         el'class'resolved'exports :: !EL'Artifacts
       }
-  | EL'LoadedObject
+  | -- | an object with all info known per the loading stage
+    EL'LoadedObject
       { -- | the class of this object instance
         -- TODO use some other, more proper type for this field ?
         el'obj'loaded'class :: !EL'Value,
         -- | loaded super instances
         el'obj'loaded'supers :: ![EL'Value]
       }
-  | EL'ResolvedObject
+  | -- | an object with all info known per the resolving stage
+    EL'ResolvedObject
       { -- | the class of this object instance
         -- TODO use some other, more proper type for this field ?
         el'obj'resolved'class :: !EL'Value,

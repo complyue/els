@@ -211,11 +211,21 @@ el'LocateModule !elw !moduFile !exit !ets =
             Right (Left (!homePath, !scriptName, !relPath, !absFile)) ->
               atomically (prepareHome homePath)
                 -- with 2 separate STM txs
-                >>= atomically . goWith scriptName relPath absFile el'home'scripts
+                >>= atomically
+                  . goWith
+                    scriptName
+                    relPath
+                    absFile
+                    el'home'scripts
             Right (Right (!homePath, !moduName, !relPath, !absFile)) ->
               atomically (prepareHome homePath)
                 -- with 2 separate STM txs
-                >>= atomically . goWith moduName relPath absFile el'home'modules
+                >>= atomically
+                  . goWith
+                    moduName
+                    relPath
+                    absFile
+                    el'home'modules
   where
     goWith ::
       Text ->
@@ -576,12 +586,11 @@ el'LoadTopExpr
     -- procedure definitions
     MethodExpr HostDecl {} -> error "bug: host method declaration"
     MethodExpr (ProcDecl !nameAddr _ _ _) -> do
-      !mthStageVar <- newTVar EL'ParsedValue
+      !mthStageVar <- newTVar $ EL'ExpressedValue xsrc
       let !mthKey = el'AttrKey nameAddr
           !mthVal =
             EL'Value
               ms
-              xsrc
               mthStageVar
               (Just MethodType)
       when (el'ctx'exporting eac) $
@@ -589,12 +598,11 @@ el'LoadTopExpr
       el'Exit eas exit mthVal
     GeneratorExpr HostDecl {} -> error "bug: host method declaration"
     GeneratorExpr (ProcDecl !nameAddr _ _ _) -> do
-      !mthStageVar <- newTVar EL'ParsedValue
+      !mthStageVar <- newTVar $ EL'ExpressedValue xsrc
       let !mthKey = el'AttrKey nameAddr
           !mthVal =
             EL'Value
               ms
-              xsrc
               mthStageVar
               (Just GeneratorType)
       when (el'ctx'exporting eac) $
@@ -602,12 +610,11 @@ el'LoadTopExpr
       el'Exit eas exit mthVal
     InterpreterExpr HostDecl {} -> error "bug: host method declaration"
     InterpreterExpr (ProcDecl !nameAddr _ _ _) -> do
-      !mthStageVar <- newTVar EL'ParsedValue
+      !mthStageVar <- newTVar $ EL'ExpressedValue xsrc
       let !mthKey = el'AttrKey nameAddr
           !mthVal =
             EL'Value
               ms
-              xsrc
               mthStageVar
               (Just InterpreterType)
       when (el'ctx'exporting eac) $
@@ -615,36 +622,33 @@ el'LoadTopExpr
       el'Exit eas exit mthVal
     ProducerExpr HostDecl {} -> error "bug: host method declaration"
     ProducerExpr (ProcDecl !nameAddr _ _ _) -> do
-      !mthStageVar <- newTVar EL'ParsedValue
+      !mthStageVar <- newTVar $ EL'ExpressedValue xsrc
       let !mthKey = el'AttrKey nameAddr
           !mthVal =
             EL'Value
               ms
-              xsrc
               mthStageVar
               (Just ProducerType)
       when (el'ctx'exporting eac) $
         iopdInsert mthKey mthVal exps
       el'Exit eas exit mthVal
     OpDefiExpr _opFixity _opPrec _opSym (ProcDecl !opAddr _ _ _) -> do
-      !opStageVar <- newTVar EL'ParsedValue
+      !opStageVar <- newTVar $ EL'ExpressedValue xsrc
       let !opKey = el'AttrKey opAddr
           !opVal =
             EL'Value
               ms
-              xsrc
               opStageVar
               (Just OperatorType)
       when (el'ctx'exporting eac) $
         iopdInsert opKey opVal exps
       el'Exit eas exit opVal
     OpOvrdExpr _opFixity _opPrec _opSym (ProcDecl !opAddr _ _ _) -> do
-      !opStageVar <- newTVar EL'ParsedValue
+      !opStageVar <- newTVar $ EL'ExpressedValue xsrc
       let !opKey = el'AttrKey opAddr
           !opVal =
             EL'Value
               ms
-              xsrc
               opStageVar
               (Just OperatorType)
       when (el'ctx'exporting eac) $
@@ -654,16 +658,17 @@ el'LoadTopExpr
 
     -- class definition
     ClassExpr HostDecl {} -> error "bug: host class declaration"
-    ClassExpr (ProcDecl !nameAddr !argsRcvr !pbody _proc'loc) -> case argsRcvr of
-      -- a normal class
-      WildReceiver -> loadClass nameAddr odEmpty odEmpty pbody
-      -- a data class (ADT)
-      PackReceiver !ars -> do
-        !dfArts <- recvDataClassFields ars
-        loadClass nameAddr odEmpty dfArts pbody
-      SingleReceiver !ar -> do
-        !dfArts <- recvDataClassFields [ar]
-        loadClass nameAddr odEmpty dfArts pbody
+    ClassExpr (ProcDecl !nameAddr !argsRcvr !pbody _proc'loc) ->
+      case argsRcvr of
+        -- a normal class
+        WildReceiver -> loadClass nameAddr odEmpty odEmpty pbody
+        -- a data class (ADT)
+        PackReceiver !ars -> do
+          !dfArts <- recvDataClassFields ars
+          loadClass nameAddr odEmpty dfArts pbody
+        SingleReceiver !ar -> do
+          !dfArts <- recvDataClassFields [ar]
+          loadClass nameAddr odEmpty dfArts pbody
 
     -- namespace definition
     NamespaceExpr HostDecl {} _ -> error "bug: host ns declaration"
@@ -688,10 +693,10 @@ el'LoadTopExpr
                     )
                     clsExps
             !clsStageVar <- newTVar clsStage
-            let !clsVal = EL'Value ms xsrc clsStageVar Nothing
+            let !clsVal = EL'Value ms clsStageVar Nothing
                 !nsoStage = EL'LoadedObject clsVal supers
             !nsoStageVar <- newTVar nsoStage
-            let !nsoVal = EL'Value ms xsrc nsoStageVar Nothing
+            let !nsoVal = EL'Value ms nsoStageVar Nothing
             when (el'ctx'exporting eac) $
               iopdInsert clsKey nsoVal exps
             el'Exit eas exit nsoVal
@@ -702,12 +707,11 @@ el'LoadTopExpr
         then -- handle operators do assignment i.e. (=), also (:=), and other
         case lhExpr of -- assignment-likes (+=) (-=) ...
           AttrExpr (DirectRef !addr) -> do
-            !artStageVar <- newTVar EL'ParsedValue
+            !artStageVar <- newTVar $ EL'ExpressedValue rhExprSrc
             let !artKey = el'AttrKey addr
                 !artVal =
                   EL'Value
                     ms
-                    rhExprSrc
                     artStageVar
                     Nothing
             when (el'ctx'exporting eac) $
@@ -735,8 +739,8 @@ el'LoadTopExpr
     where
       !ms = el'ctx'module eac
       rtnParsed = do
-        !vstage <- newTVar EL'ParsedValue
-        el'Exit eas exit $ EL'Value ms xsrc vstage Nothing
+        !vstage <- newTVar $ EL'ExpressedValue xsrc
+        el'Exit eas exit $ EL'Value ms vstage Nothing
 
       loadClass ::
         AttrAddrSrc ->
@@ -756,7 +760,7 @@ el'LoadTopExpr
                   )
                   clsExps
           !clsStageVar <- newTVar clsStage
-          let !clsVal = EL'Value ms xsrc clsStageVar Nothing
+          let !clsVal = EL'Value ms clsStageVar Nothing
           when (el'ctx'exporting eac) $
             iopdInsert clsKey clsVal exps
           el'Exit eas exit clsVal
@@ -766,12 +770,14 @@ el'LoadTopExpr
         where
           entry :: AttrAddrSrc -> STM (EL'AttrKey, EL'Value)
           entry addr@(AttrAddrSrc _ !addr'span) = do
-            !vstage <- newTVar EL'ParsedValue
+            !vstage <-
+              newTVar $
+                EL'ExpressedValue
+                  (ExprSrc (AttrExpr (DirectRef addr)) addr'span)
             return
               ( el'AttrKey addr,
                 EL'Value
                   ms
-                  (ExprSrc (AttrExpr (DirectRef addr)) addr'span)
                   vstage
                   Nothing
               )
@@ -987,5 +993,5 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
     diags = el'scope'diags'wip $ el'ctx'scope eac
     !ms = el'ctx'module eac
     rtnParsed = do
-      !vstage <- newTVar EL'ParsedValue
-      el'Exit eas exit $ EL'Value ms xsrc vstage Nothing
+      !vstage <- newTVar $ EL'ExpressedValue xsrc
+      el'Exit eas exit $ EL'Value ms vstage Nothing
