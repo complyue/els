@@ -80,7 +80,13 @@ el'ResolveModule !exit !eas = el'RunTx eas $
                                 void $ -- in case it's not filled
                                   tryPutTMVar rmVar $
                                     EL'ResolvedModule
-                                      (EL'Scope noSrcRange V.empty)
+                                      ( EL'Scope
+                                          noSrcRange
+                                          V.empty
+                                          odEmpty
+                                          odEmpty
+                                          odEmpty
+                                      )
                                       [ (noSrcRange, "<no-load>")
                                       ]
                                 runEdhTx etsCatching $ rethrow nil
@@ -89,7 +95,13 @@ el'ResolveModule !exit !eas = el'RunTx eas $
                                   void $ -- in case it's not filled
                                     tryPutTMVar rmVar $
                                       EL'ResolvedModule
-                                        (EL'Scope noSrcRange V.empty)
+                                        ( EL'Scope
+                                            noSrcRange
+                                            V.empty
+                                            odEmpty
+                                            odEmpty
+                                            odEmpty
+                                        )
                                         [ (noSrcRange, exDesc)
                                         ]
                                   runEdhTx etsCatching $ recover nil
@@ -888,22 +900,23 @@ el'DoResolveModule
         let !swip = el'ctx'scope eac
         !secs <- readTVar $ el'scope'secs'wip swip
         !region'end <- readTVar $ el'region'end'wip swip
-        !region'annos <- iopdSnapshot $ el'region'annos'wip swip
-        !region'attrs <- iopdSnapshot $ el'region'attrs'wip swip
-        !region'effs <- iopdSnapshot $ el'region'effs'wip swip
+        !scope'annos <- iopdSnapshot $ el'scope'annos'wip swip
+        !scope'attrs <- iopdSnapshot $ el'scope'attrs'wip swip
+        !scope'effs <- iopdSnapshot $ el'scope'effs'wip swip
         !diags <- readTVar $ el'scope'diags'wip swip
         let !fullRegion =
               EL'RegionSec $
                 EL'Region
                   { el'region'span = SrcRange beginningSrcPos region'end,
-                    el'region'annos = region'annos,
-                    el'region'attrs = region'attrs,
-                    el'region'effs = region'effs
+                    el'region'symbols = V.empty -- XXX fill it some way
                   }
         let !el'scope =
               EL'Scope
                 { el'scope'span = SrcRange beginningSrcPos region'end,
-                  el'scope'sections = V.fromList $! reverse $ fullRegion : secs
+                  el'scope'sections = V.fromList $! reverse $ fullRegion : secs,
+                  el'scope'annos = scope'annos,
+                  el'scope'attrs = scope'attrs,
+                  el'scope'effs = scope'effs
                 }
             !resolved = EL'ResolvedModule el'scope $! reverse diags
         void $ tryPutTMVar rmVar resolved

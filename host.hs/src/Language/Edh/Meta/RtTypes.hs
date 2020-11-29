@@ -20,12 +20,12 @@ el'RunAnalysis :: EL'World -> EL'ModuSlot -> EL'Analysis a -> EL'TxExit a -> Edh
 el'RunAnalysis !elw !ms !ana !exit !ets = do
   !exts <- newTVar []
   !exps <- iopdEmpty
+  !scope'annos <- iopdEmpty
+  !scope'attrs <- iopdEmpty
+  !scope'effs <- iopdEmpty
   !diags <- newTVar []
   !secs <- newTVar []
   !region'end <- newTVar beginningSrcPos
-  !region'annos <- iopdEmpty
-  !region'attrs <- iopdEmpty
-  !region'effs <- iopdEmpty
   el'RunTx
     ( EL'AnalysisState
         elw
@@ -36,12 +36,12 @@ el'RunAnalysis !elw !ms !ana !exit !ets = do
                 { el'scope'is'class'wip = False,
                   el'scope'exts'wip = exts,
                   el'scope'exps'wip = exps,
+                  el'scope'annos'wip = scope'annos,
+                  el'scope'attrs'wip = scope'attrs,
+                  el'scope'effs'wip = scope'effs,
                   el'scope'diags'wip = diags,
                   el'scope'secs'wip = secs,
-                  el'region'end'wip = region'end,
-                  el'region'annos'wip = region'annos,
-                  el'region'attrs'wip = region'attrs,
-                  el'region'effs'wip = region'effs
+                  el'region'end'wip = region'end
                 },
             el'ctx'outers = [],
             el'ctx'pure = False,
@@ -92,6 +92,12 @@ data EL'ScopeWIP = EL'ScopeWIP
     el'scope'exts'wip :: !(TVar [EL'Value]),
     -- | exported artifacts lately
     el'scope'exps'wip :: !(IOPD EL'AttrKey EL'Value),
+    -- | all annotations encountered lately
+    el'scope'annos'wip :: !(IOPD EL'AttrKey EL'Value),
+    -- | all attributes encountered lately
+    el'scope'attrs'wip :: !(IOPD EL'AttrKey EL'Value),
+    -- | all effectful artifacts encountered lately
+    el'scope'effs'wip :: !(IOPD EL'AttrKey EL'Value),
     -- | diagnostics generated lately
     el'scope'diags'wip :: !(TVar [(SrcRange, Text)]),
     --
@@ -99,13 +105,7 @@ data EL'ScopeWIP = EL'ScopeWIP
     -- | accumulated sections lately
     el'scope'secs'wip :: !(TVar [EL'Section]),
     -- | latest end position known lately
-    el'region'end'wip :: !(TVar SrcPos),
-    -- | all annotations encountered lately
-    el'region'annos'wip :: !(IOPD EL'AttrKey EL'Value),
-    -- | all attributes encountered lately
-    el'region'attrs'wip :: !(IOPD EL'AttrKey EL'Value),
-    -- | all effectful artifacts encountered lately
-    el'region'effs'wip :: !(IOPD EL'AttrKey EL'Value)
+    el'region'end'wip :: !(TVar SrcPos)
   }
 
 el'RunTx :: EL'AnalysisState -> EL'Tx -> STM ()

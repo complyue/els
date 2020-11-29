@@ -209,8 +209,8 @@ data EL'Value
 data EL'ValStage
   = -- | a value from an expression
     EL'ExpressedValue !ExprSrc
-  | -- | a value defined to an addresssor key, with possibly annotated type
-    EL'DefinedValue !EL'AttrKey !(Maybe EL'Value)
+  | -- | a value with annotated type
+    EL'AnnotatedValue !ExprSrc !EL'Value
   | -- | a class with all info known per the loading stage
     EL'LoadedClass
       { el'class'loaded'name :: EL'AttrKey,
@@ -256,6 +256,11 @@ sectionSpan :: EL'Section -> SrcRange
 sectionSpan (EL'ScopeSec scope) = el'scope'span scope
 sectionSpan (EL'RegionSec region) = el'region'span region
 
+-- | a scope is backed by an entity with arbitrary attributes, as Edh allows
+-- very straight forward sharing of lexical scopes to goroutines spawned from
+-- within an inner scope, it may be more right to assume all attributes ever
+-- defined in outer scopes are accessible, before we can represent sequential
+-- order of attribute availablility with respect to precise concurrency analysis
 data EL'Scope = EL'Scope
   { el'scope'span :: !SrcRange,
     -- a scope can have nested scopes, and it at least should have a final
@@ -268,19 +273,30 @@ data EL'Scope = EL'Scope
     -- sections within a scope appear naturally in source order, we use an
     -- immutable vector here, so it can be used with binary search to locate
     -- the section for a target location within this scope
-    el'scope'sections :: !(Vector EL'Section)
+    el'scope'sections :: !(Vector EL'Section),
+    -- | an annotation is created by the (::) operator, with left-hand operand
+    -- being the attribute key
+    el'scope'annos :: !(OrderedDict EL'AttrKey EL'Value),
+    -- | an attribute is created by any form of assignment targeting current
+    -- scope, or any form of procedure declaration
+    el'scope'attrs :: !(OrderedDict EL'AttrKey EL'Value),
+    -- | an effectiful attribute is created by any form of assignment targeting
+    -- current scope, or any form of procedure declaration, which follows an
+    -- `effect` keyword, or within a block following an `effect` keyword
+    el'scope'effs :: !(OrderedDict EL'AttrKey EL'Value)
   }
 
 -- | the last section of a scope should always be the full region with all
 -- possible attributes
 scopeFullRegion :: EL'Scope -> EL'Region
-scopeFullRegion (EL'Scope _ !secs) =
+scopeFullRegion !scope =
   if nSecs < 1
     then error "bug: no section in a scope"
     else case V.unsafeIndex secs (nSecs - 1) of
       EL'RegionSec !region -> region
       _ -> error "bug: last section of a scope not a region"
   where
+    !secs = el'scope'sections scope
     !nSecs = V.length secs
 
 -- | a consecutive region covers the src range of its predecessor, with a single
@@ -289,14 +305,41 @@ scopeFullRegion (EL'Scope _ !secs) =
 -- note a change of annotation doesn't create a new region
 data EL'Region = EL'Region
   { el'region'span :: !SrcRange,
-    -- | an annotation is created by the (::) operator, with left-hand operand
-    -- being the attribute key
-    el'region'annos :: !(OrderedDict EL'AttrKey EL'Value),
-    -- | an attribute is created by any form of assignment targeting current
-    -- scope, or any form of procedure declaration
-    el'region'attrs :: !(OrderedDict EL'AttrKey EL'Value),
-    -- | an effectiful attribute is created by any form of assignment targeting
-    -- current scope, or any form of procedure declaration, which follows an
-    -- `effect` keyword, or within a block following an `effect` keyword
-    el'region'effs :: !(OrderedDict EL'AttrKey EL'Value)
+    -- | a symbol is an attribute definitions or attribute reference, the order
+    -- of symbols in this vector reflects the order each symbol appears in src
+    -- code reading order
+    el'region'symbols :: !(Vector EL'AttrSym)
+  }
+
+-- | attribute symbol
+data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
+
+-- | an attribute definition
+data EL'AttrDef = EL'AttrDef
+  { -- | the key of this attribute
+    el'attr'def'key :: !EL'AttrKey,
+    -- | the expression and operator for assignment to this attribute
+    --
+    -- the symbol can be @<import>@ or @<let>@, in addition to e.g. @=@ @+=@
+    -- etc.
+    el'attr'def'expr :: !(OpSymbol, ExprSrc),
+    -- | likely from annotations, multiple definitions to a same attribute key
+    -- can have its separate, different annotated type, than previous ones
+    el'attr'def'type :: !EL'Value,
+    -- | previous definition, in case this definition is an update to an
+    -- previously existing attribute
+    el'attr'prev'def :: !(Maybe EL'AttrDef)
+  }
+
+-- | an attribute reference, links to its respective definition
+data EL'AttrRef = EL'AttrRef
+  { -- | local key of this attribute
+    el'attr'ref'key :: !EL'AttrKey,
+    -- | the original module defined this value
+    el'attr'origin'modu :: !EL'ModuSlot,
+    -- | the definition introduced this attribute
+    --
+    -- note the local reference key can be different than the original
+    -- definition key, in cases such as renamed import
+    el'attr'ref'def :: !EL'AttrDef
   }
