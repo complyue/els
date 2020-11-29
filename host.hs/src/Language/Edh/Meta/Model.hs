@@ -196,16 +196,45 @@ data EL'Value
   | -- | apk at analysis time
     -- TODO should an apk with every element decidable to be an `EL'Const` ?
     EL'Apk !EL'ArgsPack
-  | -- | runtime value with info gradually decided at analysis time
-    EL'Value
-      { -- | the original module defines this value
-        el'origin'module :: !EL'ModuSlot,
-        -- | staged result however this value is decided
-        el'value'stage :: !(TVar EL'ValStage),
-        -- value type if possibly decidable at analysis time
-        el'value'type :: !(Maybe EdhTypeValue)
+  | -- | a procedure
+    EL'Proc
+      { el'proc'name :: EL'AttrKey,
+        -- | scope of this proc
+        el'proc'scope :: !EL'Scope
       }
+  | -- | an object
+    EL'Object
+      { el'obj'class :: !EL'Value,
+        el'obj'supers :: !EL'Value
+      }
+  | -- | a class
+    EL'Class
+      { el'class'name :: EL'AttrKey,
+        -- | mro
+        el'class'mro :: ![EL'Value],
+        -- | scope of this class
+        el'class'scope :: !EL'Scope,
+        -- | an attribute is exported by any form of assignment targeting
+        -- current scope, or any form of procedure declaration, which follows an
+        -- `export` keyword, or within a block following an `export` keyword
+        el'class'exports :: !EL'Artifacts
+      }
+  | -- | an arbitrary expression not resolved at analysis time
+    EL'Expr !ExprSrc
 
+{- XXX this to be removed
+  -- | -- | runtime value with info gradually decided at analysis time
+  --   EL'Value
+  --     { -- | the original module defines this value
+  --       el'origin'module :: !EL'ModuSlot,
+  --       -- | staged result however this value is decided
+  --       el'value'stage :: !(TVar EL'ValStage),
+  --       -- value type if possibly decidable at analysis time
+  --       el'value'type :: !(Maybe EdhTypeValue)
+  --     }
+-}
+
+-- | XXX this to be removed
 data EL'ValStage
   = -- | a value from an expression
     EL'ExpressedValue !ExprSrc
@@ -318,11 +347,15 @@ data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
 data EL'AttrDef = EL'AttrDef
   { -- | the key of this attribute
     el'attr'def'key :: !EL'AttrKey,
-    -- | the expression and operator for assignment to this attribute
-    --
-    -- the symbol can be @<import>@ or @<let>@, in addition to e.g. @=@ @+=@
-    -- etc.
-    el'attr'def'expr :: !(OpSymbol, ExprSrc),
+    -- | the origin of this definition, typically for attributes imported from
+    -- other modules, the original module and export key is represented here
+    el'attr'def'origin :: !(Maybe (EL'ModuSlot, EL'AttrKey)),
+    -- | the operation created this attribute
+    -- in addition to assignment operators e.g. @=@ @+=@ etc. it can be
+    -- @<arrow>@, @<proc-def>@, @<import>@ and @<let>@ etc.
+    el'attr'def'op :: !OpSymbol,
+    -- | the full expression created this attribute
+    el'attr'def'expr :: !ExprSrc,
     -- | likely from annotations, multiple definitions to a same attribute key
     -- can have its separate, different annotated type, than previous ones
     el'attr'def'type :: !EL'Value,
@@ -333,13 +366,10 @@ data EL'AttrDef = EL'AttrDef
 
 -- | an attribute reference, links to its respective definition
 data EL'AttrRef = EL'AttrRef
-  { -- | local key of this attribute
+  { -- | local key used to refer to this attribute
     el'attr'ref'key :: !EL'AttrKey,
-    -- | the original module defined this value
-    el'attr'origin'modu :: !EL'ModuSlot,
     -- | the definition introduced this attribute
-    --
-    -- note the local reference key can be different than the original
-    -- definition key, in cases such as renamed import
-    el'attr'ref'def :: !EL'AttrDef
+    -- this field is guaranteed to be filled only after all outer scopes have
+    -- been loaded
+    el'attr'ref'def :: !(TMVar EL'AttrDef)
   }

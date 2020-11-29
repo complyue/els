@@ -540,28 +540,28 @@ el'LoadTopStmt
   (StmtSrc !stmt !stmt'span)
   !exit
   !eas = case stmt of
-    ExprStmt !expr _docCmt ->
-      el'RunTx eas $
-        el'LoadTopExpr tops (ExprSrc expr stmt'span) exit
     LetStmt _argsRcvr _argsSndr -> do
       -- TODO recognize defines & exports
       el'Exit eas exit $ EL'Const nil
-    ExtendsStmt !superExpr -> el'RunTx eas $
-      el'LoadTopExpr tops superExpr $ \ !superVal _eas -> do
-        case superVal of
-          EL'Apk (EL'ArgsPack !supers !kwargs)
-            | odNull kwargs ->
-              modifyTVar' exts (++ supers)
-          EL'Value {} ->
-            -- TODO validate it really be an object
-            modifyTVar' exts (++ [superVal])
-          -- TODO elaborate the error msg
-          _ -> modifyTVar' diags ((stmt'span, "invalid super") :)
-        el'Exit eas exit $ EL'Const nil
+    -- ExprStmt !expr _docCmt ->
+    --   el'RunTx eas $
+    --     el'LoadTopExpr tops (ExprSrc expr stmt'span) exit
+    -- ExtendsStmt !superExpr -> el'RunTx eas $
+    --   el'LoadTopExpr tops superExpr $ \ !superVal _eas -> do
+    --     case superVal of
+    --       EL'Apk (EL'ArgsPack !supers !kwargs)
+    --         | odNull kwargs ->
+    --           modifyTVar' exts (++ supers)
+    --       EL'Object {} ->
+    --         modifyTVar' exts (++ [superVal])
+    --       -- TODO elaborate the error msg
+    --       _ -> modifyTVar' diags ((stmt'span, "invalid super") :)
+    --     el'Exit eas exit $ EL'Const nil
     -- TODO recognize more stmts
     -- EffectStmt !effs !docCmt -> undefined
     _ -> el'Exit eas exit $ EL'Const nil
 
+{-
 el'LoadTopExpr :: EL'TopLevels -> ExprSrc -> EL'Analysis EL'Value
 el'LoadTopExpr
   tops@(EL'TopLevels _arts _exts !exps !diags)
@@ -750,9 +750,7 @@ el'LoadTopExpr
     _ -> rtnParsed
     where
       !ms = el'ctx'module eac
-      rtnParsed = do
-        !vstage <- newTVar $ EL'ExpressedValue xsrc
-        el'Exit eas exit $ EL'Value ms vstage Nothing
+      rtnParsed = el'Exit eas exit $ EL'Expr xsrc
 
       loadClass ::
         AttrAddrSrc ->
@@ -853,6 +851,8 @@ el'LoadTopApk !tops !argSenders !exit !eas = go [] [] argSenders
       UnpackPosArgs _addr -> go loadedArgs loadedKwArgs rest
       UnpackKwArgs _addr -> go loadedArgs loadedKwArgs rest
       UnpackPkArgs _addr -> go loadedArgs loadedKwArgs rest
+
+-}
 
 el'LoadClass ::
   EL'TopLevels ->
@@ -1004,7 +1004,4 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
   where
     !eac = el'context eas
     diags = el'scope'diags'wip $ el'ctx'scope eac
-    !ms = el'ctx'module eac
-    rtnParsed = do
-      !vstage <- newTVar $ EL'ExpressedValue xsrc
-      el'Exit eas exit $ EL'Value ms vstage Nothing
+    rtnParsed = el'Exit eas exit $ EL'Expr xsrc
