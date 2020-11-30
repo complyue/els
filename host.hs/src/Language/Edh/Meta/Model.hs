@@ -84,15 +84,17 @@ data EL'ModuSlot = EL'ModuSlot
     -- clearing the 1st layer `TMVar` invalidates previous analysis work, `while
     -- the 2nd layer `TMVar` should usually not be cleared once filled.
     el'modu'parsed :: !(TMVar (TMVar EL'ParsedModule)),
-    el'modu'loaded :: !(TMVar (TMVar EL'LoadedModule)),
     el'modu'resolved :: !(TMVar (TMVar EL'ResolvedModule)),
     -- | finalized exports from this module
     --
+    -- filling of this field is a signal that this module has just been fully
+    -- resolved
+    --
     -- CAVEAT: this won't be filled until all dependencies this module is
-    --         re-exporting are resolved, blindly waiting on this in case of
-    --         cyclic imports may cause deadlock, thus process killed by GHC
-    --         RTS once detected
-    el'modu'exports :: !(TMVar EL'Artifacts),
+    --         re-exporting are resolved, blindly waiting on this synchronously,
+    --         where cyclic imports present, may cause deadlock, thus the
+    --         process killed by GHC RTS once detected
+    el'modu'exports :: !(TMVar EL'Exports),
     -- | the set of exports for this module will be updated respecting
     -- re-exports from specific dependency modules, the latest known exports
     -- will be broadcasted through this channel
@@ -104,7 +106,7 @@ data EL'ModuSlot = EL'ModuSlot
     --
     -- CAVEAT: dup the `TChan` to read it! it should always be a broadcast
     --         channel, i.e. reading it directly will always `retry`
-    el'modu'exports'upd :: !(TChan EL'Artifacts),
+    el'modu'exports'upd :: !(TChan EL'Exports),
     -- | other modules those should be invalidated once this module is changed
     --
     -- note a dependant may stop depending on this module due to src changes,
@@ -135,15 +137,6 @@ data EL'ParsedModule = EL'ParsedModule
     el'parsed'diags :: ![(SrcRange, Text)]
   }
 
-data EL'LoadedModule = EL'LoadedModule
-  { -- | artifacts identified before resolution
-    el'loaded'arts :: !EL'Artifacts,
-    -- | exports identified before resolution
-    el'loaded'exports :: !EL'Artifacts,
-    -- | diagnostics generated from this stage of analysis
-    el'loaded'diags :: ![(SrcRange, Text)]
-  }
-
 data EL'ResolvedModule = EL'ResolvedModule
   { -- | there will be nested scopes appearing in natural source order, within
     -- this root scope of the module
@@ -152,9 +145,7 @@ data EL'ResolvedModule = EL'ResolvedModule
     el'resolved'diags :: ![(SrcRange, Text)]
   }
 
--- | a dict of artifacts by attribute key, with their order of appearance
--- preserved
-type EL'Artifacts = OrderedDict EL'AttrKey EL'Value
+type EL'Exports = OrderedDict EL'AttrKey EL'AttrDef
 
 data EL'AttrKey = EL'AttrKey
   { el'akey'src :: !AttrAddrSrc,
@@ -188,6 +179,37 @@ el'AttrKey asrc@(AttrAddrSrc !addr _) = case addr of
   QuaintAttr !strName -> EL'AttrKey asrc $ Just $ AttrByName strName
   SymbolicAttr {} -> EL'AttrKey asrc Nothing
 
+-- | an attribute definition
+data EL'AttrDef = EL'AttrDef
+  { -- | the key of this attribute
+    el'attr'def'key :: !EL'AttrKey,
+    -- | the origin of this definition, typically for attributes imported from
+    -- other modules, the original module and export key is represented here
+    el'attr'def'origin :: !(Maybe (EL'ModuSlot, EL'AttrKey)),
+    -- | the operation created this attribute
+    -- in addition to assignment operators e.g. @=@ @+=@ etc. it can be
+    -- @<arrow>@, @<proc-def>@, @<import>@ and @<let>@ etc.
+    el'attr'def'op :: !OpSymbol,
+    -- | the full expression created this attribute
+    el'attr'def'expr :: !ExprSrc,
+    -- | likely from annotations, multiple definitions to a same attribute key
+    -- can have its separate, different annotated type, than previous ones
+    el'attr'def'type :: !EL'Value,
+    -- | previous definition, in case this definition is an update to an
+    -- previously existing attribute
+    el'attr'prev'def :: !(Maybe EL'AttrDef)
+  }
+
+-- | an attribute reference, links to its respective definition
+data EL'AttrRef = EL'AttrRef
+  { -- | local key used to refer to this attribute
+    el'attr'ref'key :: !EL'AttrKey,
+    -- | the definition introduced this attribute
+    -- this field is guaranteed to be filled only after all outer scopes have
+    -- been loaded
+    el'attr'ref'def :: !(TMVar EL'AttrDef)
+  }
+
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict EL'AttrKey EL'Value)
 
 data EL'Value
@@ -217,67 +239,10 @@ data EL'Value
         -- | an attribute is exported by any form of assignment targeting
         -- current scope, or any form of procedure declaration, which follows an
         -- `export` keyword, or within a block following an `export` keyword
-        el'class'exports :: !EL'Artifacts
+        el'class'exports :: !EL'Exports
       }
   | -- | an arbitrary expression not resolved at analysis time
     EL'Expr !ExprSrc
-
-{- XXX this to be removed
-  -- | -- | runtime value with info gradually decided at analysis time
-  --   EL'Value
-  --     { -- | the original module defines this value
-  --       el'origin'module :: !EL'ModuSlot,
-  --       -- | staged result however this value is decided
-  --       el'value'stage :: !(TVar EL'ValStage),
-  --       -- value type if possibly decidable at analysis time
-  --       el'value'type :: !(Maybe EdhTypeValue)
-  --     }
--}
-
--- | XXX this to be removed
-data EL'ValStage
-  = -- | a value from an expression
-    EL'ExpressedValue !ExprSrc
-  | -- | a value with annotated type
-    EL'AnnotatedValue !ExprSrc !EL'Value
-  | -- | a class with all info known per the loading stage
-    EL'LoadedClass
-      { el'class'loaded'name :: EL'AttrKey,
-        -- | supers
-        el'class'loaded'supers :: ![EL'Value],
-        -- | member artifacts
-        el'class'loaded'arts :: !EL'Artifacts,
-        -- | member artifacts
-        el'class'loaded'exports :: !EL'Artifacts
-      }
-  | -- | a class with all info known per the resolving stage
-    EL'ResolvedClass
-      { el'class'resolved'name :: EL'AttrKey,
-        -- | mro
-        el'class'resolved'mro :: ![EL'Value],
-        -- | scope of this class
-        el'class'resolved'scope :: !EL'Scope,
-        -- | an attribute is exported by any form of assignment targeting
-        -- current scope, or any form of procedure declaration, which follows an
-        -- `export` keyword, or within a block following an `export` keyword
-        el'class'resolved'exports :: !EL'Artifacts
-      }
-  | -- | an object with all info known per the loading stage
-    EL'LoadedObject
-      { -- | the class of this object instance
-        -- TODO use some other, more proper type for this field ?
-        el'obj'loaded'class :: !EL'Value,
-        -- | loaded super instances
-        el'obj'loaded'supers :: ![EL'Value]
-      }
-  | -- | an object with all info known per the resolving stage
-    EL'ResolvedObject
-      { -- | the class of this object instance
-        -- TODO use some other, more proper type for this field ?
-        el'obj'resolved'class :: !EL'Value,
-        -- | resolved super instances
-        el'obj'resolved'supers :: ![EL'Value]
-      }
 
 data EL'Section = EL'ScopeSec !EL'Scope | EL'RegionSec !EL'Region
 
@@ -342,34 +307,3 @@ data EL'Region = EL'Region
 
 -- | attribute symbol
 data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
-
--- | an attribute definition
-data EL'AttrDef = EL'AttrDef
-  { -- | the key of this attribute
-    el'attr'def'key :: !EL'AttrKey,
-    -- | the origin of this definition, typically for attributes imported from
-    -- other modules, the original module and export key is represented here
-    el'attr'def'origin :: !(Maybe (EL'ModuSlot, EL'AttrKey)),
-    -- | the operation created this attribute
-    -- in addition to assignment operators e.g. @=@ @+=@ etc. it can be
-    -- @<arrow>@, @<proc-def>@, @<import>@ and @<let>@ etc.
-    el'attr'def'op :: !OpSymbol,
-    -- | the full expression created this attribute
-    el'attr'def'expr :: !ExprSrc,
-    -- | likely from annotations, multiple definitions to a same attribute key
-    -- can have its separate, different annotated type, than previous ones
-    el'attr'def'type :: !EL'Value,
-    -- | previous definition, in case this definition is an update to an
-    -- previously existing attribute
-    el'attr'prev'def :: !(Maybe EL'AttrDef)
-  }
-
--- | an attribute reference, links to its respective definition
-data EL'AttrRef = EL'AttrRef
-  { -- | local key used to refer to this attribute
-    el'attr'ref'key :: !EL'AttrKey,
-    -- | the definition introduced this attribute
-    -- this field is guaranteed to be filled only after all outer scopes have
-    -- been loaded
-    el'attr'ref'def :: !(TMVar EL'AttrDef)
-  }
