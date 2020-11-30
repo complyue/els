@@ -1,7 +1,6 @@
 module Language.Edh.Meta.RtTypes where
 
 import Control.Concurrent.STM
-import Data.Text (Text)
 import Data.Vector (Vector)
 import Language.Edh.EHI
 import Language.Edh.Meta.Model
@@ -16,33 +15,44 @@ data EL'World = EL'World
     el'eow :: !EventSink
   }
 
-el'RunAnalysis :: EL'World -> EL'ModuSlot -> EL'Analysis a -> EL'TxExit a -> EdhTx
-el'RunAnalysis !elw !ms !ana !exit !ets = do
-  !exts <- newTVar []
-  !exps <- iopdEmpty
-  !scope'annos <- iopdEmpty
+el'AnalyzeModule ::
+  EL'World ->
+  EL'ModuSlot ->
+  EL'Analysis a ->
+  EL'TxExit a ->
+  EdhTx
+el'AnalyzeModule !elw !ms !ana !exit !ets = do
+  !ctx'diags <- newTVar []
   !scope'attrs <- iopdEmpty
   !scope'effs <- iopdEmpty
-  !diags <- newTVar []
-  !secs <- newTVar []
+  !scope'annos <- iopdEmpty
   !region'end <- newTVar beginningSrcPos
+  !secs <- newTVar []
+  !scope'symbols <- newTVar []
+
+  !exts <- newTVar []
+  !exps <- iopdEmpty
+
   el'RunTx
     ( EL'AnalysisState
         elw
         EL'Context
           { el'ctx'module = ms,
+            el'ctx'diags = ctx'diags,
             el'ctx'scope =
-              EL'ScopeWIP
-                { el'scope'is'class'wip = False,
-                  el'scope'exts'wip = exts,
-                  el'scope'exps'wip = exps,
-                  el'scope'annos'wip = scope'annos,
-                  el'scope'attrs'wip = scope'attrs,
-                  el'scope'effs'wip = scope'effs,
-                  el'scope'diags'wip = diags,
-                  el'scope'secs'wip = secs,
-                  el'region'end'wip = region'end
-                },
+              EL'ObjectWIP
+                EL'WIP'Proc
+                  { el'scope'attrs'wip = scope'attrs,
+                    el'scope'effs'wip = scope'effs,
+                    el'scope'annos'wip = scope'annos,
+                    el'region'end'wip = region'end,
+                    el'scope'secs'wip = secs,
+                    el'scope'symbols'wip = scope'symbols
+                  }
+                EL'WIP'Object
+                  { el'obj'exts'wip = exts,
+                    el'obj'exps'wip = exps
+                  },
             el'ctx'outers = [],
             el'ctx'pure = False,
             el'ctx'exporting = False,
@@ -64,9 +74,11 @@ data EL'AnalysisState = EL'AnalysisState
     el'ets :: !EdhThreadState
   }
 
+-- | analysis context
 data EL'Context = EL'Context
   { -- | the context module
     el'ctx'module :: !EL'ModuSlot,
+    el'ctx'diags :: !(TVar [EL'Diagnostic]),
     --
 
     -- | current scope work-in-progress
@@ -85,27 +97,59 @@ data EL'Context = EL'Context
     el'ctx'eff'defining :: !Bool
   }
 
-data EL'ScopeWIP = EL'ScopeWIP
-  { -- | if this scope wip is for a class
-    el'scope'is'class'wip :: !Bool,
-    -- | all `extends` (i.e. super objects) appeared lately
-    el'scope'exts'wip :: !(TVar [EL'Value]),
-    -- | exported artifacts lately
-    el'scope'exps'wip :: !(IOPD EL'AttrKey EL'Value),
-    -- | all annotations encountered lately
-    el'scope'annos'wip :: !(IOPD EL'AttrKey EL'Value),
-    -- | all attributes encountered lately
-    el'scope'attrs'wip :: !(IOPD EL'AttrKey EL'Value),
-    -- | all effectful artifacts encountered lately
-    el'scope'effs'wip :: !(IOPD EL'AttrKey EL'Value),
-    -- | diagnostics generated lately
-    el'scope'diags'wip :: !(TVar [(SrcRange, Text)]),
-    --
+data EL'ScopeWIP
+  = EL'ProcWIP !EL'WIP'Proc
+  | EL'ClassWIP !EL'WIP'Proc !EL'WIP'Class
+  | EL'ObjectWIP !EL'WIP'Proc !EL'WIP'Object
 
+el'wip'proc :: EL'ScopeWIP -> EL'WIP'Proc
+el'wip'proc (EL'ProcWIP p) = p
+el'wip'proc (EL'ClassWIP p _) = p
+el'wip'proc (EL'ObjectWIP p _) = p
+
+-- | an object initializing procedure, include module procedure and namespace
+-- procedures
+data EL'WIP'Object = EL'WIP'Object
+  { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
+    -- super objects),  up to time of analysis
+    el'obj'exts'wip :: !(TVar [EL'AttrRef]),
+    -- | 1st appearances of exported artifacts in the direct scope and nested
+    -- (method) scopes (i.e. object exports), up to time of analysis
+    el'obj'exps'wip :: !(IOPD AttrKey EL'AttrDef)
+  }
+
+-- | a class defining procedure
+data EL'WIP'Class = EL'WIP'Class
+  { -- | all `extends` appeared in the direct class scope (i.e. super classes),
+    --  up to time of analysis
+    el'class'exts'wip :: !(TVar [EL'AttrRef]),
+    -- | all `extends` appeared in nested (method) scopes (i.e. super objects),
+    --  up to time of analysis
+    el'inst'exts'wip :: !(TVar [EL'AttrRef]),
+    -- | 1st appearances of exported artifacts in the direct class scope (i.e.
+    -- class exports), up to time of analysis
+    el'class'exps'wip :: !(IOPD AttrKey EL'AttrDef),
+    -- | 1st appearances of exported artifacts in nested (method) scopes (i.e.
+    -- object exports), up to time of analysis
+    el'inst'exps'wip :: !(IOPD AttrKey EL'AttrDef)
+  }
+
+-- a method procedure, including vanilla method, generator, producer, operator,
+-- (vanilla/generator/producer) arrow and scoped blocks
+data EL'WIP'Proc = EL'WIP'Proc
+  { -- | last appearances of attributes encountered, up to time of analysis
+    el'scope'attrs'wip :: !(IOPD AttrKey EL'AttrDef),
+    -- | 1st appearances of effectful artifacts, up to time of analysis
+    el'scope'effs'wip :: !(IOPD AttrKey EL'AttrDef),
+    -- | last appearances of annotations encountered in the direct class scope,
+    --  up to time of analysis
+    el'scope'annos'wip :: !(IOPD AttrKey EL'Value),
+    -- | end position for current region in the scope, known lately
+    el'region'end'wip :: !(TVar SrcPos),
     -- | accumulated sections lately
     el'scope'secs'wip :: !(TVar [EL'Section]),
-    -- | latest end position known lately
-    el'region'end'wip :: !(TVar SrcPos)
+    -- | accumulated symbols lately
+    el'scope'symbols'wip :: !(TVar [EL'AttrSym])
   }
 
 el'RunTx :: EL'AnalysisState -> EL'Tx -> STM ()
@@ -119,14 +163,3 @@ el'ExitTx !exit !a !eas = exit a eas
 el'Exit :: EL'AnalysisState -> EL'TxExit a -> a -> STM ()
 el'Exit !eas !exit !a = exit a eas
 {-# INLINE el'Exit #-}
-
-data EL'TopLevels = EL'TopLevels
-  { -- | toplevel artifacts defined
-    el'top'arts :: !(IOPD EL'AttrKey EL'Value),
-    -- | all `extends` (i.e. super objects) appeared at toplevel
-    el'top'exts :: !(TVar [EL'Value]),
-    -- | exported artifacts at toplevel
-    el'top'exps :: !(IOPD EL'AttrKey EL'Value),
-    -- | diagnostics generated during analyzing
-    el'top'diags :: !(TVar [(SrcRange, Text)])
-  }

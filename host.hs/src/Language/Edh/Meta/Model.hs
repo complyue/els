@@ -11,6 +11,63 @@ import qualified Data.Vector as V
 import Language.Edh.EHI
 import Prelude
 
+-- diagnostic data structures per LSP specification 3.15
+
+el'LogDiag ::
+  TVar [EL'Diagnostic] ->
+  EL'DiagSeverity ->
+  SrcRange ->
+  Text ->
+  Text ->
+  STM ()
+el'LogDiag !diags !severity !src'span !code !msg =
+  modifyTVar' diags (el'Diag severity src'span code msg :)
+
+el'Diag :: EL'DiagSeverity -> SrcRange -> Text -> Text -> EL'Diagnostic
+el'Diag !severity !src'span !code !msg =
+  EL'Diagnostic
+    { el'diag'range = src'span,
+      el'diag'severity = severity,
+      el'diag'code = Right code,
+      el'diag'source = "els",
+      el'diag'message = msg,
+      el'diag'tags = []
+    }
+
+data EL'Diagnostic = EL'Diagnostic
+  { el'diag'range :: !SrcRange,
+    el'diag'severity :: !EL'DiagSeverity,
+    el'diag'code :: !(Either Int Text),
+    el'diag'source :: !Text,
+    el'diag'message :: !Text,
+    el'diag'tags :: ![EL'DiagnosticTag]
+  }
+
+type EL'DiagSeverity = Int
+
+el'Error, el'Warning, el'Information, el'Hint :: EL'DiagSeverity
+el'Error = 1
+el'Warning = 2
+el'Information = 3
+el'Hint = 4
+
+type EL'DiagnosticTag = Int
+
+el'Unnecessary, el'Deprecated :: EL'DiagnosticTag
+el'Unnecessary = 1
+el'Deprecated = 2
+
+-- Edh module files are organized into a hierarchy of Edh homes, they can import
+-- eachothers, where cyclic imports are allowed, but each module is evaluated
+-- synchronously by default, so ultimately exported artifacts may not be
+-- available immediately after the `import` expression introducing them into
+-- current module.
+--
+-- Special treatments is needed in case an import can not finish synchronously
+-- during the analysation, `TMVar`s are generally used to place a slot for
+-- the result that can only be obtained after the importee has actually made
+-- the respective export available.
+
 data EL'Home = EL'Home
   { -- | each parent dir of `edh_modules` is considered an Edh home
     --
@@ -134,7 +191,7 @@ instance Hashable EL'ModuSlot where
 data EL'ParsedModule = EL'ParsedModule
   { el'parsed'stmts :: ![StmtSrc],
     -- | diagnostics generated from this stage of analysis
-    el'parsed'diags :: ![(SrcRange, Text)]
+    el'parsed'diags :: ![EL'Diagnostic]
   }
 
 data EL'ResolvedModule = EL'ResolvedModule
@@ -142,59 +199,35 @@ data EL'ResolvedModule = EL'ResolvedModule
     -- this root scope of the module
     el'resolved'scope :: !EL'Scope,
     -- | diagnostics generated from this stage of analysis
-    el'resolved'diags :: ![(SrcRange, Text)]
+    el'resolved'diags :: ![EL'Diagnostic]
   }
 
-type EL'Exports = OrderedDict EL'AttrKey EL'AttrDef
+type EL'Exports = OrderedDict AttrKey EL'AttrDef
 
-data EL'AttrKey = EL'AttrKey
-  { el'akey'src :: !AttrAddrSrc,
-    el'akey'reified :: !(Maybe AttrKey)
-  }
-  deriving (Show)
-
-instance Eq EL'AttrKey where
-  EL'AttrKey _ (Just k1) == EL'AttrKey _ (Just k2) = k1 == k2
-  EL'AttrKey (AttrAddrSrc addr1 _) Nothing
-    == EL'AttrKey (AttrAddrSrc addr2 _) Nothing = addr1 == addr2
-  EL'AttrKey {} == EL'AttrKey {} = False -- or hash/eq laws won't hold
-
-instance Ord EL'AttrKey where
-  compare (EL'AttrKey _ (Just k1)) (EL'AttrKey _ (Just k2)) = compare k1 k2
-  compare
-    (EL'AttrKey (AttrAddrSrc addr1 _) Nothing)
-    (EL'AttrKey (AttrAddrSrc addr2 _) Nothing) = compare addr1 addr2
-  compare (EL'AttrKey _ Just {}) (EL'AttrKey _ Nothing) = LT
-  compare (EL'AttrKey _ Nothing) (EL'AttrKey _ Just {}) = GT
-
-instance Hashable EL'AttrKey where
-  hashWithSalt s (EL'AttrKey _ (Just key)) =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` key
-  hashWithSalt s (EL'AttrKey (AttrAddrSrc addr _) Nothing) =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` addr
-
-el'AttrKey :: AttrAddrSrc -> EL'AttrKey
-el'AttrKey asrc@(AttrAddrSrc !addr _) = case addr of
-  NamedAttr !strName -> EL'AttrKey asrc $ Just $ AttrByName strName
-  QuaintAttr !strName -> EL'AttrKey asrc $ Just $ AttrByName strName
-  SymbolicAttr {} -> EL'AttrKey asrc Nothing
-
--- | an attribute definition
+-- | an attribute definition or re-definition (i.e. update to a previously
+-- defined attribute)
+--
+-- technically (re)defining an attribute is the same as binding a value (though
+-- possibly mutable) to an attribute key per the backing entity of some scope
 data EL'AttrDef = EL'AttrDef
   { -- | the key of this attribute
-    el'attr'def'key :: !EL'AttrKey,
+    el'attr'def'key :: !AttrKey,
     -- | the origin of this definition, typically for attributes imported from
     -- other modules, the original module and export key is represented here
-    el'attr'def'origin :: !(Maybe (EL'ModuSlot, EL'AttrKey)),
+    el'attr'def'origin :: !(Maybe (EL'ModuSlot, AttrKey)),
     -- | the operation created this attribute
     -- in addition to assignment operators e.g. @=@ @+=@ etc. it can be
     -- @<arrow>@, @<proc-def>@, @<import>@ and @<let>@ etc.
     el'attr'def'op :: !OpSymbol,
+    -- | the source span to highlight when this definition is located
+    el'attr'def'focus :: !SrcRange,
     -- | the full expression created this attribute
     el'attr'def'expr :: !ExprSrc,
+    -- | the attribute value as defined
+    el'attr'def'value :: !EL'Value,
     -- | likely from annotations, multiple definitions to a same attribute key
     -- can have its separate, different annotated type, than previous ones
-    el'attr'def'type :: !EL'Value,
+    el'attr'def'type :: !(Maybe EL'Value),
     -- | previous definition, in case this definition is an update to an
     -- previously existing attribute
     el'attr'prev'def :: !(Maybe EL'AttrDef)
@@ -203,14 +236,14 @@ data EL'AttrDef = EL'AttrDef
 -- | an attribute reference, links to its respective definition
 data EL'AttrRef = EL'AttrRef
   { -- | local key used to refer to this attribute
-    el'attr'ref'key :: !EL'AttrKey,
+    el'attr'ref'key :: !AttrKey,
     -- | the definition introduced this attribute
     -- this field is guaranteed to be filled only after all outer scopes have
     -- been loaded
     el'attr'ref'def :: !(TMVar EL'AttrDef)
   }
 
-data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict EL'AttrKey EL'Value)
+data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
 
 data EL'Value
   = -- | runtime constant i.e. decidable at analysis time
@@ -220,18 +253,18 @@ data EL'Value
     EL'Apk !EL'ArgsPack
   | -- | a procedure
     EL'Proc
-      { el'proc'name :: EL'AttrKey,
+      { el'proc'name :: AttrKey,
         -- | scope of this proc
         el'proc'scope :: !EL'Scope
       }
   | -- | an object
     EL'Object
       { el'obj'class :: !EL'Value,
-        el'obj'supers :: !EL'Value
+        el'obj'supers :: ![EL'Value]
       }
   | -- | a class
     EL'Class
-      { el'class'name :: EL'AttrKey,
+      { el'class'name :: AttrKey,
         -- | mro
         el'class'mro :: ![EL'Value],
         -- | scope of this class
@@ -268,17 +301,18 @@ data EL'Scope = EL'Scope
     -- immutable vector here, so it can be used with binary search to locate
     -- the section for a target location within this scope
     el'scope'sections :: !(Vector EL'Section),
-    -- | an annotation is created by the (::) operator, with left-hand operand
-    -- being the attribute key
-    el'scope'annos :: !(OrderedDict EL'AttrKey EL'Value),
-    -- | an attribute is created by any form of assignment targeting current
-    -- scope, or any form of procedure declaration
-    el'scope'attrs :: !(OrderedDict EL'AttrKey EL'Value),
-    -- | an effectiful attribute is created by any form of assignment targeting
-    -- current scope, or any form of procedure declaration, which follows an
-    -- `effect` keyword, or within a block following an `effect` keyword
-    el'scope'effs :: !(OrderedDict EL'AttrKey EL'Value)
+    -- | the 1st appearances of each attribute defined in this scope
+    el'scope'attrs :: !(OrderedDict AttrKey EL'AttrDef),
+    -- | the 1st appearances of each effectful attribute defined in this scope
+    el'scope'effs :: !(OrderedDict AttrKey EL'AttrDef),
+    -- | all symbols encountered in this scope, in order as appeared in src
+    el'scope'symbols :: !(Vector EL'AttrSym)
   }
+
+-- | a symbol at source level is, an attribute definitions or attribute
+-- reference, the order of symbols in this vector reflects the order each
+-- symbol appears in src code reading order
+data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
 
 -- | the last section of a scope should always be the full region with all
 -- possible attributes
@@ -294,16 +328,11 @@ scopeFullRegion !scope =
     !nSecs = V.length secs
 
 -- | a consecutive region covers the src range of its predecessor, with a single
--- addition or deletion of an attribute
+-- addition or deletion of an attribute definition
 --
--- note a change of annotation doesn't create a new region
+-- note a re-definition or a change of annotation doesn't create a new region
 data EL'Region = EL'Region
   { el'region'span :: !SrcRange,
-    -- | a symbol is an attribute definitions or attribute reference, the order
-    -- of symbols in this vector reflects the order each symbol appears in src
-    -- code reading order
-    el'region'symbols :: !(Vector EL'AttrSym)
+    -- | available attributes defined in this region
+    el'region'attrs :: !(OrderedDict AttrKey EL'AttrDef)
   }
-
--- | attribute symbol
-data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef

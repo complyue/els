@@ -84,9 +84,13 @@ el'ResolveModule !exit !eas = el'RunTx eas $
                                           V.empty
                                           odEmpty
                                           odEmpty
-                                          odEmpty
+                                          V.empty
                                       )
-                                      [ (noSrcRange, "<no-load>")
+                                      [ el'Diag
+                                          el'Error
+                                          noSrcRange
+                                          "no-resolve"
+                                          "module not resolved"
                                       ]
                                 runEdhTx etsCatching $ rethrow nil
                               !exv -> edhValueDesc etsCatching exv $
@@ -99,9 +103,13 @@ el'ResolveModule !exit !eas = el'RunTx eas $
                                             V.empty
                                             odEmpty
                                             odEmpty
-                                            odEmpty
+                                            V.empty
                                         )
-                                        [ (noSrcRange, exDesc)
+                                        [ el'Diag
+                                            el'Error
+                                            noSrcRange
+                                            "err-resolve"
+                                            exDesc
                                         ]
                                   runEdhTx etsCatching $ recover nil
                       )
@@ -142,7 +150,11 @@ el'ParseModule !exit !eas = goParse
                               tryPutTMVar pmVar $
                                 EL'ParsedModule
                                   []
-                                  [ (noSrcRange, "<no-parse>")
+                                  [ el'Diag
+                                      el'Error
+                                      noSrcRange
+                                      "no-parse"
+                                      "module not parsed"
                                   ]
                             runEdhTx etsCatching $ rethrow nil
                           !exv -> edhValueDesc etsCatching exv $ \ !exDesc -> do
@@ -150,7 +162,11 @@ el'ParseModule !exit !eas = goParse
                               tryPutTMVar pmVar $
                                 EL'ParsedModule
                                   []
-                                  [ (noSrcRange, exDesc)
+                                  [ el'Diag
+                                      el'Error
+                                      noSrcRange
+                                      "err-parse"
+                                      exDesc
                                   ]
                             runEdhTx etsCatching $ recover nil
                   )
@@ -460,26 +476,26 @@ el'DoResolveModule
   !eas = do
     el'RunTx eas $
       el'AnalyzeStmts stmts $ \_ _eas -> do
-        let !swip = el'ctx'scope eac
-        !secs <- readTVar $ el'scope'secs'wip swip
-        !region'end <- readTVar $ el'region'end'wip swip
-        !scope'annos <- iopdSnapshot $ el'scope'annos'wip swip
+        !diags <- readTVar $ el'ctx'diags eac
+        let !swip = el'wip'proc $ el'ctx'scope eac
         !scope'attrs <- iopdSnapshot $ el'scope'attrs'wip swip
         !scope'effs <- iopdSnapshot $ el'scope'effs'wip swip
-        !diags <- readTVar $ el'scope'diags'wip swip
+        !region'end <- readTVar $ el'region'end'wip swip
+        !secs <- readTVar $ el'scope'secs'wip swip
+        !scope'symbols <- readTVar $ el'scope'symbols'wip swip
         let !fullRegion =
               EL'RegionSec $
                 EL'Region
                   { el'region'span = SrcRange beginningSrcPos region'end,
-                    el'region'symbols = V.empty -- XXX fill it some way
+                    el'region'attrs = scope'attrs
                   }
         let !el'scope =
               EL'Scope
                 { el'scope'span = SrcRange beginningSrcPos region'end,
                   el'scope'sections = V.fromList $! reverse $ fullRegion : secs,
-                  el'scope'annos = scope'annos,
                   el'scope'attrs = scope'attrs,
-                  el'scope'effs = scope'effs
+                  el'scope'effs = scope'effs,
+                  el'scope'symbols = V.fromList $! reverse scope'symbols
                 }
             !resolved = EL'ResolvedModule el'scope $! reverse diags
         void $ tryPutTMVar rmVar resolved
@@ -507,7 +523,13 @@ el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
   --   el'Exit eas exit $ EL'Const nil
   ExtendsStmt _superExpr -> do
     case el'ctx'outers eac of
-      [] -> modifyTVar' diags ((stmt'span, "extends from module") :)
+      [] ->
+        el'LogDiag
+          diags
+          el'Warning
+          stmt'span
+          "extends from module"
+          "Maybe not a good idea to have super objects for a module"
       _ -> return ()
     el'Exit eas exit $ EL'Const nil
   EffectStmt !effs _docCmt ->
@@ -519,7 +541,7 @@ el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
   _ -> el'Exit eas exit $ EL'Const nil
   where
     !eac = el'context eas
-    diags = el'scope'diags'wip $ el'ctx'scope eac
+    diags = el'ctx'diags eac
 
 el'AnalyzeExpr :: ExprSrc -> EL'Analysis EL'Value
 el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
@@ -537,7 +559,7 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
         LitExpr (StringLiteral !litSpec) -> el'RunTx eas $
           el'LocateImportee litSpec $ \ !impResult _eas -> case impResult of
             Left !err -> do
-              modifyTVar' diags ((spec'span, err) :)
+              el'LogDiag diags el'Error spec'span "err-import" err
               el'Exit eas exit $ EL'Const nil
             Right !msFrom -> el'RunTx
               eas
@@ -555,7 +577,12 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
               -- TODO validate it is object type, import from it
               el'ExitTx exit impFromVal
         _ -> do
-          modifyTVar' diags ((spec'span, "bad import spec") :)
+          el'LogDiag
+            diags
+            el'Error
+            spec'span
+            "bad-import"
+            "invalid import specification"
           el'Exit eas exit $ EL'Const nil
   --
 
@@ -566,5 +593,5 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
   _ -> rtnParsed
   where
     !eac = el'context eas
-    diags = el'scope'diags'wip $ el'ctx'scope eac
+    diags = el'ctx'diags eac
     rtnParsed = el'Exit eas exit $ EL'Expr xsrc
