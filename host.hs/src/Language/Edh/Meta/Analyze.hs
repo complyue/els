@@ -474,24 +474,27 @@ el'DoResolveModule
   !rmVar
   !exit
   !eas = do
-    el'RunTx eas $
+    !diagsVar <- newTVar []
+    let !eac = (el'context eas) {el'ctx'diags = diagsVar}
+        !easModu = eas {el'context = eac}
+    el'RunTx easModu $
       el'AnalyzeStmts stmts $ \_ _eas -> do
-        !diags <- readTVar $ el'ctx'diags eac
+        !diags <- readTVar diagsVar
         let !swip = el'wip'proc $ el'ctx'scope eac
         !scope'attrs <- iopdSnapshot $ el'scope'attrs'wip swip
         !scope'effs <- iopdSnapshot $ el'scope'effs'wip swip
-        !region'end <- readTVar $ el'region'end'wip swip
+        !scope'end <- readTVar $ el'scope'end'wip swip
         !secs <- readTVar $ el'scope'secs'wip swip
         !scope'symbols <- readTVar $ el'scope'symbols'wip swip
         let !fullRegion =
               EL'RegionSec $
                 EL'Region
-                  { el'region'span = SrcRange beginningSrcPos region'end,
+                  { el'region'span = SrcRange beginningSrcPos scope'end,
                     el'region'attrs = scope'attrs
                   }
         let !el'scope =
               EL'Scope
-                { el'scope'span = SrcRange beginningSrcPos region'end,
+                { el'scope'span = SrcRange beginningSrcPos scope'end,
                   el'scope'sections = V.fromList $! reverse $ fullRegion : secs,
                   el'scope'attrs = scope'attrs,
                   el'scope'effs = scope'effs,
@@ -500,8 +503,6 @@ el'DoResolveModule
             !resolved = EL'ResolvedModule el'scope $! reverse diags
         void $ tryPutTMVar rmVar resolved
         el'Exit eas exit ()
-    where
-      !eac = el'context eas
 
 el'AnalyzeStmts :: [StmtSrc] -> EL'Analysis EL'Value
 el'AnalyzeStmts !stmts !exit !eas = go stmts

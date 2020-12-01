@@ -202,16 +202,22 @@ data EL'ResolvedModule = EL'ResolvedModule
     el'resolved'diags :: ![EL'Diagnostic]
   }
 
+-- All attributes are local to a context module, with respects to both defining
+-- & referencing. In case of importing, the import expression should serve the
+-- attribute definition, with the origin and possible renames tracked.
+
 type EL'Exports = OrderedDict AttrKey EL'AttrDef
 
 -- | an attribute definition or re-definition (i.e. update to a previously
 -- defined attribute)
 --
--- technically (re)defining an attribute is the same as binding a value (though
--- possibly mutable) to an attribute key per the backing entity of some scope
+-- technically (re)defining an attribute is the same as binding a (mutable or
+-- immutable) value to an attribute key per the backing entity of some scope
 data EL'AttrDef = EL'AttrDef
   { -- | the key of this attribute
     el'attr'def'key :: !AttrKey,
+    -- | doc comment preceeding this definition
+    el'attr'doc'cmt :: !DocComment,
     -- | the origin of this definition, typically for attributes imported from
     -- other modules, the original module and export key is represented here
     el'attr'def'origin :: !(Maybe (EL'ModuSlot, AttrKey)),
@@ -223,14 +229,32 @@ data EL'AttrDef = EL'AttrDef
     el'attr'def'focus :: !SrcRange,
     -- | the full expression created this attribute
     el'attr'def'expr :: !ExprSrc,
-    -- | the attribute value as defined
-    el'attr'def'value :: !EL'Value,
-    -- | likely from annotations, multiple definitions to a same attribute key
-    -- can have its separate, different annotated type, than previous ones
-    el'attr'def'type :: !(Maybe EL'Value),
+    -- | the attribute value, can only be filled after fully resolved
+    el'attr'def'value :: !(TMVar EL'Value),
+    -- | annotation to this attribute
+    --
+    -- note multiple definitions to a same attribute key can have separate
+    -- annotations
+    el'attr'def'anno :: !(Maybe EL'AttrAnno),
     -- | previous definition, in case this definition is an update to an
     -- previously existing attribute
     el'attr'prev'def :: !(Maybe EL'AttrDef)
+  }
+
+-- | an annotation created by the (::) operator
+data EL'AttrAnno = EL'AttrAnno
+  { -- | right-hand expression to the (::) operator
+    el'anno'expr :: !ExprSrc,
+    -- | source text of the annotation, this can show up on IDE hover, at least
+    -- before we can generate more sophisticated descriptions for that
+    el'anno'text :: !Text,
+    -- | resolved value of the right-hand expression
+    --
+    -- TODO this doesn't seem guaranteed to be resolvable to some value, maybe
+    --      here we need some dedicated data structure for representation of
+    --      various annotations, wrt how they are interpreted - mostly for
+    --      type hints, maybe even more other semantics?
+    el'anno'value :: !(TMVar EL'Value)
   }
 
 -- | an attribute reference, links to its respective definition
@@ -240,7 +264,7 @@ data EL'AttrRef = EL'AttrRef
     -- | the definition introduced this attribute
     -- this field is guaranteed to be filled only after all outer scopes have
     -- been loaded
-    el'attr'ref'def :: !(TMVar EL'AttrDef)
+    el'attr'ref'def :: !EL'AttrDef
   }
 
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
@@ -259,14 +283,16 @@ data EL'Value
       }
   | -- | an object
     EL'Object
-      { el'obj'class :: !EL'Value,
-        el'obj'supers :: ![EL'Value]
+      { el'obj'class :: !EL'AttrRef,
+        -- TODO track instance attributes created via `this.xxx` in the
+        --      `__init__()` method?
+        el'obj'supers :: ![EL'AttrRef]
       }
   | -- | a class
     EL'Class
       { el'class'name :: AttrKey,
         -- | mro
-        el'class'mro :: ![EL'Value],
+        el'class'mro :: ![EL'AttrRef],
         -- | scope of this class
         el'class'scope :: !EL'Scope,
         -- | an attribute is exported by any form of assignment targeting

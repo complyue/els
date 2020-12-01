@@ -26,7 +26,7 @@ el'AnalyzeModule !elw !ms !ana !exit !ets = do
   !scope'attrs <- iopdEmpty
   !scope'effs <- iopdEmpty
   !scope'annos <- iopdEmpty
-  !region'end <- newTVar beginningSrcPos
+  !scope'end <- newTVar beginningSrcPos
   !secs <- newTVar []
   !scope'symbols <- newTVar []
 
@@ -41,15 +41,15 @@ el'AnalyzeModule !elw !ms !ana !exit !ets = do
             el'ctx'diags = ctx'diags,
             el'ctx'scope =
               EL'ObjectWIP
-                EL'WIP'Proc
+                EL'RunProc
                   { el'scope'attrs'wip = scope'attrs,
                     el'scope'effs'wip = scope'effs,
                     el'scope'annos'wip = scope'annos,
-                    el'region'end'wip = region'end,
+                    el'scope'end'wip = scope'end,
                     el'scope'secs'wip = secs,
                     el'scope'symbols'wip = scope'symbols
                   }
-                EL'WIP'Object
+                EL'InitObject
                   { el'obj'exts'wip = exts,
                     el'obj'exps'wip = exps
                   },
@@ -98,18 +98,18 @@ data EL'Context = EL'Context
   }
 
 data EL'ScopeWIP
-  = EL'ProcWIP !EL'WIP'Proc
-  | EL'ClassWIP !EL'WIP'Proc !EL'WIP'Class
-  | EL'ObjectWIP !EL'WIP'Proc !EL'WIP'Object
+  = EL'ProcWIP !EL'RunProc
+  | EL'ClassWIP !EL'RunProc !EL'DefineClass
+  | EL'ObjectWIP !EL'RunProc !EL'InitObject
 
-el'wip'proc :: EL'ScopeWIP -> EL'WIP'Proc
+el'wip'proc :: EL'ScopeWIP -> EL'RunProc
 el'wip'proc (EL'ProcWIP p) = p
 el'wip'proc (EL'ClassWIP p _) = p
 el'wip'proc (EL'ObjectWIP p _) = p
 
--- | an object initializing procedure, include module procedure and namespace
--- procedures
-data EL'WIP'Object = EL'WIP'Object
+-- | an object initializing procedure, can be a module procedure or namespace
+-- procedure
+data EL'InitObject = EL'InitObject
   { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
     -- super objects),  up to time of analysis
     el'obj'exts'wip :: !(TVar [EL'AttrRef]),
@@ -119,7 +119,7 @@ data EL'WIP'Object = EL'WIP'Object
   }
 
 -- | a class defining procedure
-data EL'WIP'Class = EL'WIP'Class
+data EL'DefineClass = EL'DefineClass
   { -- | all `extends` appeared in the direct class scope (i.e. super classes),
     --  up to time of analysis
     el'class'exts'wip :: !(TVar [EL'AttrRef]),
@@ -135,17 +135,17 @@ data EL'WIP'Class = EL'WIP'Class
   }
 
 -- a method procedure, including vanilla method, generator, producer, operator,
--- (vanilla/generator/producer) arrow and scoped blocks
-data EL'WIP'Proc = EL'WIP'Proc
+-- (vanilla/generator/producer) arrow, and maybe a bit confusing, scoped blocks
+data EL'RunProc = EL'RunProc
   { -- | last appearances of attributes encountered, up to time of analysis
     el'scope'attrs'wip :: !(IOPD AttrKey EL'AttrDef),
     -- | 1st appearances of effectful artifacts, up to time of analysis
     el'scope'effs'wip :: !(IOPD AttrKey EL'AttrDef),
     -- | last appearances of annotations encountered in the direct class scope,
-    --  up to time of analysis
-    el'scope'annos'wip :: !(IOPD AttrKey EL'Value),
+    -- up to time of analysis
+    el'scope'annos'wip :: !(IOPD AttrKey EL'AttrAnno),
     -- | end position for current region in the scope, known lately
-    el'region'end'wip :: !(TVar SrcPos),
+    el'scope'end'wip :: !(TVar SrcPos),
     -- | accumulated sections lately
     el'scope'secs'wip :: !(TVar [EL'Section]),
     -- | accumulated symbols lately
