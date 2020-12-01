@@ -41,6 +41,10 @@ el'AnalyzeModule !elw !ms !ana !exit !ets = do
             el'ctx'diags = ctx'diags,
             el'ctx'scope =
               EL'ObjectWIP
+                EL'InitObject
+                  { el'obj'exts'wip = exts,
+                    el'obj'exps'wip = exps
+                  }
                 EL'RunProc
                   { el'scope'attrs'wip = scope'attrs,
                     el'scope'effs'wip = scope'effs,
@@ -48,10 +52,6 @@ el'AnalyzeModule !elw !ms !ana !exit !ets = do
                     el'scope'end'wip = scope'end,
                     el'scope'secs'wip = secs,
                     el'scope'symbols'wip = scope'symbols
-                  }
-                EL'InitObject
-                  { el'obj'exts'wip = exts,
-                    el'obj'exps'wip = exps
                   },
             el'ctx'outers = [],
             el'ctx'pure = False,
@@ -99,13 +99,13 @@ data EL'Context = EL'Context
 
 data EL'ScopeWIP
   = EL'ProcWIP !EL'RunProc
-  | EL'ClassWIP !EL'RunProc !EL'DefineClass
-  | EL'ObjectWIP !EL'RunProc !EL'InitObject
+  | EL'ClassWIP !EL'DefineClass !EL'RunProc
+  | EL'ObjectWIP !EL'InitObject !EL'RunProc
 
 el'wip'proc :: EL'ScopeWIP -> EL'RunProc
 el'wip'proc (EL'ProcWIP p) = p
-el'wip'proc (EL'ClassWIP p _) = p
-el'wip'proc (EL'ObjectWIP p _) = p
+el'wip'proc (EL'ClassWIP _ p) = p
+el'wip'proc (EL'ObjectWIP _ p) = p
 
 -- | an object initializing procedure, can be a module procedure or namespace
 -- procedure

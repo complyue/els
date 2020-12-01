@@ -275,33 +275,53 @@ data EL'Value
   | -- | apk at analysis time
     -- TODO should an apk with every element decidable to be an `EL'Const` ?
     EL'Apk !EL'ArgsPack
-  | -- | a procedure
-    EL'Proc
-      { el'proc'name :: AttrKey,
-        -- | scope of this proc
-        el'proc'scope :: !EL'Scope
-      }
-  | -- | an object
-    EL'Object
-      { el'obj'class :: !EL'AttrRef,
-        -- TODO track instance attributes created via `this.xxx` in the
-        --      `__init__()` method?
-        el'obj'supers :: ![EL'AttrRef]
-      }
-  | -- | a class
-    EL'Class
-      { el'class'name :: AttrKey,
-        -- | mro
-        el'class'mro :: ![EL'AttrRef],
-        -- | scope of this class
-        el'class'scope :: !EL'Scope,
-        -- | an attribute is exported by any form of assignment targeting
-        -- current scope, or any form of procedure declaration, which follows an
-        -- `export` keyword, or within a block following an `export` keyword
-        el'class'exports :: !EL'Exports
-      }
   | -- | an arbitrary expression not resolved at analysis time
     EL'Expr !ExprSrc
+  | -- | a procedure
+    EL'ProcVal !EL'Proc
+  | -- | an object
+    EL'ObjVal !EL'Object
+  | -- | a class
+    EL'ClsVal !EL'Class
+
+-- | a procedure
+data EL'Proc = EL'Proc
+  { el'proc'name :: AttrKey,
+    -- | scope of this proc
+    el'proc'scope :: !EL'Scope
+  }
+
+-- | an object, with module and namespace being special cases
+data EL'Object = EL'Object
+  { el'obj'class :: !EL'Class,
+    -- the `supers` list of an object at runtime is instances created
+    -- according to its class' `mro` list, plus more super objects appended
+    -- by `extends` statements (usually from within the `__init__()` method
+    -- but dynamic `extends` from arbitrary methods whenever called is also
+    -- allowed)
+    --
+    -- this list is collected at analysis time
+    el'obj'exts :: ![EL'Object],
+    -- | object attributes are exported from the object initialising
+    -- procedure in case of a module or namespace object, and typically
+    -- from the `__init__()` method otherwise. while it is allowed to
+    -- export artifacts from an arbitrary instance method whenever called,
+    -- which should probably be considered unusual.
+    el'obj'exports :: !EL'Exports
+  }
+
+-- | a class
+data EL'Class = EL'Class
+  { el'class'name :: AttrKey,
+    -- | mro
+    el'class'mro :: ![EL'Class],
+    -- | scope of the class initializing procedure
+    el'class'scope :: !EL'Scope,
+    -- | class attributes are exported from the class defining procedure, while
+    -- it is allowed to export artifacts from an arbitrary class method whenever
+    -- called, which should probably be considered unusual.
+    el'class'exports :: !EL'Exports
+  }
 
 data EL'Section = EL'ScopeSec !EL'Scope | EL'RegionSec !EL'Region
 

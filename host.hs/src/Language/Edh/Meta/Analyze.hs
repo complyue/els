@@ -554,8 +554,8 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
   -- importing
   ImportExpr !argsRcvr impSpec@(ExprSrc !specExpr spec'span) !maybeInto ->
     case maybeInto of
-      Just !intoExpr ->
-        rtnParsed -- TODO handle re-targeted import
+      Just _intoExpr ->
+        returnAsExpr -- TODO handle importing into some object
       Nothing -> case specExpr of
         LitExpr (StringLiteral !litSpec) -> el'RunTx eas $
           el'LocateImportee litSpec $ \ !impResult _eas -> case impResult of
@@ -591,8 +591,8 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
   -- CaseExpr !tgtExpr !branchesExpr -> undefined
   -- ForExpr !argsRcvr !iterExpr !doStmt -> undefined
   -- CallExpr !calleeExpr !argsSndr -> undefined
-  _ -> rtnParsed
+  _ -> returnAsExpr
   where
     !eac = el'context eas
     diags = el'ctx'diags eac
-    rtnParsed = el'Exit eas exit $ EL'Expr xsrc
+    returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
