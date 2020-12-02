@@ -134,36 +134,42 @@ data EL'ModuSlot = EL'ModuSlot
     -- | absolute path of the `.edh` src file
     -- this corresponds to `__file__` in the module at runtime
     el'modu'doc :: !SrcDoc,
-    -- fields pertain results from different stages of analysation
-    -- the 1st layer of `TMVar` when non-empty means it has been worked on,
-    -- the 2nd layer of the `TMVar` provides awaitable result from the WIP, and
-    -- if non-empty, means the work has already been done.
-    -- clearing the 1st layer `TMVar` invalidates previous analysis work, `while
-    -- the 2nd layer `TMVar` should usually not be cleared once filled.
-    el'modu'parsed :: !(TMVar (TMVar EL'ParsedModule)),
-    el'modu'resolved :: !(TMVar (TMVar EL'ResolvedModule)),
-    -- | finalized exports from this module
-    --
-    -- filling of this field is a signal that this module has just been fully
-    -- resolved
-    --
-    -- CAVEAT: this won't be filled until all dependencies this module is
-    --         re-exporting are resolved, blindly waiting on this synchronously,
-    --         where cyclic imports present, may cause deadlock, thus the
-    --         process killed by GHC RTS once detected
-    el'modu'exports :: !(TMVar EL'Exports),
-    -- | the set of exports for this module will be updated respecting
-    -- re-exports from specific dependency modules, the latest known exports
-    -- will be broadcasted through this channel
-    --
-    -- usually you'd want to:
-    --    Right <$> tryReadTMVar (el'modu'exports ms)
-    --      `orElse`
-    --    Left <$> readTChan dupOfUpdChan
-    --
-    -- CAVEAT: dup the `TChan` to read it! it should always be a broadcast
-    --         channel, i.e. reading it directly will always `retry`
-    el'modu'exports'upd :: !(TChan EL'Exports),
+    -- | tracking the parsing of this module
+    el'modu'parsing :: !(TMVar EL'ModuParsing),
+    -- | tracking the resolving of this module
+    el'modu'resolution :: !(TMVar EL'ModuResolution)
+  }
+
+instance Eq EL'ModuSlot where
+  x == y = el'modu'doc x == el'modu'doc y
+
+instance Hashable EL'ModuSlot where
+  hashWithSalt s v =
+    let SrcDoc !absPath = el'modu'doc v
+     in hashWithSalt s absPath
+
+data EL'ModuParsing
+  = EL'ModuParsing !(TVar [EL'ParsedModule -> STM ()])
+  | EL'ModuParsed !EL'ParsedModule
+
+data EL'ParsedModule = EL'ParsedModule
+  { el'modu'doc'comment :: !(Maybe DocComment),
+    el'modu'stmts :: ![StmtSrc],
+    -- | diagnostics generated from this stage of analysis
+    el'parsing'diags :: ![EL'Diagnostic]
+  }
+
+data EL'ModuResolution
+  = EL'ModuResolving !(TVar [EL'ResolvedModule -> STM ()])
+  | EL'ModuResolved !EL'ResolvedModule
+
+data EL'ResolvedModule = EL'ResolvedModule
+  { -- | there will be nested scopes appearing in natural source order, within
+    -- this root scope of the module
+    el'modu'scope :: !EL'Scope,
+    -- | exports from this module, mutated upon any origin module of re-exports
+    -- get resolved
+    el'modu'exports :: !(TVar EL'Exports),
     -- | other modules those should be invalidated once this module is changed
     --
     -- note a dependant may stop depending on this module due to src changes,
@@ -177,29 +183,9 @@ data EL'ModuSlot = EL'ModuSlot
     --
     -- note after invalidated, re-analysation of this module may install a new
     -- version of this map reflecting dependencies up-to-date
-    el'modu'dependencies :: !(TVar (HashMap EL'ModuSlot Bool))
-  }
-
-instance Eq EL'ModuSlot where
-  x == y = el'modu'doc x == el'modu'doc y
-
-instance Hashable EL'ModuSlot where
-  hashWithSalt s v =
-    let SrcDoc !absPath = el'modu'doc v
-     in hashWithSalt s absPath
-
-data EL'ParsedModule = EL'ParsedModule
-  { el'parsed'stmts :: ![StmtSrc],
+    el'modu'dependencies :: !(TVar (HashMap EL'ModuSlot Bool)),
     -- | diagnostics generated from this stage of analysis
-    el'parsed'diags :: ![EL'Diagnostic]
-  }
-
-data EL'ResolvedModule = EL'ResolvedModule
-  { -- | there will be nested scopes appearing in natural source order, within
-    -- this root scope of the module
-    el'resolved'scope :: !EL'Scope,
-    -- | diagnostics generated from this stage of analysis
-    el'resolved'diags :: ![EL'Diagnostic]
+    el'resolution'diags :: ![EL'Diagnostic]
   }
 
 -- All attributes are local to a context module, with respects to both defining
