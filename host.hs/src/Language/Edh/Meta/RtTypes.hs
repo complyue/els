@@ -123,7 +123,13 @@ data EL'DefineClass = EL'DefineClass
 -- a method procedure, including vanilla method, generator, producer, operator,
 -- (vanilla/generator/producer) arrow, and maybe a bit confusing, scoped blocks
 data EL'RunProc = EL'RunProc
-  { -- | last appearances of attributes encountered, up to time of analysis
+  { -- | redundant to `el'modu'exts'wip` or `el'obj'exts'wip` or
+    -- `el'class'exts'wip` or `el'inst'exts'wip` whichever is appropriate
+    el'scope'exts'wip :: !(TVar [EL'AttrRef]),
+    -- | redundant to `el'modu'exps'wip` or `el'obj'exps'wip` or
+    -- `el'class'exps'wip` or `el'inst'exps'wip` whichever is appropriate
+    el'scope'exps'wip :: !EL'Exports,
+    -- | last appearances of attributes encountered, up to time of analysis
     el'scope'attrs'wip :: !(IOPD AttrKey EL'AttrDef),
     -- | 1st appearances of effectful artifacts, up to time of analysis
     el'scope'effs'wip :: !(IOPD AttrKey EL'AttrDef),

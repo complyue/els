@@ -464,6 +464,8 @@ asModuleResolved !ms !act' !eas =
       !diagsVar <- newTVar []
       !moduExts <- newTVar []
       !moduExps <- iopdEmpty
+      !moduDependants <- newTVar Map.empty
+      !moduDepencencies <- newTVar Map.empty
       !moduAttrs <- iopdEmpty
       !moduEffs <- iopdEmpty
       !moduAnnos <- iopdEmpty
@@ -474,9 +476,17 @@ asModuleResolved !ms !act' !eas =
             eac
               { el'ctx'diags = diagsVar,
                 el'ctx'scope =
-                  EL'ObjectWIP
-                    (EL'InitObject moduExts moduExps)
+                  EL'ModuWIP
+                    ms
+                    ( EL'InitModu
+                        moduExts
+                        moduExps
+                        moduDependants
+                        moduDepencencies
+                    )
                     ( EL'RunProc
+                        moduExts
+                        moduExps
                         moduAttrs
                         moduEffs
                         moduAnnos
@@ -514,9 +524,9 @@ asModuleResolved !ms !act' !eas =
           exitEdh ets exit $
             EL'ResolvedModule
               el'scope
-              undefined
-              undefined
-              undefined
+              moduExps
+              moduDependants
+              moduDepencencies
               (reverse diags)
 
 el'AnalyzeStmts :: [StmtSrc] -> EL'Analysis EL'Value
