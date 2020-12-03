@@ -331,23 +331,33 @@ asModuleParsed !ms !act' !eas =
   tryReadTMVar parsingVar >>= \case
     Nothing -> do
       !acts <- newTVar [\ !modu -> el'RunTx eas $ act' modu]
-      tryPutTMVar parsingVar (EL'ModuParsing acts) >>= \case
-        True -> doParseModule $ \ !parsed -> do
-          -- installed the parsed record
-          tryTakeTMVar parsingVar >>= \case
-            Just (EL'ModuParsing acts')
-              | acts' == acts ->
-                putTMVar parsingVar $ EL'ModuParsed parsed
-            Just !other ->
-              -- invalidated & new analysation wip
-              putTMVar parsingVar other
-            _ ->
-              -- invalidated meanwhile
-              return ()
-          -- trigger post actions
-          readTVar acts >>= sequence_ . (<*> pure parsed)
-        False -> retry -- avoid duplicate efforts
+      -- the put will retry if parsingVar has been changed by others
+      -- concurrently, so no duplicate effort would incur here
+      putTMVar parsingVar (EL'ModuParsing acts)
+      doParseModule $ \ !parsed -> do
+        -- installed the parsed record
+        tryTakeTMVar parsingVar >>= \case
+          Just (EL'ModuParsing acts')
+            | acts' == acts ->
+              putTMVar parsingVar $ EL'ModuParsed parsed
+          Just !other ->
+            -- invalidated & new analysation wip
+            putTMVar parsingVar other
+          _ ->
+            -- invalidated meanwhile
+            return ()
+        -- trigger post actions
+        -- note they should just enque a proper Edh task to
+        -- their respective initiating thread's task queue, so
+        -- here we care neither about exceptions nor orders
+        readTVar acts >>= sequence_ . (<*> pure parsed)
     Just (EL'ModuParsing !acts) -> modifyTVar' acts $
+      -- always run the post action on the initiating thread
+      -- TODO on entry, check not in an `ai` tx which this can break
+      --
+      -- note the action will appear executed out-of-order in this case, and
+      -- further more, the action can cease execution if the initiating thread
+      -- has terminated when the resolution done
       (:) $ \ !parsed -> el'RunTx eas $ act' parsed
     Just (EL'ModuParsed !parsed) -> el'RunTx eas $ act' parsed
   where
@@ -405,23 +415,33 @@ asModuleResolved !ms !act' !eas =
   tryReadTMVar resoVar >>= \case
     Nothing -> do
       !acts <- newTVar [\ !modu -> el'RunTx eas $ act' modu]
-      tryPutTMVar resoVar (EL'ModuResolving acts) >>= \case
-        True -> doResolveModule $ \ !resolved -> do
-          -- installed the resolved record
-          tryTakeTMVar resoVar >>= \case
-            Just (EL'ModuResolving acts')
-              | acts' == acts ->
-                putTMVar resoVar $ EL'ModuResolved resolved
-            Just !other ->
-              -- invalidated & new analysation wip
-              putTMVar resoVar other
-            _ ->
-              -- invalidated meanwhile
-              return ()
-          -- trigger post actions
-          readTVar acts >>= sequence_ . (<*> pure resolved)
-        False -> retry -- avoid duplicate efforts
+      -- the put will retry if parsingVar has been changed by others
+      -- concurrently, so no duplicate effort would incur here
+      putTMVar resoVar (EL'ModuResolving acts)
+      doResolveModule $ \ !resolved -> do
+        -- installed the resolved record
+        tryTakeTMVar resoVar >>= \case
+          Just (EL'ModuResolving acts')
+            | acts' == acts ->
+              putTMVar resoVar $ EL'ModuResolved resolved
+          Just !other ->
+            -- invalidated & new analysation wip
+            putTMVar resoVar other
+          _ ->
+            -- invalidated meanwhile
+            return ()
+        -- trigger post actions
+        -- note they should just enque a proper Edh task to
+        -- their respective initiating thread's task queue, so
+        -- here we care neither about exceptions nor orders
+        readTVar acts >>= sequence_ . (<*> pure resolved)
     Just (EL'ModuResolving !acts) -> modifyTVar' acts $
+      -- always run the post action on the initiating thread
+      -- TODO on entry, check not in an `ai` tx which this can break
+      --
+      -- note the action will appear executed out-of-order in this case, and
+      -- further more, the action can cease execution if the initiating thread
+      -- has terminated when the parsing done
       (:) $ \ !resolved -> el'RunTx eas $ act' resolved
     Just (EL'ModuResolved !resolved) -> el'RunTx eas $ act' resolved
   where
@@ -597,7 +617,9 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
                 Left !err -> do
                   el'LogDiag diags el'Error spec'span "err-import" err
                   el'Exit eas exit $ EL'Const nil
-                Right !msImportee -> undefined
+                Right !msImportee -> el'RunTx eas $
+                  asModuleResolved msImportee $ \ !resolved ->
+                    undefined
         -- el'RunTx
         --   eas
         --     { el'context = eac {el'ctx'module = msImportee}
