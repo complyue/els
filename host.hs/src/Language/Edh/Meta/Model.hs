@@ -166,24 +166,24 @@ data EL'ModuResolution
 data EL'ResolvedModule = EL'ResolvedModule
   { -- | there will be nested scopes appearing in natural source order, within
     -- this root scope of the module
-    el'modu'scope :: !EL'Scope,
+    el'resolved'scope :: !EL'Scope,
     -- | exports from this module, mutated upon any origin module of re-exports
     -- get resolved
-    el'modu'exports :: !(TVar EL'Exports),
+    el'resolved'exports :: !EL'Exports,
     -- | other modules those should be invalidated once this module is changed
     --
     -- note a dependant may stop depending on this module due to src changes,
-    -- so cross checking of its `el'modu'dependencies` should be performed and
-    -- have this `el'modu'dependants` updated upon such changes
-    el'modu'dependants :: !(TVar (HashMap EL'ModuSlot Bool)),
+    -- so cross checking of its `el'resolved'dependencies` should be performed and
+    -- have this `el'resolved'dependants` updated upon such changes
+    el'resolved'dependants :: !(TVar (HashMap EL'ModuSlot Bool)),
     -- | other modules this module depends on
     --
-    -- a dependency module's `el'modu'dependants` should be updated marking
+    -- a dependency module's `el'resolved'dependants` should be updated marking
     -- this module as a dependant as well
     --
     -- note after invalidated, re-analysation of this module may install a new
     -- version of this map reflecting dependencies up-to-date
-    el'modu'dependencies :: !(TVar (HashMap EL'ModuSlot Bool)),
+    el'resolved'dependencies :: !(TVar (HashMap EL'ModuSlot Bool)),
     -- | diagnostics generated from this stage of analysis
     el'resolution'diags :: ![EL'Diagnostic]
   }
@@ -192,7 +192,7 @@ data EL'ResolvedModule = EL'ResolvedModule
 -- & referencing. In case of importing, the import expression should serve the
 -- attribute definition, with the origin and possible renames tracked.
 
-type EL'Exports = OrderedDict AttrKey EL'AttrDef
+type EL'Exports = IOPD AttrKey EL'AttrDef
 
 -- | an attribute definition or re-definition (i.e. update to a previously
 -- defined attribute)
