@@ -521,7 +521,7 @@ asModuleResolved !ms !act' !eas =
       el'RunTx easModu $
         el'AnalyzeStmts stmts $ \_ _eas -> do
           !diags <- readTVar diagsVar
-          let !swip = el'wip'proc $ el'ctx'scope eac
+          let !swip = el'ProcWIP $ el'ctx'scope eac
           !scope'attrs <- iopdSnapshot $ el'scope'attrs'wip swip
           !scope'effs <- iopdSnapshot $ el'scope'effs'wip swip
           !scope'end <- readTVar $ el'scope'end'wip swip
@@ -617,20 +617,15 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
                 Left !err -> do
                   el'LogDiag diags el'Error spec'span "err-import" err
                   el'Exit eas exit $ EL'Const nil
-                Right !msImportee -> el'RunTx eas $
-                  asModuleResolved msImportee $ \ !resolved ->
-                    undefined
-        -- el'RunTx
-        --   eas
-        --     { el'context = eac {el'ctx'module = msImportee}
-        --     }
-        --   $ el'ResolveModule $ \ !resolvedImporteeVar _eas ->
-        --     readTMVar resolvedImporteeVar >>= \_resolvedImportee ->
-        --       tryReadTMVar (el'modu'exports msImportee) >>= \case
-        --         Just !expsFrom ->
-        --           undefined -- TODO importee already resolved
-        --         Nothing ->
-        --           undefined -- TODO importee not resolved yet
+                Right !msImportee -> do
+                  el'RunTx eas $
+                    asModuleResolved msImportee $ \ !resolved _eas ->
+                      impIntoScope (el'resolved'exports resolved) argsRcvr
+                  -- above can finish synchronously or asynchronously, return
+                  -- the importee module now anyway, as waiting for the
+                  -- resolved record is deadlock prone here, in case of cyclic
+                  -- imports
+                  el'Exit eas exit $ EL'ModuVal msImportee
         AttrExpr {} ->
           el'RunTx eas $ -- obj import
             el'AnalyzeExpr impSpec $ \ !impFromVal -> do
@@ -655,3 +650,21 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
     !eac = el'context eas
     diags = el'ctx'diags eac
     returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+
+    scope = el'ctx'scope eac
+    proc'wip = el'ProcWIP scope
+
+    impIntoScope :: EL'Exports -> ArgsReceiver -> STM ()
+    impIntoScope !exps = \case
+      WildReceiver -> undefined
+      PackReceiver !ars -> go ars
+      SingleReceiver !ar -> go [ar]
+      where
+        !attrs = el'scope'attrs'wip proc'wip
+        !exps = el'scope'exps'wip proc'wip
+
+        go [] = return ()
+        go (ar : rest) = do
+          seq ar (return ())
+
+          go rest

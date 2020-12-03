@@ -56,11 +56,11 @@ data EL'ScopeWIP
   | EL'ObjectWIP !EL'InitObject !EL'RunProc
   | EL'ModuWIP !EL'ModuSlot !EL'InitModu !EL'RunProc
 
-el'wip'proc :: EL'ScopeWIP -> EL'RunProc
-el'wip'proc (EL'ProcWIP p) = p
-el'wip'proc (EL'ClassWIP _ p) = p
-el'wip'proc (EL'ObjectWIP _ p) = p
-el'wip'proc (EL'ModuWIP _ _ p) = p
+el'ProcWIP :: EL'ScopeWIP -> EL'RunProc
+el'ProcWIP (EL'ProcWIP p) = p
+el'ProcWIP (EL'ClassWIP _ p) = p
+el'ProcWIP (EL'ObjectWIP _ p) = p
+el'ProcWIP (EL'ModuWIP _ _ p) = p
 
 el'ContextModule :: EL'Context -> Maybe EL'ModuSlot
 el'ContextModule !eac = go $ el'ctx'scope eac : el'ctx'outers eac
@@ -123,10 +123,10 @@ data EL'DefineClass = EL'DefineClass
 -- a method procedure, including vanilla method, generator, producer, operator,
 -- (vanilla/generator/producer) arrow, and maybe a bit confusing, scoped blocks
 data EL'RunProc = EL'RunProc
-  { -- | redundant to `el'modu'exts'wip` or `el'obj'exts'wip` or
+  { -- | this points to `el'modu'exts'wip` or `el'obj'exts'wip` or
     -- `el'class'exts'wip` or `el'inst'exts'wip` whichever is appropriate
     el'scope'exts'wip :: !(TVar [EL'AttrRef]),
-    -- | redundant to `el'modu'exps'wip` or `el'obj'exps'wip` or
+    -- | this points to `el'modu'exps'wip` or `el'obj'exps'wip` or
     -- `el'class'exps'wip` or `el'inst'exps'wip` whichever is appropriate
     el'scope'exps'wip :: !EL'Exports,
     -- | last appearances of attributes encountered, up to time of analysis

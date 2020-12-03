@@ -263,6 +263,8 @@ data EL'Value
     EL'Apk !EL'ArgsPack
   | -- | an arbitrary expression not resolved at analysis time
     EL'Expr !ExprSrc
+  | -- | a module object
+    EL'ModuVal !EL'ModuSlot
   | -- | a procedure
     EL'ProcVal !EL'Proc
   | -- | an object
@@ -293,20 +295,22 @@ data EL'Object = EL'Object
     -- from the `__init__()` method otherwise. while it is allowed to
     -- export artifacts from an arbitrary instance method whenever called,
     -- which should probably be considered unusual.
-    el'obj'exports :: !EL'Exports
+    el'obj'exps :: !EL'Exports
   }
 
 -- | a class
 data EL'Class = EL'Class
   { el'class'name :: AttrKey,
-    -- | mro
+    -- | extends
+    el'class'exts :: ![EL'Class],
+    -- | C3 linearized mro list
     el'class'mro :: ![EL'Class],
     -- | scope of the class initializing procedure
     el'class'scope :: !EL'Scope,
     -- | class attributes are exported from the class defining procedure, while
     -- it is allowed to export artifacts from an arbitrary class method whenever
     -- called, which should probably be considered unusual.
-    el'class'exports :: !EL'Exports
+    el'class'exps :: !EL'Exports
   }
 
 data EL'Section = EL'ScopeSec !EL'Scope | EL'RegionSec !EL'Region
