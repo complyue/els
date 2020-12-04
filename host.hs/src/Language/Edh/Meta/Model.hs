@@ -204,9 +204,6 @@ data EL'AttrDef = EL'AttrDef
     el'attr'def'key :: !AttrKey,
     -- | doc comment preceeding this definition
     el'attr'doc'cmt :: !(Maybe DocComment),
-    -- | the origin of this definition, typically for attributes imported from
-    -- other modules, the original module and export key is represented here
-    el'attr'def'origin :: !(Maybe (EL'ModuSlot, AttrKey)),
     -- | the operation created this attribute
     -- in addition to assignment operators e.g. @=@ @+=@ etc. it can be
     -- @<arrow>@, @<proc-def>@, @<import>@ and @<let>@ etc.
@@ -216,7 +213,7 @@ data EL'AttrDef = EL'AttrDef
     -- | the full expression created this attribute
     el'attr'def'expr :: !ExprSrc,
     -- | the attribute value, can only be filled after fully resolved
-    el'attr'def'value :: !(TMVar EL'Value),
+    el'attr'def'value :: !EL'Value,
     -- | annotation to this attribute
     --
     -- note multiple definitions to a same attribute key can have separate
@@ -227,6 +224,11 @@ data EL'AttrDef = EL'AttrDef
     el'attr'prev'def :: !(Maybe EL'AttrDef)
   }
 
+el'UltimateValue :: EL'AttrDef -> EL'Value
+el'UltimateValue !def = case el'attr'def'value def of
+  EL'External _ms !def' -> el'UltimateValue def'
+  !val -> val
+
 -- | an annotation created by the (::) operator
 data EL'AttrAnno = EL'AttrAnno
   { -- | right-hand expression to the (::) operator
@@ -234,13 +236,13 @@ data EL'AttrAnno = EL'AttrAnno
     -- | source text of the annotation, this can show up on IDE hover, at least
     -- before we can generate more sophisticated descriptions for that
     el'anno'text :: !Text,
-    -- | resolved value of the right-hand expression
+    -- | possibly resolved value of the right-hand expression
     --
     -- TODO this doesn't seem guaranteed to be resolvable to some value, maybe
     --      here we need some dedicated data structure for representation of
     --      various annotations, wrt how they are interpreted - mostly for
     --      type hints, maybe even more other semantics?
-    el'anno'value :: !(TMVar EL'Value)
+    el'anno'value :: !(Maybe EL'Value)
   }
 
 -- | an attribute reference, links to its respective definition
@@ -261,9 +263,8 @@ data EL'Value
   | -- | apk at analysis time
     -- TODO should an apk with every element decidable to be an `EL'Const` ?
     EL'Apk !EL'ArgsPack
-  | -- | locally defined value
-    -- its `el'attr'def'value` may or may not have been resolved
-    EL'Defined !EL'AttrDef
+  | -- | externally defined value, most probably imported
+    EL'External !EL'ModuSlot !EL'AttrDef
   | -- | an arbitrary expression not resolved at analysis time
     EL'Expr !ExprSrc
   | -- | a module object

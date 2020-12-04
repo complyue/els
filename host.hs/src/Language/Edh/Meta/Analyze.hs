@@ -624,6 +624,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
                       -- here asynchronously, to not missing them
                       impIntoScope
                         spec'span
+                        msImportee
                         (el'resolved'exports resolved)
                         argsRcvr
                   -- above can finish synchronously or asynchronously, return
@@ -659,12 +660,18 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
     scope = el'ctx'scope eac
     proc'wip = el'ProcWIP scope
 
-    impIntoScope :: SrcRange -> EL'Exports -> ArgsReceiver -> STM ()
-    impIntoScope !spec'span !srcExps !asr =
-      iopdSnapshot srcExps >>= \ !srcArts -> case asr of
-        WildReceiver -> undefined
-        PackReceiver !ars -> go srcArts ars
-        SingleReceiver !ar -> go srcArts [ar]
+    impIntoScope ::
+      SrcRange ->
+      EL'ModuSlot ->
+      EL'Exports ->
+      ArgsReceiver ->
+      STM ()
+    impIntoScope !spec'span !srcModu !srcExps !asr =
+      odMap (EL'External srcModu) <$> iopdSnapshot srcExps >>= \ !srcArts ->
+        case asr of
+          WildReceiver -> undefined
+          PackReceiver !ars -> go srcArts ars
+          SingleReceiver !ar -> go srcArts [ar]
       where
         !localTgt =
           if el'ctx'eff'defining eac
@@ -672,7 +679,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
             else el'scope'attrs'wip proc'wip
         localExps = el'scope'exps'wip proc'wip
 
-        go :: OrderedDict AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
+        go :: OrderedDict AttrKey EL'Value -> [ArgReceiver] -> STM ()
         go !srcArts [] =
           if odNull srcArts
             then return () -- very well expected
@@ -723,17 +730,15 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
               Nothing -> return () -- invalid attr addr
               Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
               Just !localKey -> do
-                let !kwVal = EL'Apk $ EL'ArgsPack [] $ odMap EL'Defined srcArts
-                !defVal <- newTMVar kwVal
-                let !attrDef =
+                let !kwVal = EL'Apk $ EL'ArgsPack [] srcArts
+                    !attrDef =
                       EL'AttrDef
                         localKey
                         docCmt
-                        Nothing -- TODO reflect origin modu here?
                         "<import>"
                         addr'span
                         xsrc
-                        defVal
+                        kwVal
                         Nothing -- TODO associate annos
                         Nothing
 

@@ -163,20 +163,17 @@ el'ResolveAttrAddr _ (AttrAddrSrc (QuaintAttr !attrName) _) =
 el'ResolveAttrAddr !eac (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
   el'ResolveContextAttr eac (AttrByName symName) >>= \case
     Nothing -> return Nothing
-    Just !def ->
-      tryReadTMVar (el'attr'def'value def) >>= \case
-        Nothing -> return Nothing
-        Just !val -> case val of
-          EL'Const (EdhSymbol !symVal) -> return $ Just $ AttrBySym symVal
-          EL'Const (EdhString !nameVal) -> return $ Just $ AttrByName nameVal
-          _ -> do
-            el'LogDiag
-              diags
-              el'Error
-              addr'span
-              "bad-attr-ref"
-              "no such attribute defined"
-            return Nothing
+    Just !def -> case el'UltimateValue def of
+      EL'Const (EdhSymbol !symVal) -> return $ Just $ AttrBySym symVal
+      EL'Const (EdhString !nameVal) -> return $ Just $ AttrByName nameVal
+      _ -> do
+        el'LogDiag
+          diags
+          el'Error
+          addr'span
+          "bad-attr-ref"
+          "no such attribute defined"
+        return Nothing
   where
     diags = el'ctx'diags eac
 
