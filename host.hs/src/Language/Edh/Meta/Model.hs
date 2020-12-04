@@ -261,6 +261,9 @@ data EL'Value
   | -- | apk at analysis time
     -- TODO should an apk with every element decidable to be an `EL'Const` ?
     EL'Apk !EL'ArgsPack
+  | -- | locally defined value
+    -- its `el'attr'def'value` may or may not have been resolved
+    EL'Defined !EL'AttrDef
   | -- | an arbitrary expression not resolved at analysis time
     EL'Expr !ExprSrc
   | -- | a module object

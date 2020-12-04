@@ -620,7 +620,12 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
                 Right !msImportee -> do
                   el'RunTx eas $
                     asModuleResolved msImportee $ \ !resolved _eas ->
-                      impIntoScope (el'resolved'exports resolved) argsRcvr
+                      -- TODO find mechanism in LSP to report diags discovered
+                      -- here asynchronously, to not missing them
+                      impIntoScope
+                        spec'span
+                        (el'resolved'exports resolved)
+                        argsRcvr
                   -- above can finish synchronously or asynchronously, return
                   -- the importee module now anyway, as waiting for the
                   -- resolved record is deadlock prone here, in case of cyclic
@@ -654,8 +659,8 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
     scope = el'ctx'scope eac
     proc'wip = el'ProcWIP scope
 
-    impIntoScope :: EL'Exports -> ArgsReceiver -> STM ()
-    impIntoScope !srcExps !asr =
+    impIntoScope :: SrcRange -> EL'Exports -> ArgsReceiver -> STM ()
+    impIntoScope !spec'span !srcExps !asr =
       iopdSnapshot srcExps >>= \ !srcArts -> case asr of
         WildReceiver -> undefined
         PackReceiver !ars -> go srcArts ars
@@ -668,7 +673,16 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
         localExps = el'scope'exps'wip proc'wip
 
         go :: OrderedDict AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
-        go _ [] = return ()
+        go !srcArts [] =
+          if odNull srcArts
+            then return () -- very well expected
+            else
+              el'LogDiag
+                diags
+                el'Error
+                spec'span
+                "non-exhaustive-import"
+                "import is not exhaustive"
         go !srcArts (ar : rest) = case ar of
           RecvArg srcAddr@(AttrAddrSrc _ !item'span) !maybeAs !defExpr -> do
             case defExpr of
@@ -704,7 +718,30 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
               bad'span
               "rest-apk-import"
               "rest apk receiver in import specification"
-          RecvRestKwArgs !localAddr -> undefined
+          RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) ->
+            el'ResolveAttrAddr eac localAddr >>= \case
+              Nothing -> return () -- invalid attr addr
+              Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
+              Just !localKey -> do
+                let !kwVal = EL'Apk $ EL'ArgsPack [] $ odMap EL'Defined srcArts
+                !defVal <- newTMVar kwVal
+                let !attrDef =
+                      EL'AttrDef
+                        localKey
+                        docCmt
+                        Nothing -- TODO reflect origin modu here?
+                        "<import>"
+                        addr'span
+                        xsrc
+                        defVal
+                        Nothing -- TODO associate annos
+                        Nothing
+
+                iopdInsert localKey attrDef localTgt
+                when (el'ctx'exporting eac) $
+                  iopdInsert localKey attrDef localExps
+
+                go odEmpty rest
           where
             processImp :: AttrAddrSrc -> AttrAddrSrc -> STM ()
             processImp !srcAddr !localAddr = do
