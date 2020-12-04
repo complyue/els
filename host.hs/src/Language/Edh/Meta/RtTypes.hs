@@ -144,6 +144,42 @@ data EL'RunProc = EL'RunProc
     el'scope'symbols'wip :: !(TVar [EL'AttrSym])
   }
 
+el'ResolveLexicalAttr :: [EL'ScopeWIP] -> AttrKey -> STM (Maybe EL'AttrDef)
+el'ResolveLexicalAttr [] _ = return Nothing
+el'ResolveLexicalAttr (swip : outers) !key =
+  iopdLookup key (el'scope'attrs'wip $ el'ProcWIP swip) >>= \case
+    Nothing -> el'ResolveLexicalAttr outers key
+    Just !def -> return $ Just def
+
+el'ResolveContextAttr :: EL'Context -> AttrKey -> STM (Maybe EL'AttrDef)
+el'ResolveContextAttr !eac !key =
+  el'ResolveLexicalAttr (el'ctx'scope eac : el'ctx'outers eac) key
+
+el'ResolveAttrAddr :: EL'Context -> AttrAddrSrc -> STM (Maybe AttrKey)
+el'ResolveAttrAddr _ (AttrAddrSrc (NamedAttr !attrName) _) =
+  return $ Just $ AttrByName attrName
+el'ResolveAttrAddr _ (AttrAddrSrc (QuaintAttr !attrName) _) =
+  return $ Just $ AttrByName attrName
+el'ResolveAttrAddr !eac (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
+  el'ResolveContextAttr eac (AttrByName symName) >>= \case
+    Nothing -> return Nothing
+    Just !def ->
+      tryReadTMVar (el'attr'def'value def) >>= \case
+        Nothing -> return Nothing
+        Just !val -> case val of
+          EL'Const (EdhSymbol !symVal) -> return $ Just $ AttrBySym symVal
+          EL'Const (EdhString !nameVal) -> return $ Just $ AttrByName nameVal
+          _ -> do
+            el'LogDiag
+              diags
+              el'Error
+              addr'span
+              "bad-attr-ref"
+              "no such attribute defined"
+            return Nothing
+  where
+    diags = el'ctx'diags eac
+
 el'RunTx :: EL'AnalysisState -> EL'Tx -> STM ()
 el'RunTx !eas !act = act eas
 {-# INLINE el'RunTx #-}
