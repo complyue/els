@@ -561,9 +561,9 @@ el'AnalyzeStmts !stmts !exit !eas = go stmts
 
 el'AnalyzeStmt :: StmtSrc -> EL'Analysis EL'Value
 el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
-  ExprStmt !expr _docCmt ->
+  ExprStmt !expr !docCmt ->
     el'RunTx eas $
-      el'AnalyzeExpr (ExprSrc expr stmt'span) exit
+      el'AnalyzeExpr docCmt (ExprSrc expr stmt'span) exit
   -- LetStmt _argsRcvr _argsSndr -> do
   --   -- TODO recognize defines & exports
   --   el'Exit eas exit $ EL'Const nil
@@ -578,9 +578,9 @@ el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
           "Maybe not a good idea to have super objects for a module"
       _ -> return ()
     el'Exit eas exit $ EL'Const nil
-  EffectStmt !effs _docCmt ->
+  EffectStmt !effs !docCmt ->
     el'RunTx eas {el'context = eac {el'ctx'eff'defining = True}} $
-      el'AnalyzeExpr effs $ \_ -> el'ExitTx exit $ EL'Const nil
+      el'AnalyzeExpr docCmt effs $ \_ -> el'ExitTx exit $ EL'Const nil
   --
 
   -- TODO recognize more stmts
@@ -589,11 +589,11 @@ el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
     !eac = el'context eas
     diags = el'ctx'diags eac
 
-el'AnalyzeExpr :: ExprSrc -> EL'Analysis EL'Value
-el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
+el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
+el'AnalyzeExpr !docCmt xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
   ExportExpr !expr' ->
     el'RunTx eas {el'context = eac {el'ctx'exporting = True}} $
-      el'AnalyzeExpr expr' exit
+      el'AnalyzeExpr docCmt expr' exit
   --
 
   -- importing
@@ -628,7 +628,7 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
                   el'Exit eas exit $ EL'ModuVal msImportee
         AttrExpr {} ->
           el'RunTx eas $ -- obj import
-            el'AnalyzeExpr impSpec $ \ !impFromVal -> do
+            el'AnalyzeExpr Nothing impSpec $ \ !impFromVal -> do
               -- TODO validate it is object type, import from it
               el'ExitTx exit impFromVal
         _ -> do
@@ -655,16 +655,57 @@ el'AnalyzeExpr xsrc@(ExprSrc !expr _expr'span) !exit !eas = case expr of
     proc'wip = el'ProcWIP scope
 
     impIntoScope :: EL'Exports -> ArgsReceiver -> STM ()
-    impIntoScope !exps = \case
-      WildReceiver -> undefined
-      PackReceiver !ars -> go ars
-      SingleReceiver !ar -> go [ar]
+    impIntoScope !srcExps !asr =
+      iopdSnapshot srcExps >>= \ !srcArts -> case asr of
+        WildReceiver -> undefined
+        PackReceiver !ars -> go srcArts ars
+        SingleReceiver !ar -> go srcArts [ar]
       where
-        !attrs = el'scope'attrs'wip proc'wip
-        !exps = el'scope'exps'wip proc'wip
+        !localTgt =
+          if el'ctx'eff'defining eac
+            then el'scope'effs'wip proc'wip
+            else el'scope'attrs'wip proc'wip
+        localExps = el'scope'exps'wip proc'wip
 
-        go [] = return ()
-        go (ar : rest) = do
-          seq ar (return ())
-
-          go rest
+        go :: OrderedDict AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
+        go _ [] = return ()
+        go !srcArts (ar : rest) = case ar of
+          RecvArg srcAddr@(AttrAddrSrc _ !item'span) !maybeAs !defExpr -> do
+            case defExpr of
+              Nothing -> pure ()
+              Just {} ->
+                el'LogDiag
+                  diags
+                  el'Warning
+                  item'span
+                  "unusual-import"
+                  "defaults in import specificatin is not analyzed yet"
+            case maybeAs of
+              Nothing -> processImp srcAddr srcAddr
+              Just (DirectRef !asAddr) -> processImp srcAddr asAddr
+              Just !badRename ->
+                el'LogDiag
+                  diags
+                  el'Error
+                  item'span
+                  "invalid-import-rename"
+                  $ "invalid rename of import: " <> T.pack (show badRename)
+          RecvRestPosArgs (AttrAddrSrc _ bad'span) ->
+            el'LogDiag
+              diags
+              el'Error
+              bad'span
+              "rest-pos-import"
+              "rest positional receiver in import specification"
+          RecvRestPkArgs (AttrAddrSrc _ bad'span) ->
+            el'LogDiag
+              diags
+              el'Error
+              bad'span
+              "rest-apk-import"
+              "rest apk receiver in import specification"
+          RecvRestKwArgs !localAddr -> undefined
+          where
+            processImp :: AttrAddrSrc -> AttrAddrSrc -> STM ()
+            processImp !srcAddr !localAddr = do
+              go srcArts rest

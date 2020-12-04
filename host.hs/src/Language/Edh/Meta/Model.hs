@@ -203,7 +203,7 @@ data EL'AttrDef = EL'AttrDef
   { -- | the key of this attribute
     el'attr'def'key :: !AttrKey,
     -- | doc comment preceeding this definition
-    el'attr'doc'cmt :: !DocComment,
+    el'attr'doc'cmt :: !(Maybe DocComment),
     -- | the origin of this definition, typically for attributes imported from
     -- other modules, the original module and export key is represented here
     el'attr'def'origin :: !(Maybe (EL'ModuSlot, AttrKey)),
@@ -245,8 +245,8 @@ data EL'AttrAnno = EL'AttrAnno
 
 -- | an attribute reference, links to its respective definition
 data EL'AttrRef = EL'AttrRef
-  { -- | local key used to refer to this attribute
-    el'attr'ref'key :: !AttrKey,
+  { -- | the referencing addressor
+    el'attr'ref'addr :: !AttrAddrSrc,
     -- | the definition introduced this attribute
     -- this field is guaranteed to be filled only after all outer scopes have
     -- been loaded
