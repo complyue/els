@@ -680,7 +680,7 @@ el'AnalyzeExpr
                impSpec@(ExprSrc !specExpr !spec'span)
                !maybeInto
              )
-           _expr'span
+           !expr'span
          )
   !exit
   !eas =
@@ -745,7 +745,7 @@ el'AnalyzeExpr
         if not (el'ctx'exporting eac)
           then return $ \_ _ -> return ()
           else
-            let localExps = el'scope'exps'wip proc'wip
+            let !localExps = el'scope'exps'wip proc'wip
              in return $ \ !localKey !attrDef ->
                   iopdInsert localKey attrDef localExps
 
@@ -767,7 +767,7 @@ el'AnalyzeExpr
           <$> iopdSnapshot
             (el'resolved'exports srcResolved)
             >>= \ !srcArts -> case asr of
-              WildReceiver -> undefined -- XXX
+              WildReceiver -> sequence_ $ wildImp <$> odToList srcArts
               PackReceiver !ars -> go srcArts ars
               SingleReceiver !ar -> go srcArts [ar]
         where
@@ -775,6 +775,22 @@ el'AnalyzeExpr
             if el'ctx'eff'defining eac
               then el'scope'effs'wip proc'wip
               else el'scope'attrs'wip proc'wip
+
+          wildImp :: (AttrKey, EL'Value) -> STM ()
+          wildImp (!k, !v) = do
+            let !attrDef =
+                  EL'AttrDef
+                    k
+                    docCmt
+                    "<import>"
+                    expr'span
+                    xsrc
+                    v
+                    Nothing -- TODO associate annos
+                    Nothing
+
+            iopdInsert k attrDef localTgt
+            chkExp k attrDef
 
           go :: OrderedDict AttrKey EL'Value -> [ArgReceiver] -> STM ()
           go !srcArts [] =
