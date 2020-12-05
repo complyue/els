@@ -6,6 +6,7 @@ import Control.Concurrent.STM
 import Data.HashMap.Strict (HashMap)
 import Data.Hashable
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Language.Edh.EHI
@@ -140,6 +141,11 @@ data EL'ModuSlot = EL'ModuSlot
     el'modu'resolution :: !(TMVar EL'ModuResolution)
   }
 
+instance Show EL'ModuSlot where
+  show !ms =
+    let (SrcDoc !file) = el'modu'doc ms
+     in "<modu-slot: " <> T.unpack file <> ">"
+
 instance Eq EL'ModuSlot where
   x == y = el'modu'doc x == el'modu'doc y
 
@@ -194,6 +200,9 @@ data EL'ResolvedModule = EL'ResolvedModule
 
 type EL'Exports = IOPD AttrKey EL'AttrDef
 
+instance Show EL'Exports where
+  show _exps = "<exports>"
+
 -- | an attribute definition or re-definition (i.e. update to a previously
 -- defined attribute)
 --
@@ -223,6 +232,11 @@ data EL'AttrDef = EL'AttrDef
     -- previously existing attribute
     el'attr'prev'def :: !(Maybe EL'AttrDef)
   }
+
+instance Show EL'AttrDef where
+  show !adef =
+    "<attr-def: " <> T.unpack (attrKeyStr $ el'attr'def'key adef)
+      <> ">"
 
 el'UltimateValue :: EL'AttrDef -> EL'Value
 el'UltimateValue !def = case el'attr'def'value def of
@@ -255,7 +269,14 @@ data EL'AttrRef = EL'AttrRef
     el'attr'ref'def :: !EL'AttrDef
   }
 
+instance Show EL'AttrRef where
+  show (EL'AttrRef (AttrAddrSrc !addr _span) _adef) =
+    "<ref: " <> show addr <> ">"
+
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
+
+instance Show EL'ArgsPack where
+  show (EL'ArgsPack !args !kwargs) = "(TODO'el'apk, x= y)" -- XXX
 
 data EL'Value
   = -- | runtime constant i.e. decidable at analysis time
@@ -275,6 +296,7 @@ data EL'Value
     EL'ObjVal !EL'Object
   | -- | a class
     EL'ClsVal !EL'Class
+  deriving (Show)
 
 -- | a procedure
 data EL'Proc = EL'Proc
@@ -282,6 +304,7 @@ data EL'Proc = EL'Proc
     -- | scope of this proc
     el'proc'scope :: !EL'Scope
   }
+  deriving (Show)
 
 -- | an object, with module and namespace being special cases
 data EL'Object = EL'Object
@@ -301,6 +324,7 @@ data EL'Object = EL'Object
     -- which should probably be considered unusual.
     el'obj'exps :: !EL'Exports
   }
+  deriving (Show)
 
 -- | a class
 data EL'Class = EL'Class
@@ -316,8 +340,10 @@ data EL'Class = EL'Class
     -- called, which should probably be considered unusual.
     el'class'exps :: !EL'Exports
   }
+  deriving (Show)
 
 data EL'Section = EL'ScopeSec !EL'Scope | EL'RegionSec !EL'Region
+  deriving (Show)
 
 sectionSpan :: EL'Section -> SrcRange
 sectionSpan (EL'ScopeSec scope) = el'scope'span scope
@@ -342,17 +368,24 @@ data EL'Scope = EL'Scope
     -- the section for a target location within this scope
     el'scope'sections :: !(Vector EL'Section),
     -- | the 1st appearances of each attribute defined in this scope
-    el'scope'attrs :: !(OrderedDict AttrKey EL'AttrDef),
+    el'scope'attrs :: !EL'Artifacts,
     -- | the 1st appearances of each effectful attribute defined in this scope
-    el'scope'effs :: !(OrderedDict AttrKey EL'AttrDef),
+    el'scope'effs :: !EL'Artifacts,
     -- | all symbols encountered in this scope, in order as appeared in src
     el'scope'symbols :: !(Vector EL'AttrSym)
   }
+  deriving (Show)
+
+type EL'Artifacts = OrderedDict AttrKey EL'AttrDef
+
+instance Show EL'Artifacts where
+  show _arts = "<artifacts>"
 
 -- | a symbol at source level is, an attribute definitions or attribute
 -- reference, the order of symbols in this vector reflects the order each
 -- symbol appears in src code reading order
 data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
+  deriving (Show)
 
 -- | the last section of a scope should always be the full region with all
 -- possible attributes
@@ -374,5 +407,6 @@ scopeFullRegion !scope =
 data EL'Region = EL'Region
   { el'region'span :: !SrcRange,
     -- | available attributes defined in this region
-    el'region'attrs :: !(OrderedDict AttrKey EL'AttrDef)
+    el'region'attrs :: !EL'Artifacts
   }
+  deriving (Show)

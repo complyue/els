@@ -559,35 +559,58 @@ el'AnalyzeStmts !stmts !exit !eas = go stmts
         [] -> el'Exit eas exit val
         _ -> go rest
 
+-- | analyze a statement in context
 el'AnalyzeStmt :: StmtSrc -> EL'Analysis EL'Value
-el'AnalyzeStmt (StmtSrc !stmt !stmt'span) !exit !eas = case stmt of
-  ExprStmt !expr !docCmt ->
-    el'RunTx eas $
-      el'AnalyzeExpr docCmt (ExprSrc expr stmt'span) exit
-  -- LetStmt _argsRcvr _argsSndr -> do
-  --   -- TODO recognize defines & exports
-  --   el'Exit eas exit $ EL'Const nil
-  ExtendsStmt _superExpr -> do
-    case el'ctx'outers eac of
-      [] ->
+--
+
+-- a standalone expression
+el'AnalyzeStmt (StmtSrc (ExprStmt !expr !docCmt) !stmt'span) !exit !eas =
+  el'RunTx eas $ el'AnalyzeExpr docCmt (ExprSrc expr stmt'span) exit
+--
+
+el'AnalyzeStmt (StmtSrc (LetStmt _argsRcvr _argsSndr) _stmt'span) !exit !eas =
+  -- TODO recognize defines & exports
+  el'Exit eas exit $ EL'Const nil
+--
+
+-- effect defining
+el'AnalyzeStmt (StmtSrc (EffectStmt !effs !docCmt) _stmt'span) !exit !eas =
+  el'RunTx eas {el'context = eac {el'ctx'eff'defining = True}} $
+    el'AnalyzeExpr docCmt effs $ \_ -> el'ExitTx exit $ EL'Const nil
+  where
+    !eac = el'context eas
+--
+
+-- extending
+el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing superExpr $ \case
+      EL'ObjVal !superObj -> \_eas -> do
+        modifyTVar' (el'scope'exts'wip proc'wip) (++ [superObj])
+        el'Exit eas exit $ EL'Const nil
+      !badSuperVal -> \_eas -> do
         el'LogDiag
           diags
           el'Warning
           stmt'span
-          "extends from module"
-          "Maybe not a good idea to have super objects for a module"
-      _ -> return ()
-    el'Exit eas exit $ EL'Const nil
-  EffectStmt !effs !docCmt ->
-    el'RunTx eas {el'context = eac {el'ctx'eff'defining = True}} $
-      el'AnalyzeExpr docCmt effs $ \_ -> el'ExitTx exit $ EL'Const nil
-  --
-
-  -- TODO recognize more stmts
-  _ -> el'Exit eas exit $ EL'Const nil
+          "invalid-extends"
+          $ "not an object to extends: " <> T.pack (show badSuperVal)
+        el'Exit eas exit $ EL'Const nil
   where
     !eac = el'context eas
     diags = el'ctx'diags eac
+
+    scope = el'ctx'scope eac
+    proc'wip = el'ProcWIP scope
+--
+
+-- TODO recognize more stmts
+
+-- the rest of statements not analyzed
+el'AnalyzeStmt _stmt !exit !eas =
+  el'Exit eas exit $ EL'Const nil
+
+--
 
 -- | analyze an expression in context
 el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
@@ -836,6 +859,6 @@ el'AnalyzeExpr
 
 -- TODO recognize more exprs
 
--- the rest of exprs not analyzed
+-- the rest of expressions not analyzed
 el'AnalyzeExpr _docCmt !xsrc !exit !eas =
   el'Exit eas exit $ EL'Expr xsrc

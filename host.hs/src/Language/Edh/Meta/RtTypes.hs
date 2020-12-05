@@ -74,7 +74,7 @@ el'ContextModule !eac = go $ el'ctx'scope eac : el'ctx'outers eac
 data EL'InitModu = EL'InitModu
   { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
     -- super modules),  up to time of analysis
-    el'modu'exts'wip :: !(TVar [EL'AttrRef]),
+    el'modu'exts'wip :: !(TVar [EL'Object]),
     -- | 1st appearances of exported artifacts in the direct scope and nested
     -- (method) scopes (i.e. module exports), up to time of analysis
     el'modu'exps'wip :: !EL'Exports,
@@ -98,7 +98,7 @@ data EL'InitModu = EL'InitModu
 data EL'InitObject = EL'InitObject
   { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
     -- super objects),  up to time of analysis
-    el'obj'exts'wip :: !(TVar [EL'AttrRef]),
+    el'obj'exts'wip :: !(TVar [EL'Object]),
     -- | 1st appearances of exported artifacts in the direct scope and nested
     -- (method) scopes (i.e. object exports), up to time of analysis
     el'obj'exps'wip :: !EL'Exports
@@ -108,10 +108,10 @@ data EL'InitObject = EL'InitObject
 data EL'DefineClass = EL'DefineClass
   { -- | all `extends` appeared in the direct class scope (i.e. super classes),
     --  up to time of analysis
-    el'class'exts'wip :: !(TVar [EL'AttrRef]),
+    el'class'exts'wip :: !(TVar [EL'Object]),
     -- | all `extends` appeared in nested (method) scopes (i.e. super objects),
     --  up to time of analysis
-    el'inst'exts'wip :: !(TVar [EL'AttrRef]),
+    el'inst'exts'wip :: !(TVar [EL'Object]),
     -- | 1st appearances of exported artifacts in the direct class scope (i.e.
     -- class exports), up to time of analysis
     el'class'exps'wip :: !(IOPD AttrKey EL'AttrDef),
@@ -125,7 +125,7 @@ data EL'DefineClass = EL'DefineClass
 data EL'RunProc = EL'RunProc
   { -- | this points to `el'modu'exts'wip` or `el'obj'exts'wip` or
     -- `el'class'exts'wip` or `el'inst'exts'wip` whichever is appropriate
-    el'scope'exts'wip :: !(TVar [EL'AttrRef]),
+    el'scope'exts'wip :: !(TVar [EL'Object]),
     -- | this points to `el'modu'exps'wip` or `el'obj'exps'wip` or
     -- `el'class'exps'wip` or `el'inst'exps'wip` whichever is appropriate
     el'scope'exps'wip :: !EL'Exports,
