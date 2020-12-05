@@ -281,22 +281,38 @@ instance Show EL'ArgsPack where
 data EL'Value
   = -- | runtime constant i.e. decidable at analysis time
     EL'Const !EdhValue
-  | -- | apk at analysis time
-    -- TODO should an apk with every element decidable to be an `EL'Const` ?
-    EL'Apk !EL'ArgsPack
   | -- | externally defined value, most probably imported
     EL'External !EL'ModuSlot !EL'AttrDef
-  | -- | an arbitrary expression not resolved at analysis time
-    EL'Expr !ExprSrc
-  | -- | a module object
-    EL'ModuVal !EL'ModuSlot
-  | -- | a procedure
-    EL'ProcVal !EL'Proc
+  | -- | apk at analysis time
+    EL'Apk !EL'ArgsPack
+  | -- | list at analysis time
+    EL'List !(TVar [EL'Value])
+  | -- | dict at analyze time
+    EL'Dict !(IOPD AttrKey EL'Value)
   | -- | an object
     EL'ObjVal !EL'Object
   | -- | a class
     EL'ClsVal !EL'Class
-  deriving (Show)
+  | -- | a module object
+    EL'ModuVal !EL'ModuSlot
+  | -- | a procedure
+    EL'ProcVal !EL'Proc
+  | -- | an arbitrary expression not resolved at analysis time
+    EL'Expr !ExprSrc
+
+instance Show EL'Value where
+  show (EL'Const !x) = show x
+  show (EL'External !ms !adef) =
+    let (SrcDoc !file) = el'modu'doc ms
+     in "<ref: " <> show (el'attr'def'key adef) <> " @ " <> T.unpack file <> ">"
+  show (EL'Apk !apk) = show apk
+  show (EL'List _lv) = "<list>"
+  show (EL'Dict _dv) = "<dict>"
+  show (EL'ObjVal !obj) = show obj
+  show (EL'ClsVal !cls) = show cls
+  show (EL'ModuVal !modu) = show modu
+  show (EL'ProcVal !p) = show p
+  show (EL'Expr !x) = show x
 
 -- | a procedure
 data EL'Proc = EL'Proc

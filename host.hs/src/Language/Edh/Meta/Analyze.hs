@@ -588,13 +588,28 @@ el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
       EL'ObjVal !superObj -> \_eas -> do
         modifyTVar' (el'scope'exts'wip proc'wip) (++ [superObj])
         el'Exit eas exit $ EL'Const nil
+      EL'Apk (EL'ArgsPack !superVals !kwargs) | odNull kwargs -> \_eas -> do
+        !superObjs <- (catMaybes <$>) $
+          sequence $
+            flip fmap superVals $ \case
+              EL'ObjVal !superObj -> return $ Just superObj
+              !badSuperVal -> do
+                el'LogDiag
+                  diags
+                  el'Warning
+                  stmt'span
+                  "invalid-extends"
+                  $ "not an object to extend: " <> T.pack (show badSuperVal)
+                return Nothing
+        modifyTVar' (el'scope'exts'wip proc'wip) (++ superObjs)
+        el'Exit eas exit $ EL'Const nil
       !badSuperVal -> \_eas -> do
         el'LogDiag
           diags
           el'Warning
           stmt'span
           "invalid-extends"
-          $ "not an object to extends: " <> T.pack (show badSuperVal)
+          $ "not an object to extend: " <> T.pack (show badSuperVal)
         el'Exit eas exit $ EL'Const nil
   where
     !eac = el'context eas
@@ -619,10 +634,7 @@ el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
 -- call making
 el'AnalyzeExpr
   _docCmt
-  xsrc@( ExprSrc
-           (CallExpr !calleeExpr !argsSndr)
-           _expr'span
-         )
+  xsrc@(ExprSrc (CallExpr !calleeExpr !argsSndr) _expr'span)
   !exit
   !eas =
     case calleeExpr of
@@ -855,6 +867,11 @@ el'AnalyzeExpr
                                   iopdInsert localKey attrDef localExps
 
                                 go srcArts' rest
+--
+
+-- apk ctor
+el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
+  undefined
 --
 
 -- TODO recognize more exprs
