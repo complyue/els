@@ -62,12 +62,12 @@ el'ProcWIP (EL'ClassWIP _ p) = p
 el'ProcWIP (EL'ObjectWIP _ p) = p
 el'ProcWIP (EL'ModuWIP _ _ p) = p
 
-el'ContextModule :: EL'Context -> Maybe EL'ModuSlot
+el'ContextModule :: EL'Context -> Maybe (EL'ModuSlot, EL'InitModu)
 el'ContextModule !eac = go $ el'ctx'scope eac : el'ctx'outers eac
   where
     go [] = Nothing
     go (scope : outers) = case scope of
-      EL'ModuWIP !ms _ _ -> Just ms
+      EL'ModuWIP !ms !mi _ -> Just (ms, mi)
       _ -> go outers
 
 -- | a modu initializing procedure

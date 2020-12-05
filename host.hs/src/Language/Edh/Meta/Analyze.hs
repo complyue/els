@@ -41,6 +41,8 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
               invalidateDependants !upds [] = do
                 unless (null upds) $
                   modifyTVar' (el'resolved'dependants resolved) $
+                    -- todo maybe should delete instead of update here?
+                    -- in case some module file is deleted, this'll leak?
                     Map.union (Map.fromList upds)
                 exitEdh ets exit ()
               invalidateDependants !upds ((!dependant, !hold) : rest) =
@@ -51,7 +53,8 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
                     invalidateDependants upds rest
                   Just (EL'ModuResolved !resolved') ->
                     Map.lookup ms {- HLINT ignore "Redundant <$>" -}
-                      <$> readTVar (el'resolved'dependencies resolved') >>= \case
+                      <$> readTVar (el'resolved'dependencies resolved')
+                      >>= \case
                         Just True ->
                           runEdhTx ets $
                             el'InvalidateModule False dependant $ \_ _ets ->
@@ -694,20 +697,22 @@ el'AnalyzeExpr
               "moduleless-import"
               "import from non-module context"
             el'Exit eas exit $ EL'Const nil
-          Just !msImporter -> el'RunTx eas $
+          Just (!msImporter, _miImporter) -> el'RunTx eas $
             el'LocateImportee msImporter litSpec $ \ !impResult _eas ->
               case impResult of
                 Left !err -> do
                   el'LogDiag diags el'Error spec'span "err-import" err
                   el'Exit eas exit $ EL'Const nil
                 Right !msImportee -> do
+                  !chkExp <- chkExport
                   el'RunTx eas $
                     asModuleResolved msImportee $ \ !resolved _eas ->
                       -- TODO find mechanism in LSP to report diags discovered
                       -- here asynchronously, to not missing them
                       impIntoScope
+                        chkExp
                         msImportee
-                        (el'resolved'exports resolved)
+                        resolved
                         argsRcvr
                   -- above can finish synchronously or asynchronously, return
                   -- the importee module now anyway, as waiting for the
@@ -735,19 +740,41 @@ el'AnalyzeExpr
       scope = el'ctx'scope eac
       proc'wip = el'ProcWIP scope
 
-      impIntoScope :: EL'ModuSlot -> EL'Exports -> ArgsReceiver -> STM ()
-      impIntoScope !srcModu !srcExps !asr =
-        odMap (EL'External srcModu) <$> iopdSnapshot srcExps >>= \ !srcArts ->
-          case asr of
-            WildReceiver -> undefined
-            PackReceiver !ars -> go srcArts ars
-            SingleReceiver !ar -> go srcArts [ar]
+      chkExport :: STM (AttrKey -> EL'AttrDef -> STM ())
+      chkExport =
+        if not (el'ctx'exporting eac)
+          then return $ \_ _ -> return ()
+          else
+            let localExps = el'scope'exps'wip proc'wip
+             in return $ \ !localKey !attrDef ->
+                  iopdInsert localKey attrDef localExps
+
+      impIntoScope ::
+        (AttrKey -> EL'AttrDef -> STM ()) ->
+        EL'ModuSlot ->
+        EL'ResolvedModule ->
+        ArgsReceiver ->
+        STM ()
+      impIntoScope !chkExp !srcModu !srcResolved !asr = do
+        case el'ContextModule eac of
+          Nothing -> pure ()
+          Just (!localModu, !localInit) -> do
+            modifyTVar' (el'resolved'dependants srcResolved) $
+              Map.insert localModu True
+            modifyTVar' (el'modu'dependencies localInit) $
+              Map.insert srcModu True
+        odMap (EL'External srcModu)
+          <$> iopdSnapshot
+            (el'resolved'exports srcResolved)
+            >>= \ !srcArts -> case asr of
+              WildReceiver -> undefined -- XXX
+              PackReceiver !ars -> go srcArts ars
+              SingleReceiver !ar -> go srcArts [ar]
         where
           !localTgt =
             if el'ctx'eff'defining eac
               then el'scope'effs'wip proc'wip
               else el'scope'attrs'wip proc'wip
-          localExps = el'scope'exps'wip proc'wip
 
           go :: OrderedDict AttrKey EL'Value -> [ArgReceiver] -> STM ()
           go !srcArts [] =
@@ -822,8 +849,7 @@ el'AnalyzeExpr
                           Nothing
 
                   iopdInsert localKey attrDef localTgt
-                  when (el'ctx'exporting eac) $
-                    iopdInsert localKey attrDef localExps
+                  chkExp localKey attrDef
 
                   go odEmpty rest
             where
@@ -863,8 +889,7 @@ el'AnalyzeExpr
                                         Nothing
 
                                 iopdInsert localKey attrDef localTgt
-                                when (el'ctx'exporting eac) $
-                                  iopdInsert localKey attrDef localExps
+                                chkExp localKey attrDef
 
                                 go srcArts' rest
 --
