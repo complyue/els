@@ -499,7 +499,18 @@ asModuleResolved !ms !act' !eas =
       !endPos <- newTVar beginningSrcPos
       !moduSecs <- newTVar []
       !moduSyms <- newTVar []
-      let !eacModu =
+      let !swip =
+            EL'RunProc
+              moduExts
+              moduExps
+              moduAttrs
+              moduEffs
+              moduAnnos
+              endPos
+              moduSecs
+              moduSyms
+
+          !eacModu =
             eac
               { el'ctx'diags = diagsVar,
                 el'ctx'scope =
@@ -511,16 +522,7 @@ asModuleResolved !ms !act' !eas =
                         moduDependants
                         moduDepencencies
                     )
-                    ( EL'RunProc
-                        moduExts
-                        moduExps
-                        moduAttrs
-                        moduEffs
-                        moduAnnos
-                        endPos
-                        moduSecs
-                        moduSyms
-                    ),
+                    swip,
                 el'ctx'outers = el'ctx'scope eac : el'ctx'outers eac
               }
           !easModu = eas {el'context = eacModu}
@@ -528,12 +530,11 @@ asModuleResolved !ms !act' !eas =
       el'RunTx easModu $
         el'AnalyzeStmts stmts $ \_ _eas -> do
           !diags <- readTVar diagsVar
-          let !swip = el'ProcWIP $ el'ctx'scope eac
-          !scope'attrs <- iopdSnapshot $ el'scope'attrs'wip swip
-          !scope'effs <- iopdSnapshot $ el'scope'effs'wip swip
-          !scope'end <- readTVar $ el'scope'end'wip swip
-          !secs <- readTVar $ el'scope'secs'wip swip
-          !scope'symbols <- readTVar $ el'scope'symbols'wip swip
+          !scope'attrs <- iopdSnapshot moduAttrs
+          !scope'effs <- iopdSnapshot moduEffs
+          !scope'end <- readTVar endPos
+          !secs <- readTVar moduSecs
+          !scope'symbols <- readTVar moduSyms
           let !fullRegion =
                 EL'RegionSec $
                   EL'Region
@@ -543,7 +544,8 @@ asModuleResolved !ms !act' !eas =
           let !el'scope =
                 EL'Scope
                   { el'scope'span = SrcRange beginningSrcPos scope'end,
-                    el'scope'sections = V.fromList $! reverse $ fullRegion : secs,
+                    el'scope'sections =
+                      V.fromList $! reverse $ fullRegion : secs,
                     el'scope'attrs = scope'attrs,
                     el'scope'effs = scope'effs,
                     el'scope'symbols = V.fromList $! reverse scope'symbols
@@ -943,7 +945,7 @@ el'AnalyzeExpr
         el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
       Just !clsName -> do
-        let !beginPos = src'start body'span
+        let SrcRange !beginPos !endPos = body'span
         !clsExts <- newTVar []
         !instExts <- newTVar []
         !clsExps <- iopdEmpty
@@ -951,10 +953,20 @@ el'AnalyzeExpr
         !clsAttrs <- iopdEmpty
         !clsEffs <- iopdEmpty
         !clsAnnos <- iopdEmpty
-        !endPos <- newTVar beginPos
+        !scopeEnd <- newTVar beginPos
         !clsSecs <- newTVar []
         !clsSyms <- newTVar []
-        let !eacCls =
+        let !swip =
+              EL'RunProc
+                clsExts
+                clsExps
+                clsAttrs
+                clsEffs
+                clsAnnos
+                scopeEnd
+                clsSecs
+                clsSyms
+            !eacCls =
               eac
                 { el'ctx'scope =
                     EL'ClassWIP
@@ -964,51 +976,49 @@ el'AnalyzeExpr
                           clsExps
                           instExps
                       )
-                      ( EL'RunProc
-                          clsExts
-                          clsExps
-                          clsAttrs
-                          clsEffs
-                          clsAnnos
-                          endPos
-                          clsSecs
-                          clsSyms
-                      ),
-                  el'ctx'outers = el'ctx'scope eac : el'ctx'outers eac
+                      swip,
+                  el'ctx'outers = outerScope : el'ctx'outers eac
                 }
             !easCls = eas {el'context = eacCls}
 
         el'RunTx easCls $
           el'AnalyzeStmts [cls'body] $ \_ _eas -> do
             !cls'exts <- readTVar clsExts
-            let !swip = el'ProcWIP $ el'ctx'scope eac
-            !scope'attrs <- iopdSnapshot $ el'scope'attrs'wip swip
-            !scope'effs <- iopdSnapshot $ el'scope'effs'wip swip
-            !scope'end <- readTVar $ el'scope'end'wip swip
-            !secs <- readTVar $ el'scope'secs'wip swip
-            !scope'symbols <- readTVar $ el'scope'symbols'wip swip
+            !scope'attrs <- iopdSnapshot clsAttrs
+            !scope'effs <- iopdSnapshot clsEffs
+            !secs <- readTVar clsSecs
+            !scope'symbols <- readTVar clsSyms
             let !fullRegion =
                   EL'RegionSec $
                     EL'Region
-                      { el'region'span = SrcRange beginPos scope'end,
+                      { el'region'span = body'span,
                         el'region'attrs = scope'attrs
                       }
             let !cls'scope =
                   EL'Scope
-                    { el'scope'span = SrcRange beginPos scope'end,
+                    { el'scope'span = body'span,
                       el'scope'sections =
-                        V.fromList $! reverse $
-                          fullRegion : secs,
+                        V.fromList $! reverse $ fullRegion : secs,
                       el'scope'attrs = scope'attrs,
                       el'scope'effs = scope'effs,
                       el'scope'symbols = V.fromList $! reverse scope'symbols
                     }
                 !mro = [] -- TODO C3 linearize cls'exts to get this
+                --
+
+            -- append as a section to outer scope
+            modifyTVar' (el'scope'secs'wip outerProc) (EL'ScopeSec cls'scope :)
+            -- extend outer scope end pos
+            writeTVar (el'scope'end'wip outerProc) endPos
+
+            -- return the class object value
             el'Exit eas exit $
               EL'ClsVal $
                 EL'Class clsName cls'exts mro cls'scope clsExps
     where
       !eac = el'context eas
+      !outerScope = el'ctx'scope eac
+      !outerProc = el'ProcWIP outerScope
       diags = el'ctx'diags eac
 --
 
