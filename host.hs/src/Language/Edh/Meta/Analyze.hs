@@ -413,6 +413,10 @@ asModuleParsed !ms !act' !eas =
             !world = edh'prog'world $ edh'thread'prog ets
             SrcDoc !moduFile = el'modu'doc ms
 
+--
+-- todo without an explicit CPS exit, the scheduled action would appear with
+-- subsequent computations as of out-of-order-execution, this may work well
+-- enough from the main loop of the LSP server, any possible gotchas ?
 asModuleResolved :: EL'ModuSlot -> (EL'ResolvedModule -> EL'Tx) -> EL'Tx
 asModuleResolved !ms !act' !eas =
   tryReadTMVar resoVar >>= \case
@@ -908,6 +912,104 @@ el'AnalyzeExpr
                                 chkExp localKey attrDef
 
                                 go srcArts' rest
+--
+
+-- defining a class
+el'AnalyzeExpr _ (ExprSrc (ClassExpr HostDecl {}) _expr'span) _exit _eas =
+  error "bug: host class decl"
+el'AnalyzeExpr
+  _
+  ( ExprSrc
+      ( ClassExpr
+          ( ProcDecl
+              cls'name@(AttrAddrSrc _cls'name'addr !cls'name'span)
+              !argsRcvr
+              cls'body@(StmtSrc _body'stmt !body'span)
+              _cls'proc'loc
+            )
+        )
+      _expr'span
+    )
+  !exit
+  !eas =
+    el'ResolveAttrAddr eac cls'name >>= \case
+      Nothing -> do
+        el'LogDiag
+          diags
+          el'Error
+          cls'name'span
+          "invalid-class-name"
+          "invalid class name"
+        el'Exit eas exit $ EL'Const nil
+      Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+      Just !clsName -> do
+        let !beginPos = src'start body'span
+        !clsExts <- newTVar []
+        !instExts <- newTVar []
+        !clsExps <- iopdEmpty
+        !instExps <- iopdEmpty
+        !clsAttrs <- iopdEmpty
+        !clsEffs <- iopdEmpty
+        !clsAnnos <- iopdEmpty
+        !endPos <- newTVar beginPos
+        !clsSecs <- newTVar []
+        !clsSyms <- newTVar []
+        let !eacCls =
+              eac
+                { el'ctx'scope =
+                    EL'ClassWIP
+                      ( EL'DefineClass
+                          clsExts
+                          instExts
+                          clsExps
+                          instExps
+                      )
+                      ( EL'RunProc
+                          clsExts
+                          clsExps
+                          clsAttrs
+                          clsEffs
+                          clsAnnos
+                          endPos
+                          clsSecs
+                          clsSyms
+                      ),
+                  el'ctx'outers = el'ctx'scope eac : el'ctx'outers eac
+                }
+            !easCls = eas {el'context = eacCls}
+
+        el'RunTx easCls $
+          el'AnalyzeStmts [cls'body] $ \_ _eas -> do
+            !cls'exts <- readTVar clsExts
+            let !swip = el'ProcWIP $ el'ctx'scope eac
+            !scope'attrs <- iopdSnapshot $ el'scope'attrs'wip swip
+            !scope'effs <- iopdSnapshot $ el'scope'effs'wip swip
+            !scope'end <- readTVar $ el'scope'end'wip swip
+            !secs <- readTVar $ el'scope'secs'wip swip
+            !scope'symbols <- readTVar $ el'scope'symbols'wip swip
+            let !fullRegion =
+                  EL'RegionSec $
+                    EL'Region
+                      { el'region'span = SrcRange beginPos scope'end,
+                        el'region'attrs = scope'attrs
+                      }
+            let !cls'scope =
+                  EL'Scope
+                    { el'scope'span = SrcRange beginPos scope'end,
+                      el'scope'sections =
+                        V.fromList $! reverse $
+                          fullRegion : secs,
+                      el'scope'attrs = scope'attrs,
+                      el'scope'effs = scope'effs,
+                      el'scope'symbols = V.fromList $! reverse scope'symbols
+                    }
+                !mro = [] -- TODO C3 linearize cls'exts to get this
+            el'Exit eas exit $
+              EL'ClsVal $
+                EL'Class clsName cls'exts mro cls'scope clsExps
+    where
+      !eac = el'context eas
+      diags = el'ctx'diags eac
 --
 
 -- apk ctor
