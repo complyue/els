@@ -1176,6 +1176,194 @@ el'AnalyzeExpr
     el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
 --
 
+-- defining a namespace
+el'AnalyzeExpr _ (ExprSrc (NamespaceExpr HostDecl {} _) _) _exit _eas =
+  error "bug: host ns decl"
+el'AnalyzeExpr
+  !docCmt
+  xsrc@( ExprSrc
+           ( NamespaceExpr
+               ( ProcDecl
+                   ns'name@(AttrAddrSrc _ns'name'addr !ns'name'span)
+                   _
+                   ns'body@(StmtSrc _body'stmt !body'span)
+                   _ns'proc'loc
+                 )
+               !argsPkr
+             )
+           _expr'span
+         )
+  !exit
+  !eas =
+    el'ResolveAttrAddr eac ns'name >>= \case
+      Nothing -> el'Exit eas exit $ EL'Const nil
+      Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+      Just !nsName -> do
+        let SrcRange !beginPos !endPos = body'span
+        !nsExts <- newTVar []
+        !nsExps <- iopdEmpty
+        !nsAttrs <- iopdEmpty
+        !nsEffs <- iopdEmpty
+        !nsAnnos <- iopdEmpty
+        !scopeEnd <- newTVar beginPos
+        !nsSecs <- newTVar []
+        !nsSyms <- newTVar []
+        let !pwip =
+              EL'RunProc
+                nsExts
+                nsExps
+                nsAttrs
+                nsEffs
+                nsAnnos
+                scopeEnd
+                nsSecs
+                nsSyms
+            !eacNs =
+              eac
+                { el'ctx'scope =
+                    EL'ObjectWIP (EL'InitObject nsExts nsExps) pwip,
+                  el'ctx'outers = outerScope : el'ctx'outers eac
+                }
+            !easNs = eas {el'context = eacNs}
+
+            -- define artifacts from arguments for a namespace
+            defNsArgs ::
+              [ArgSender] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
+            defNsArgs !aps !nsaExit = go [] aps
+              where
+                go :: [(AttrKey, EL'AttrDef)] -> [ArgSender] -> STM ()
+                go !argArts [] = nsaExit $ reverse argArts
+                go !argArts (argSndr : rest) = case argSndr of
+                  SendKwArg argAddr@(AttrAddrSrc _ !arg'name'span) !argExpr ->
+                    el'ResolveAttrAddr eac argAddr >>= \case
+                      Nothing -> go argArts rest
+                      Just !argKey -> el'RunTx eas $
+                        el'AnalyzeExpr docCmt argExpr $ \ !argVal _eas -> do
+                          !argAnno <- newTVar Nothing
+                          go
+                            ( ( argKey,
+                                EL'AttrDef
+                                  argKey
+                                  Nothing
+                                  "<namespace-arg>"
+                                  arg'name'span
+                                  xsrc
+                                  argVal
+                                  argAnno
+                                  Nothing
+                              ) :
+                              argArts
+                            )
+                            rest
+                  UnpackKwArgs _kwExpr@(ExprSrc _ !argx'span) -> do
+                    el'LogDiag
+                      diags
+                      el'Warning
+                      argx'span
+                      "ns-unpack-kwargs"
+                      "not analyzed yet: unpacking kwargs to a namespace"
+                    go argArts rest
+                  SendPosArg (ExprSrc _ !argx'span) -> do
+                    el'LogDiag
+                      diags
+                      el'Error
+                      argx'span
+                      "invalid-ns-arg"
+                      "sending positional arg to a namespace"
+                    go argArts rest
+                  UnpackPosArgs (ExprSrc _ !argx'span) -> do
+                    el'LogDiag
+                      diags
+                      el'Error
+                      argx'span
+                      "invalid-ns-arg"
+                      "unpacking positional args to a namespace"
+                    go argArts rest
+                  UnpackPkArgs (ExprSrc _ !argx'span) -> do
+                    el'LogDiag
+                      diags
+                      el'Error
+                      argx'span
+                      "invalid-ns-arg"
+                      "unpacking apk to a namespace"
+                    go argArts rest
+
+        defNsArgs argsPkr $ \ !argArts -> do
+          iopdUpdate argArts nsAttrs
+          el'RunTx easNs $
+            el'AnalyzeStmts [ns'body] $ \_ _eas ->
+              do
+                -- update annotations for arguments from body
+                forM_ argArts $ \(!argName, !argDef) ->
+                  iopdLookup argName nsAnnos >>= \case
+                    Nothing -> pure ()
+                    Just !anno ->
+                      writeTVar (el'attr'def'anno argDef) $ Just anno
+                --
+
+                !ns'exts <- readTVar nsExts
+                !ns'exps <- iopdSnapshot nsExps
+                !scope'attrs <- iopdSnapshot nsAttrs
+                !scope'effs <- iopdSnapshot nsEffs
+                !secs <- readTVar nsSecs
+                !scope'symbols <- readTVar nsSyms
+                !nsAnno <- newTVar =<< el'ResolveAnnotation outerScope nsName
+                let !fullRegion =
+                      EL'RegionSec $
+                        EL'Region
+                          { el'region'span = body'span,
+                            el'region'attrs = scope'attrs
+                          }
+                let !ns'scope =
+                      EL'Scope
+                        { el'scope'span = body'span,
+                          el'scope'sections =
+                            V.fromList $! reverse $ fullRegion : secs,
+                          el'scope'attrs = scope'attrs,
+                          el'scope'effs = scope'effs,
+                          el'scope'symbols = V.fromList $! reverse scope'symbols
+                        }
+                    !ns = EL'Object el'NamespaceClass ns'exts ns'exps
+                    !nsVal = EL'ObjVal ns
+                    !nsDef =
+                      EL'AttrDef
+                        nsName
+                        docCmt
+                        "<namespace-def>"
+                        ns'name'span
+                        xsrc
+                        nsVal
+                        nsAnno
+                        Nothing
+                --
+
+                -- record as artifact of outer scope
+                unless (el'ctx'pure eac) $ do
+                  iopdInsert nsName nsDef $
+                    if el'ctx'eff'defining eac
+                      then el'scope'effs'wip outerProc
+                      else el'scope'attrs'wip outerProc
+                  when (el'ctx'exporting eac) $
+                    iopdInsert nsName nsDef $ el'scope'exps'wip outerProc
+                  -- record as definition symbol of outer scope
+                  modifyTVar'
+                    (el'scope'symbols'wip outerProc)
+                    (EL'DefSym nsDef :)
+                  -- append the scope as a section to outer scope
+                  modifyTVar'
+                    (el'scope'secs'wip outerProc)
+                    (EL'ScopeSec ns'scope :)
+                  -- extend outer scope end pos
+                  writeTVar (el'scope'end'wip outerProc) endPos
+                  -- return the namespace object value
+                  el'Exit eas exit nsVal
+    where
+      !eac = el'context eas
+      !outerScope = el'ctx'scope eac
+      !outerProc = el'ProcWIP outerScope
+      diags = el'ctx'diags eac
+--
+
 -- apk ctor
 el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
   undefined
