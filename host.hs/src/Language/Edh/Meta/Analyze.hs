@@ -1128,6 +1128,162 @@ el'AnalyzeExpr
       diags = el'ctx'diags eac
 --
 
+-- defining a method
+el'AnalyzeExpr _ (ExprSrc (MethodExpr HostDecl {}) _expr'span) _exit _eas =
+  error "bug: host method decl"
+el'AnalyzeExpr
+  !docCmt
+  xsrc@( ExprSrc
+           ( MethodExpr
+               ( ProcDecl
+                   mth'name@(AttrAddrSrc _mth'name'addr !mth'name'span)
+                   !argsRcvr
+                   mth'body@(StmtSrc _body'stmt !body'span)
+                   _mth'proc'loc
+                 )
+             )
+           _expr'span
+         )
+  !exit
+  !eas =
+    el'ResolveAttrAddr eac mth'name >>= \case
+      Nothing -> el'Exit eas exit $ EL'Const nil
+      Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+      Just !mthName -> do
+        let SrcRange !beginPos !endPos = body'span
+        !mthAttrs <- iopdEmpty
+        !mthEffs <- iopdEmpty
+        !mthAnnos <- iopdEmpty
+        !scopeEnd <- newTVar beginPos
+        !mthSecs <- newTVar []
+        !mthSyms <- newTVar []
+        let !swip =
+              outerProc -- inherit exts/exps from outer scope
+                { el'scope'attrs'wip = mthAttrs,
+                  el'scope'effs'wip = mthEffs,
+                  el'scope'annos'wip = mthAnnos,
+                  el'scope'end'wip = scopeEnd,
+                  el'scope'secs'wip = mthSecs,
+                  el'scope'symbols'wip = mthSyms
+                }
+            !eacMth =
+              eac
+                { el'ctx'scope = EL'ProcWIP swip,
+                  el'ctx'outers = outerScope : el'ctx'outers eac
+                }
+            !easMth = eas {el'context = eacMth}
+
+        case argsRcvr of
+          WildReceiver -> pure ()
+          PackReceiver !ars -> defArgArts mthAttrs ars
+          SingleReceiver !ar -> defArgArts mthAttrs [ar]
+
+        el'RunTx easMth $
+          el'AnalyzeStmts [mth'body] $ \_ _eas -> do
+            !scope'attrs <- iopdSnapshot mthAttrs
+            !scope'effs <- iopdSnapshot mthEffs
+            !secs <- readTVar mthSecs
+            !scope'symbols <- readTVar mthSyms
+            let !fullRegion =
+                  EL'RegionSec $
+                    EL'Region
+                      { el'region'span = body'span,
+                        el'region'attrs = scope'attrs
+                      }
+            let !mth'scope =
+                  EL'Scope
+                    { el'scope'span = body'span,
+                      el'scope'sections =
+                        V.fromList $! reverse $ fullRegion : secs,
+                      el'scope'attrs = scope'attrs,
+                      el'scope'effs = scope'effs,
+                      el'scope'symbols = V.fromList $! reverse scope'symbols
+                    }
+                !mth = EL'Proc mthName mth'scope
+                !mthVal = EL'ProcVal mth
+                !mthDef =
+                  EL'AttrDef
+                    mthName
+                    docCmt
+                    "<method-def>"
+                    mth'name'span
+                    xsrc
+                    mthVal
+                    Nothing -- TODO associate anno
+                    Nothing
+            --
+
+            -- record as artifact of outer scope
+            unless (el'ctx'pure eac) $ do
+              iopdInsert mthName mthDef $
+                if el'ctx'eff'defining eac
+                  then el'scope'effs'wip outerProc
+                  else el'scope'attrs'wip outerProc
+              when (el'ctx'exporting eac) $
+                iopdInsert mthName mthDef $ el'scope'exps'wip outerProc
+            -- record as definition symbol of outer scope
+            modifyTVar' (el'scope'symbols'wip outerProc) (EL'DefSym mthDef :)
+
+            -- append the scope as a section to outer scope
+            modifyTVar' (el'scope'secs'wip outerProc) (EL'ScopeSec mth'scope :)
+            -- extend outer scope end pos
+            writeTVar (el'scope'end'wip outerProc) endPos
+
+            -- return the procedure object value
+            el'Exit eas exit mthVal
+    where
+      !eac = el'context eas
+      !outerScope = el'ctx'scope eac
+      !outerProc = el'ProcWIP outerScope
+      diags = el'ctx'diags eac
+
+      -- define artifacts from arguments for a procedure
+      defArgArts :: IOPD AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
+      defArgArts !argAttrs !ars = flip iopdUpdate argAttrs =<< go [] ars
+        where
+          go ::
+            [(AttrKey, EL'AttrDef)] ->
+            [ArgReceiver] ->
+            STM [(AttrKey, EL'AttrDef)]
+          go !args [] = return $ reverse args
+          go !args (ar : rest) = case ar of
+            RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
+              Nothing -> defArgArt argAddr maybeDef
+              Just (DirectRef !argAddr') -> defArgArt argAddr' Nothing
+              Just _otherRename -> go args rest -- TODO elaborate?
+            RecvRestPkArgs !argAddr -> defArgArt argAddr Nothing
+            RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
+            RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
+            where
+              defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
+                el'ResolveAttrAddr eac argAddr >>= \case
+                  Nothing -> go args rest
+                  Just !argKey ->
+                    go
+                      ( ( argKey,
+                          EL'AttrDef
+                            argKey
+                            Nothing
+                            "<procedure-argument>"
+                            arg'name'span
+                            xsrc
+                            ( EL'Expr $
+                                fromMaybe
+                                  ( ExprSrc
+                                      (AttrExpr (DirectRef argAddr))
+                                      arg'name'span
+                                  )
+                                  knownExpr
+                            )
+                            Nothing -- todo data field can get anno ?
+                            Nothing
+                        ) :
+                        args
+                      )
+                      rest
+
+--
+
 -- apk ctor
 el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
   undefined
