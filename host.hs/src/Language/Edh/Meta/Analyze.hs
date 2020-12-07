@@ -742,6 +742,88 @@ el'AnalyzeExpr
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 --
 
+el'AnalyzeExpr
+  !docCmt
+  xsrc@( ExprSrc
+           (InfixExpr !opSym !lhExpr !rhExpr)
+           !expr'span
+         )
+  !exit
+  !eas = el'RunTx eas $ -- right-hand expr to be analyzed anyway
+    el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> case opSym of
+      "->" -> undefined -- TODO define branch
+      "=>" -> undefined -- TODO define method/generator arrow procedure
+      "=>*" -> undefined -- TODO define producer arrow procedure
+      -- TODO special treatment of ($) (|) (&) etc. ?
+
+      -- assignment
+      _ | "=" `T.isSuffixOf` opSym -> do
+        case lhExpr of
+          ExprSrc (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span))) _ ->
+            el'ResolveAttrAddr eac addr >>= \case
+              Nothing -> returnAsExpr
+              Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+              Just !attrKey -> do
+                !attrAnno <-
+                  newTVar
+                    =<< iopdLookup attrKey (el'scope'annos'wip pwip)
+                !prevDef <- iopdLookup attrKey $ el'scope'attrs'wip pwip
+                let !attrDef =
+                      EL'AttrDef
+                        attrKey
+                        docCmt
+                        opSym
+                        addr'span
+                        xsrc
+                        rhVal
+                        attrAnno
+                        prevDef
+
+                -- record as artifact of current scope
+                unless (el'ctx'pure eac) $ do
+                  iopdInsert attrKey attrDef $
+                    if el'ctx'eff'defining eac
+                      then el'scope'effs'wip pwip
+                      else el'scope'attrs'wip pwip
+                  when (el'ctx'exporting eac) $
+                    iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
+                --
+
+                -- record as definition symbol of current scope
+                modifyTVar' (el'scope'symbols'wip pwip) (EL'DefSym attrDef :)
+
+                -- extend current scope end pos
+                writeTVar (el'scope'end'wip pwip) (src'end expr'span)
+
+                if "=" == opSym || ":=" == opSym
+                  then el'Exit eas exit rhVal
+                  else returnAsExpr
+          ExprSrc
+            (AttrExpr (IndirectRef !tgtExpr !addr))
+            _expr'span -> el'RunTx eas $
+              el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
+                -- TODO add to lh obj attrs for (=) ? other cases ?
+                el'ResolveAttrAddr eac addr >> returnAsExpr
+          ExprSrc _ !bad'assign'tgt'span -> do
+            el'LogDiag
+              diags
+              el'Error
+              bad'assign'tgt'span
+              "bad-assign-target"
+              "bad assignment target"
+            returnAsExpr
+
+      -- other operations without special treatment
+      _ -> el'RunTx eas $
+        el'AnalyzeExpr Nothing lhExpr $ \_lhVal _eas -> returnAsExpr
+    where
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+--
+
 -- call making
 el'AnalyzeExpr
   _docCmt
