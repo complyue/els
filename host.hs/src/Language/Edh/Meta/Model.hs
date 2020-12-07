@@ -337,7 +337,7 @@ data EL'Object
   = EL'ClsObj !EL'Class
   | EL'Object
       { el'obj'class :: !EL'Class,
-        -- the `supers` list of an object at runtime is instances created
+        -- | the `supers` list of an object at runtime is instances created
         -- according to its class' `mro` list, plus more super objects appended
         -- by `extends` statements (usually from within the `__init__()` method
         -- but dynamic `extends` from arbitrary methods whenever called is also
@@ -345,6 +345,8 @@ data EL'Object
         --
         -- this list is collected at analysis time
         el'obj'exts :: ![EL'Object],
+        -- | all attributes of the object
+        el'obj'attrs :: !EL'Artifacts,
         -- | object attributes are exported from the object initialising
         -- procedure in case of a module or namespace object, and typically
         -- from the `__init__()` method otherwise. while it is allowed to

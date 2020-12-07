@@ -640,6 +640,108 @@ el'AnalyzeStmt _stmt !exit !eas =
 el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
 --
 
+-- direct attribute addressing
+el'AnalyzeExpr
+  _docCmt
+  xsrc@( ExprSrc
+           (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span)))
+           _expr'span
+         )
+  !exit
+  !eas =
+    el'ResolveAttrAddr eac addr >>= \case
+      Nothing -> returnAsExpr
+      Just (AttrByName "_") -> do
+        el'LogDiag
+          diags
+          el'Error
+          addr'span
+          "underscore-ref"
+          "referencing underscore"
+        el'Exit eas exit $ EL'Const nil
+      Just !refKey ->
+        el'ResolveContextAttr eac refKey >>= \case
+          Nothing -> returnAsExpr
+          Just !attrDef -> do
+            let !attrRef = EL'AttrRef addr attrDef
+
+            -- record as referencing symbol of outer scope
+            modifyTVar' (el'scope'symbols'wip pwip) (EL'RefSym attrRef :)
+
+            el'Exit eas exit $ el'attr'def'value attrDef
+    where
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+--
+
+-- indirect attribute addressing (dot-notation)
+el'AnalyzeExpr
+  _docCmt
+  xsrc@( ExprSrc
+           (AttrExpr (IndirectRef !tgtExpr addr@(AttrAddrSrc _ !addr'span)))
+           _expr'span
+         )
+  !exit
+  !eas = el'RunTx eas $
+    el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal _eas -> case tgtVal of
+      EL'ObjVal !obj ->
+        el'ResolveAttrAddr eac addr >>= \case
+          Nothing -> returnAsExpr
+          Just !refKey -> case odLookup refKey (el'obj'attrs obj) of
+            Nothing -> do
+              el'LogDiag
+                diags
+                el'Error
+                addr'span
+                "no-such-attr"
+                "no such attribute"
+              returnAsExpr
+            Just !attrDef -> do
+              let !attrRef = EL'AttrRef addr attrDef
+
+              -- record as referencing symbol of outer scope
+              modifyTVar' (el'scope'symbols'wip pwip) (EL'RefSym attrRef :)
+
+              el'Exit eas exit $ el'attr'def'value attrDef
+      EL'ClsVal !cls ->
+        el'ResolveAttrAddr eac addr >>= \case
+          Nothing -> returnAsExpr
+          Just !refKey -> case odLookup
+            refKey
+            (el'scope'attrs $ el'class'scope cls) of
+            Nothing -> do
+              el'LogDiag
+                diags
+                el'Error
+                addr'span
+                "no-such-attr"
+                "no such attribute"
+              returnAsExpr
+            Just !attrDef -> do
+              let !attrRef = EL'AttrRef addr attrDef
+
+              -- record as referencing symbol of outer scope
+              modifyTVar' (el'scope'symbols'wip pwip) (EL'RefSym attrRef :)
+
+              el'Exit eas exit $ el'attr'def'value attrDef
+      -- EL'Const (EdhObject _obj) -> undefined -- TODO this possible ?
+      -- EL'External _ms _attrDef -> undefined -- TODO this possible ?
+      -- EL'ModuVal !ms -> undefined -- TODO handle this
+      -- EL'ProcVal !p -> undefined -- TODO handle this
+      -- EL'Const (EdhDict (Dict _ _ds)) -> undefined -- TODO handle this
+      -- EL'Const (EdhList (List _ _ls)) -> undefined -- TODO handle this
+      _ -> returnAsExpr -- unrecognized value
+    where
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+--
+
 -- call making
 el'AnalyzeExpr
   _docCmt
@@ -1323,7 +1425,12 @@ el'AnalyzeExpr
                           el'scope'effs = scope'effs,
                           el'scope'symbols = V.fromList $! reverse scope'symbols
                         }
-                    !ns = EL'Object el'NamespaceClass ns'exts ns'exps
+                    !ns =
+                      EL'Object
+                        el'NamespaceClass
+                        ns'exts
+                        scope'attrs
+                        ns'exps
                     !nsVal = EL'ObjVal ns
                     !nsDef =
                       EL'AttrDef
