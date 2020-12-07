@@ -499,7 +499,7 @@ asModuleResolved !ms !act' !eas =
       !endPos <- newTVar beginningSrcPos
       !moduSecs <- newTVar []
       !moduSyms <- newTVar []
-      let !swip =
+      let !pwip =
             EL'RunProc
               moduExts
               moduExps
@@ -522,7 +522,7 @@ asModuleResolved !ms !act' !eas =
                         moduDependants
                         moduDepencencies
                     )
-                    swip,
+                    pwip,
                 el'ctx'outers = el'ctx'scope eac : el'ctx'outers eac
               }
           !easModu = eas {el'context = eacModu}
@@ -595,7 +595,7 @@ el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr Nothing superExpr $ \case
       EL'ObjVal !superObj -> \_eas -> do
-        modifyTVar' (el'scope'exts'wip proc'wip) (++ [superObj])
+        modifyTVar' (el'scope'exts'wip pwip) (++ [superObj])
         el'Exit eas exit $ EL'Const nil
       EL'Apk (EL'ArgsPack !superVals !kwargs) | odNull kwargs -> \_eas -> do
         !superObjs <- (catMaybes <$>) $
@@ -610,7 +610,7 @@ el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
                   "invalid-extends"
                   $ "not an object to extend: " <> T.pack (show badSuperVal)
                 return Nothing
-        modifyTVar' (el'scope'exts'wip proc'wip) (++ superObjs)
+        modifyTVar' (el'scope'exts'wip pwip) (++ superObjs)
         el'Exit eas exit $ EL'Const nil
       !badSuperVal -> \_eas -> do
         el'LogDiag
@@ -625,7 +625,7 @@ el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
     diags = el'ctx'diags eac
 
     scope = el'ctx'scope eac
-    proc'wip = el'ProcWIP scope
+    pwip = el'ProcWIP scope
 --
 
 -- TODO recognize more stmts
@@ -743,15 +743,15 @@ el'AnalyzeExpr
       diags = el'ctx'diags eac
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 
-      scope = el'ctx'scope eac
-      proc'wip = el'ProcWIP scope
+      currScope = el'ctx'scope eac
+      pwip = el'ProcWIP currScope
 
       chkExport :: STM (AttrKey -> EL'AttrDef -> STM ())
       chkExport =
         if not (el'ctx'exporting eac)
           then return $ \_ _ -> return ()
           else
-            let !localExps = el'scope'exps'wip proc'wip
+            let !localExps = el'scope'exps'wip pwip
              in return $ \ !localKey !attrDef ->
                   iopdInsert localKey attrDef localExps
 
@@ -779,11 +779,12 @@ el'AnalyzeExpr
         where
           !localTgt =
             if el'ctx'eff'defining eac
-              then el'scope'effs'wip proc'wip
-              else el'scope'attrs'wip proc'wip
+              then el'scope'effs'wip pwip
+              else el'scope'attrs'wip pwip
 
           wildImp :: (AttrKey, EL'Value) -> STM ()
           wildImp (!k, !v) = do
+            !artAnno <- newTVar =<< el'ResolveAnnotation currScope k
             let !attrDef =
                   EL'AttrDef
                     k
@@ -792,7 +793,7 @@ el'AnalyzeExpr
                     expr'span
                     xsrc
                     v
-                    Nothing -- TODO associate annos
+                    artAnno
                     Nothing
 
             iopdInsert k attrDef localTgt
@@ -858,6 +859,11 @@ el'AnalyzeExpr
                   go srcArts rest
                 Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
                 Just !localKey -> do
+                  !artAnno <-
+                    newTVar
+                      =<< el'ResolveAnnotation
+                        currScope
+                        localKey
                   let !kwVal = EL'Apk $ EL'ArgsPack [] srcArts
                       !attrDef =
                         EL'AttrDef
@@ -867,7 +873,7 @@ el'AnalyzeExpr
                           addr'span
                           xsrc
                           kwVal
-                          Nothing -- TODO associate annos
+                          artAnno
                           Nothing
 
                   iopdInsert localKey attrDef localTgt
@@ -899,6 +905,11 @@ el'AnalyzeExpr
                                     <> attrKeyStr srcKey
                                 go srcArts' rest
                               Just !srcVal -> do
+                                !artAnno <-
+                                  newTVar
+                                    =<< el'ResolveAnnotation
+                                      currScope
+                                      localKey
                                 let !attrDef =
                                       EL'AttrDef
                                         localKey
@@ -907,7 +918,7 @@ el'AnalyzeExpr
                                         src'span
                                         xsrc
                                         srcVal
-                                        Nothing -- TODO associate annos
+                                        artAnno
                                         Nothing
 
                                 iopdInsert localKey attrDef localTgt
@@ -949,7 +960,7 @@ el'AnalyzeExpr
         !scopeEnd <- newTVar beginPos
         !clsSecs <- newTVar []
         !clsSyms <- newTVar []
-        let !swip =
+        let !pwip =
               EL'RunProc
                 clsExts
                 clsExps
@@ -969,46 +980,15 @@ el'AnalyzeExpr
                           clsExps
                           instExps
                       )
-                      swip,
+                      pwip,
                   el'ctx'outers = outerScope : el'ctx'outers eac
                 }
             !easCls = eas {el'context = eacCls}
 
-            -- define intrinsic artifacts for a data class
+            -- define artifacts from arguments (i.e. data fields) for a data
+            -- class
             defDataArts :: [ArgReceiver] -> STM ()
-            defDataArts !ars = do
-              flip iopdUpdate clsAttrs $
-                flip
-                  fmap
-                  [ ("__repr__", "data class repr"),
-                    ("__str__", "data class str"),
-                    ("__eq__", "data class eq test"),
-                    ("__compare__", "data class comparision")
-                  ]
-                  $ \(!mthName, !mthDoc) ->
-                    ( AttrByName mthName,
-                      EL'AttrDef
-                        (AttrByName mthName)
-                        (Just [mthDoc])
-                        "<data-class-def>"
-                        cls'name'span
-                        xsrc
-                        ( EL'ProcVal
-                            ( EL'Proc
-                                (AttrByName mthName)
-                                ( EL'Scope
-                                    cls'name'span
-                                    V.empty
-                                    odEmpty
-                                    odEmpty
-                                    V.empty
-                                )
-                            )
-                        )
-                        Nothing -- todo synthesize its anno ?
-                        Nothing
-                    )
-              flip iopdUpdate clsAttrs =<< go [] ars
+            defDataArts !ars = flip iopdUpdate clsAttrs =<< go [] ars
               where
                 go ::
                   [(AttrKey, EL'AttrDef)] ->
@@ -1038,7 +1018,8 @@ el'AnalyzeExpr
                     defDataField dfAddr@(AttrAddrSrc _ df'name'span) =
                       el'ResolveAttrAddr eac dfAddr >>= \case
                         Nothing -> go dfs rest
-                        Just !dfKey ->
+                        Just !dfKey -> do
+                          !dfAnno <- newTVar =<< iopdLookup dfKey clsAnnos
                           go
                             ( ( dfKey,
                                 EL'AttrDef
@@ -1053,12 +1034,46 @@ el'AnalyzeExpr
                                           df'name'span
                                       )
                                   )
-                                  Nothing -- todo data field can get anno ?
+                                  dfAnno
                                   Nothing
                               ) :
                               dfs
                             )
                             rest
+
+        -- define intrinsic methods of the data class
+        (flip iopdUpdate clsAttrs =<<) $
+          forM
+            [ ("__repr__", "data class repr"),
+              ("__str__", "data class str"),
+              ("__eq__", "data class eq test"),
+              ("__compare__", "data class comparision")
+            ]
+            $ \(!mthName, !mthDoc) -> do
+              !anno <- newTVar Nothing
+              return -- todo synthesize their respective anno ?
+                ( AttrByName mthName,
+                  EL'AttrDef
+                    (AttrByName mthName)
+                    (Just [mthDoc])
+                    "<data-class-def>"
+                    cls'name'span
+                    xsrc
+                    ( EL'ProcVal
+                        ( EL'Proc
+                            (AttrByName mthName)
+                            ( EL'Scope
+                                cls'name'span
+                                V.empty
+                                odEmpty
+                                odEmpty
+                                V.empty
+                            )
+                        )
+                    )
+                    anno
+                    Nothing
+                )
 
         el'RunTx easCls $
           el'AnalyzeStmts [cls'body] $ \_ _eas -> do
@@ -1073,6 +1088,7 @@ el'AnalyzeExpr
             !scope'effs <- iopdSnapshot clsEffs
             !secs <- readTVar clsSecs
             !scope'symbols <- readTVar clsSyms
+            !clsAnno <- newTVar =<< el'ResolveAnnotation outerScope clsName
             let !fullRegion =
                   EL'RegionSec $
                     EL'Region
@@ -1099,7 +1115,7 @@ el'AnalyzeExpr
                     cls'name'span
                     xsrc
                     clsVal
-                    Nothing -- TODO associate anno
+                    clsAnno
                     Nothing
             --
 
@@ -1157,7 +1173,7 @@ el'AnalyzeExpr
         !scopeEnd <- newTVar beginPos
         !mthSecs <- newTVar []
         !mthSyms <- newTVar []
-        let !swip =
+        let !pwip =
               outerProc -- inherit exts/exps from outer scope
                 { el'scope'attrs'wip = mthAttrs,
                   el'scope'effs'wip = mthEffs,
@@ -1168,22 +1184,30 @@ el'AnalyzeExpr
                 }
             !eacMth =
               eac
-                { el'ctx'scope = EL'ProcWIP swip,
+                { el'ctx'scope = EL'ProcWIP pwip,
                   el'ctx'outers = outerScope : el'ctx'outers eac
                 }
             !easMth = eas {el'context = eacMth}
 
-        case argsRcvr of
-          WildReceiver -> pure ()
-          PackReceiver !ars -> defArgArts mthAttrs ars
-          SingleReceiver !ar -> defArgArts mthAttrs [ar]
+        !argArts <- case argsRcvr of
+          WildReceiver -> return []
+          PackReceiver !ars -> defArgArts ars
+          SingleReceiver !ar -> defArgArts [ar]
+        iopdUpdate argArts mthAttrs
 
         el'RunTx easMth $
           el'AnalyzeStmts [mth'body] $ \_ _eas -> do
+            -- update annotations for arguments from body
+            forM_ argArts $ \(!argName, !argDef) ->
+              iopdLookup argName mthAnnos >>= \case
+                Nothing -> pure ()
+                Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
+            --
             !scope'attrs <- iopdSnapshot mthAttrs
             !scope'effs <- iopdSnapshot mthEffs
             !secs <- readTVar mthSecs
             !scope'symbols <- readTVar mthSyms
+            !mthAnno <- newTVar =<< el'ResolveAnnotation outerScope mthName
             let !fullRegion =
                   EL'RegionSec $
                     EL'Region
@@ -1209,7 +1233,7 @@ el'AnalyzeExpr
                     mth'name'span
                     xsrc
                     mthVal
-                    Nothing -- TODO associate anno
+                    mthAnno
                     Nothing
             --
 
@@ -1235,11 +1259,11 @@ el'AnalyzeExpr
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
-      diags = el'ctx'diags eac
+      -- diags = el'ctx'diags eac
 
       -- define artifacts from arguments for a procedure
-      defArgArts :: IOPD AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
-      defArgArts !argAttrs !ars = flip iopdUpdate argAttrs =<< go [] ars
+      defArgArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
+      defArgArts !ars = go [] ars
         where
           go ::
             [(AttrKey, EL'AttrDef)] ->
@@ -1259,28 +1283,29 @@ el'AnalyzeExpr
                 el'ResolveAttrAddr eac argAddr >>= \case
                   Nothing -> go args rest
                   Just !argKey ->
-                    go
-                      ( ( argKey,
-                          EL'AttrDef
-                            argKey
-                            Nothing
-                            "<procedure-argument>"
-                            arg'name'span
-                            xsrc
-                            ( EL'Expr $
-                                fromMaybe
-                                  ( ExprSrc
-                                      (AttrExpr (DirectRef argAddr))
-                                      arg'name'span
-                                  )
-                                  knownExpr
-                            )
-                            Nothing -- todo data field can get anno ?
-                            Nothing
-                        ) :
-                        args
-                      )
-                      rest
+                    newTVar Nothing >>= \ !anno ->
+                      go
+                        ( ( argKey,
+                            EL'AttrDef
+                              argKey
+                              Nothing
+                              "<procedure-argument>"
+                              arg'name'span
+                              xsrc
+                              ( EL'Expr $
+                                  fromMaybe
+                                    ( ExprSrc
+                                        (AttrExpr (DirectRef argAddr))
+                                        arg'name'span
+                                    )
+                                    knownExpr
+                              )
+                              anno
+                              Nothing
+                          ) :
+                          args
+                        )
+                        rest
 
 --
 

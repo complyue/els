@@ -227,7 +227,7 @@ data EL'AttrDef = EL'AttrDef
     --
     -- note multiple definitions to a same attribute key can have separate
     -- annotations
-    el'attr'def'anno :: !(Maybe EL'AttrAnno),
+    el'attr'def'anno :: !(TVar (Maybe EL'AttrAnno)),
     -- | previous definition, in case this definition is an update to an
     -- previously existing attribute
     el'attr'prev'def :: !(Maybe EL'AttrDef)

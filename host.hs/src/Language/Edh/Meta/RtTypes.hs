@@ -177,6 +177,10 @@ el'ResolveAttrAddr !eac (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
   where
     diags = el'ctx'diags eac
 
+el'ResolveAnnotation :: EL'ScopeWIP -> AttrKey -> STM (Maybe EL'AttrAnno)
+el'ResolveAnnotation !swip !key =
+  iopdLookup key $ el'scope'annos'wip $ el'ProcWIP swip
+
 el'RunTx :: EL'AnalysisState -> EL'Tx -> STM ()
 el'RunTx !eas !act = act eas
 {-# INLINE el'RunTx #-}
