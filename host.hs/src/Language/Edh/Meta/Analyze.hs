@@ -1144,22 +1144,64 @@ el'AnalyzeExpr
       diags = el'ctx'diags eac
 --
 
--- defining a method
-el'AnalyzeExpr _ (ExprSrc (MethodExpr HostDecl {}) _expr'span) _exit _eas =
-  error "bug: host method decl"
+-- defining a method procedure
+el'AnalyzeExpr !docCmt xsrc@(ExprSrc (MethodExpr !pd) _expr'span) !exit !eas =
+  el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+el'AnalyzeExpr !docCmt xsrc@(ExprSrc (GeneratorExpr !pd) _expr'span) !exit !eas =
+  el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+el'AnalyzeExpr !docCmt xsrc@(ExprSrc (InterpreterExpr !pd) _expr'span) !exit !eas =
+  el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+el'AnalyzeExpr !docCmt xsrc@(ExprSrc (ProducerExpr !pd) _expr'span) !exit !eas =
+  el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+-- defining an operator procedure
 el'AnalyzeExpr
   !docCmt
   xsrc@( ExprSrc
-           ( MethodExpr
-               ( ProcDecl
-                   mth'name@(AttrAddrSrc _mth'name'addr !mth'name'span)
-                   !argsRcvr
-                   mth'body@(StmtSrc _body'stmt !body'span)
-                   _mth'proc'loc
-                 )
-             )
+           (OpDefiExpr _fixity _precedence _opSym !pd)
            _expr'span
          )
+  !exit
+  !eas =
+    el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+el'AnalyzeExpr
+  !docCmt
+  xsrc@( ExprSrc
+           (OpOvrdExpr _fixity _precedence _opSym !pd)
+           _expr'span
+         )
+  !exit
+  !eas =
+    el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+--
+
+-- apk ctor
+el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
+  undefined
+--
+
+-- TODO recognize more exprs
+
+-- the rest of expressions not analyzed
+el'AnalyzeExpr _docCmt !xsrc !exit !eas =
+  el'Exit eas exit $ EL'Expr xsrc
+
+-- | define a method procedure
+el'DefineMethod ::
+  Maybe DocComment ->
+  ExprSrc ->
+  ProcDecl ->
+  EL'Analysis EL'Value
+el'DefineMethod _ _ HostDecl {} _exit _eas =
+  error "bug: host method decl"
+el'DefineMethod
+  !docCmt
+  !xsrc
+  ( ProcDecl
+      mth'name@(AttrAddrSrc _mth'name'addr !mth'name'span)
+      !argsRcvr
+      mth'body@(StmtSrc _body'stmt !body'span)
+      _mth'proc'loc
+    )
   !exit
   !eas =
     el'ResolveAttrAddr eac mth'name >>= \case
@@ -1308,14 +1350,3 @@ el'AnalyzeExpr
                         rest
 
 --
-
--- apk ctor
-el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
-  undefined
---
-
--- TODO recognize more exprs
-
--- the rest of expressions not analyzed
-el'AnalyzeExpr _docCmt !xsrc !exit !eas =
-  el'Exit eas exit $ EL'Expr xsrc
