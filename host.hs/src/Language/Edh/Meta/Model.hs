@@ -9,6 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Vector (Vector)
 import qualified Data.Vector as V
+import GHC.IO (unsafePerformIO)
 import Language.Edh.EHI
 import Prelude
 
@@ -175,7 +176,7 @@ data EL'ResolvedModule = EL'ResolvedModule
     el'resolved'scope :: !EL'Scope,
     -- | exports from this module, mutated upon any origin module of re-exports
     -- get resolved
-    el'resolved'exports :: !EL'Exports,
+    el'resolved'exports :: !EL'ArtsWIP,
     -- | other modules those should be invalidated once this module is changed
     --
     -- note a dependant may stop depending on this module due to src changes,
@@ -198,10 +199,10 @@ data EL'ResolvedModule = EL'ResolvedModule
 -- & referencing. In case of importing, the import expression should serve the
 -- attribute definition, with the origin and possible renames tracked.
 
-type EL'Exports = IOPD AttrKey EL'AttrDef
+type EL'ArtsWIP = IOPD AttrKey EL'AttrDef
 
-instance Show EL'Exports where
-  show _exps = "<exports>"
+instance Show EL'ArtsWIP where
+  show _exps = "<artifacts>"
 
 -- | an attribute definition or re-definition (i.e. update to a previously
 -- defined attribute)
@@ -259,6 +260,11 @@ data EL'AttrAnno = EL'AttrAnno
     el'anno'value :: !(Maybe EL'Value)
   }
 
+-- | 冇 annotation
+maoAnnotation :: TVar (Maybe a)
+maoAnnotation = unsafePerformIO $ newTVarIO Nothing
+{-# NOINLINE maoAnnotation #-}
+
 -- | an attribute reference, links to its respective definition
 data EL'AttrRef = EL'AttrRef
   { -- | the referencing addressor
@@ -297,6 +303,8 @@ data EL'Value
     EL'ModuVal !EL'ModuSlot
   | -- | a procedure
     EL'ProcVal !EL'Proc
+  | -- | a property
+    EL'PropVal !EL'Class !AttrKey
   | -- | an arbitrary expression not resolved at analysis time
     EL'Expr !ExprSrc
 
@@ -312,11 +320,13 @@ instance Show EL'Value where
   show (EL'ClsVal !cls) = show cls
   show (EL'ModuVal !modu) = show modu
   show (EL'ProcVal !p) = show p
+  show (EL'PropVal !cls !prop) = show cls <> "." <> show prop
   show (EL'Expr !x) = show x
 
 -- | a procedure
 data EL'Proc = EL'Proc
   { el'proc'name :: AttrKey,
+    el'proc'args :: !ArgsReceiver,
     -- | scope of this proc
     el'proc'scope :: !EL'Scope
   }
@@ -340,7 +350,7 @@ data EL'Object
         -- from the `__init__()` method otherwise. while it is allowed to
         -- export artifacts from an arbitrary instance method whenever called,
         -- which should probably be considered unusual.
-        el'obj'exps :: !EL'Exports
+        el'obj'exps :: !EL'Artifacts
       }
   deriving (Show)
 
@@ -356,9 +366,53 @@ data EL'Class = EL'Class
     -- | class attributes are exported from the class defining procedure, while
     -- it is allowed to export artifacts from an arbitrary class method whenever
     -- called, which should probably be considered unusual.
-    el'class'exps :: !EL'Exports
+    el'class'exps :: !EL'Artifacts
   }
   deriving (Show)
+
+el'MetaClass :: EL'Class
+el'MetaClass =
+  EL'Class
+    (AttrByName "class")
+    []
+    []
+    ( EL'Scope
+        noSrcRange
+        V.empty
+        ( odFromList
+            [ ( AttrByName "name",
+                EL'AttrDef
+                  (AttrByName "name")
+                  Nothing
+                  "<class-intrinsic>"
+                  noSrcRange
+                  (ExprSrc (LitExpr NilLiteral) noSrcRange)
+                  (EL'PropVal el'MetaClass (AttrByName "name"))
+                  maoAnnotation
+                  Nothing
+              )
+            ]
+        )
+        odEmpty
+        V.empty
+    )
+    odEmpty
+{-# NOINLINE el'MetaClass #-}
+
+el'NamespaceClass :: EL'Class
+el'NamespaceClass =
+  EL'Class (AttrByName "<namespace>") [] [] maoScope odEmpty
+{-# NOINLINE el'NamespaceClass #-}
+
+el'ModuleClass :: EL'Class
+el'ModuleClass =
+  EL'Class (AttrByName "<module>") [] [] maoScope odEmpty
+{-# NOINLINE el'ModuleClass #-}
+
+el'ScopeClass :: EL'Class
+el'ScopeClass =
+  EL'Class (AttrByName "<scope>") [] [] maoScope odEmpty
+{-# NOINLINE el'ScopeClass #-}
 
 data EL'Section = EL'ScopeSec !EL'Scope | EL'RegionSec !EL'Region
   deriving (Show)
@@ -393,6 +447,10 @@ data EL'Scope = EL'Scope
     el'scope'symbols :: !(Vector EL'AttrSym)
   }
   deriving (Show)
+
+-- | 冇 scope
+maoScope :: EL'Scope
+maoScope = EL'Scope noSrcRange V.empty odEmpty odEmpty V.empty
 
 type EL'Artifacts = OrderedDict AttrKey EL'AttrDef
 

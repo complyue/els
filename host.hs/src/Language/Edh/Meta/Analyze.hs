@@ -1062,6 +1062,7 @@ el'AnalyzeExpr
                     ( EL'ProcVal
                         ( EL'Proc
                             (AttrByName mthName)
+                            WildReceiver -- todo elaborate actual args
                             ( EL'Scope
                                 cls'name'span
                                 V.empty
@@ -1084,6 +1085,7 @@ el'AnalyzeExpr
               SingleReceiver !ar -> defDataArts [ar]
               PackReceiver !ars -> defDataArts ars
             !cls'exts <- readTVar clsExts
+            !cls'exps <- iopdSnapshot clsExps
             !scope'attrs <- iopdSnapshot clsAttrs
             !scope'effs <- iopdSnapshot clsEffs
             !secs <- readTVar clsSecs
@@ -1105,7 +1107,7 @@ el'AnalyzeExpr
                       el'scope'symbols = V.fromList $! reverse scope'symbols
                     }
                 !mro = [] -- TODO C3 linearize cls'exts to get this
-                !cls = EL'Class clsName cls'exts mro cls'scope clsExps
+                !cls = EL'Class clsName cls'exts mro cls'scope cls'exps
                 !clsVal = EL'ClsVal cls
                 !clsDef =
                   EL'AttrDef
@@ -1265,7 +1267,10 @@ el'DefineMethod
                       el'scope'effs = scope'effs,
                       el'scope'symbols = V.fromList $! reverse scope'symbols
                     }
-                !mth = EL'Proc mthName mth'scope
+                -- TODO for sake of parameter hints in IDE
+                -- - elide 1st `callerScope` for interpreter and 3-arg operator
+                -- - supplement `outlet` for producer if omitted
+                !mth = EL'Proc mthName argsRcvr mth'scope
                 !mthVal = EL'ProcVal mth
                 !mthDef =
                   EL'AttrDef

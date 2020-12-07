@@ -77,7 +77,7 @@ data EL'InitModu = EL'InitModu
     el'modu'exts'wip :: !(TVar [EL'Object]),
     -- | 1st appearances of exported artifacts in the direct scope and nested
     -- (method) scopes (i.e. module exports), up to time of analysis
-    el'modu'exps'wip :: !EL'Exports,
+    el'modu'exps'wip :: !EL'ArtsWIP,
     -- | other modules those should be invalidated once this module is changed
     --
     -- note a dependant may stop depending on this module due to src changes,
@@ -101,7 +101,7 @@ data EL'InitObject = EL'InitObject
     el'obj'exts'wip :: !(TVar [EL'Object]),
     -- | 1st appearances of exported artifacts in the direct scope and nested
     -- (method) scopes (i.e. object exports), up to time of analysis
-    el'obj'exps'wip :: !EL'Exports
+    el'obj'exps'wip :: !EL'ArtsWIP
   }
 
 -- | a class defining procedure
@@ -114,10 +114,10 @@ data EL'DefineClass = EL'DefineClass
     el'inst'exts'wip :: !(TVar [EL'Object]),
     -- | 1st appearances of exported artifacts in the direct class scope (i.e.
     -- class exports), up to time of analysis
-    el'class'exps'wip :: !(IOPD AttrKey EL'AttrDef),
+    el'class'exps'wip :: !EL'ArtsWIP,
     -- | 1st appearances of exported artifacts in nested (method) scopes (i.e.
     -- object exports), up to time of analysis
-    el'inst'exps'wip :: !(IOPD AttrKey EL'AttrDef)
+    el'inst'exps'wip :: !EL'ArtsWIP
   }
 
 -- a method procedure, including vanilla method, generator, producer, operator,
@@ -128,11 +128,11 @@ data EL'RunProc = EL'RunProc
     el'scope'exts'wip :: !(TVar [EL'Object]),
     -- | this points to `el'modu'exps'wip` or `el'obj'exps'wip` or
     -- `el'class'exps'wip` or `el'inst'exps'wip` whichever is appropriate
-    el'scope'exps'wip :: !EL'Exports,
+    el'scope'exps'wip :: !EL'ArtsWIP,
     -- | last appearances of attributes encountered, up to time of analysis
-    el'scope'attrs'wip :: !(IOPD AttrKey EL'AttrDef),
+    el'scope'attrs'wip :: !EL'ArtsWIP,
     -- | 1st appearances of effectful artifacts, up to time of analysis
-    el'scope'effs'wip :: !(IOPD AttrKey EL'AttrDef),
+    el'scope'effs'wip :: !EL'ArtsWIP,
     -- | last appearances of annotations encountered in the direct class scope,
     -- up to time of analysis
     el'scope'annos'wip :: !(IOPD AttrKey EL'AttrAnno),
