@@ -472,6 +472,7 @@ asModuleResolved !ms !act' !eas =
                 ( EL'Scope
                     noSrcRange
                     V.empty
+                    V.empty
                     odEmpty
                     odEmpty
                     V.empty
@@ -496,8 +497,8 @@ asModuleResolved !ms !act' !eas =
       !moduAttrs <- iopdEmpty
       !moduEffs <- iopdEmpty
       !moduAnnos <- iopdEmpty
-      !endPos <- newTVar beginningSrcPos
-      !moduSecs <- newTVar []
+      !moduScopes <- newTVar []
+      !moduRegions <- newTVar []
       !moduSyms <- newTVar []
       let !pwip =
             EL'RunProc
@@ -506,9 +507,8 @@ asModuleResolved !ms !act' !eas =
               moduAttrs
               moduEffs
               moduAnnos
-              beginningSrcPos
-              endPos
-              moduSecs
+              moduScopes
+              moduRegions
               moduSyms
 
           !eacModu =
@@ -533,20 +533,14 @@ asModuleResolved !ms !act' !eas =
           !diags <- readTVar diagsVar
           !scope'attrs <- iopdSnapshot moduAttrs
           !scope'effs <- iopdSnapshot moduEffs
-          !scope'end <- readTVar endPos
-          !secs <- readTVar moduSecs
+          !innerScopes <- readTVar moduScopes
+          !regions <- readTVar moduRegions
           !scope'symbols <- readTVar moduSyms
-          let !fullRegion =
-                EL'RegionSec $
-                  EL'Region
-                    { el'region'span = SrcRange beginningSrcPos scope'end,
-                      el'region'attrs = scope'attrs
-                    }
           let !el'scope =
                 EL'Scope
-                  { el'scope'span = SrcRange beginningSrcPos scope'end,
-                    el'scope'sections =
-                      V.fromList $! reverse $ fullRegion : secs,
+                  { el'scope'span = SrcRange beginningSrcPos moduEnd,
+                    el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                    el'scope'regions = V.fromList $! reverse regions,
                     el'scope'attrs = scope'attrs,
                     el'scope'effs = scope'effs,
                     el'scope'symbols = V.fromList $! reverse scope'symbols
@@ -558,6 +552,13 @@ asModuleResolved !ms !act' !eas =
               moduDependants
               moduDepencencies
               (reverse diags)
+      where
+        moduEnd :: SrcPos
+        moduEnd = go stmts
+          where
+            go [] = beginningSrcPos
+            go [StmtSrc _ !last'stmt'span] = src'end last'stmt'span
+            go (_ : rest'stmts) = go rest'stmts
 
 el'AnalyzeStmts :: [StmtSrc] -> EL'Analysis EL'Value
 el'AnalyzeStmts !stmts !exit !eas = go stmts
@@ -775,32 +776,28 @@ el'AnalyzeExpr
                         attrAnno
                         prevDef
 
-                -- record a region section before this assignment within
-                -- current scope
-                !regEnd <- readTVar (el'scope'end'wip pwip)
-                !regAttrs <- iopdSnapshot (el'scope'attrs'wip pwip)
-                let !reg =
-                      EL'RegionSec $
-                        EL'Region
-                          (SrcRange (el'scope'begin'wip pwip) regEnd)
-                          regAttrs
-                modifyTVar' (el'scope'secs'wip pwip) (reg :)
-
                 -- record as artifact of current scope
-                unless (el'ctx'pure eac) $ do
-                  iopdInsert attrKey attrDef $
-                    if el'ctx'eff'defining eac
-                      then el'scope'effs'wip pwip
-                      else el'scope'attrs'wip pwip
-                  when (el'ctx'exporting eac) $
-                    iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
+                unless (el'ctx'pure eac) $
+                  if el'ctx'eff'defining eac
+                    then iopdInsert attrKey attrDef $el'scope'effs'wip pwip
+                    else do
+                      let !attrs = el'scope'attrs'wip pwip
+                      iopdInsert attrKey attrDef attrs
+                      -- record as definition symbol of current scope
+                      modifyTVar'
+                        (el'scope'symbols'wip pwip)
+                        (EL'DefSym attrDef :)
+                      case prevDef of
+                        -- assignment created a new attr, record a region after
+                        -- this assignment expr for current scope
+                        Nothing ->
+                          iopdSnapshot attrs
+                            >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
+                              . EL'Region (src'end expr'span)
+                        _ -> pure ()
+                when (el'ctx'exporting eac) $
+                  iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
                 --
-
-                -- record as definition symbol of current scope
-                modifyTVar' (el'scope'symbols'wip pwip) (EL'DefSym attrDef :)
-
-                -- extend current scope end pos
-                writeTVar (el'scope'end'wip pwip) (src'end expr'span)
 
                 if "=" == opSym || ":=" == opSym
                   then el'Exit eas exit rhVal
@@ -1169,7 +1166,7 @@ el'AnalyzeExpr
                    _cls'proc'loc
                  )
              )
-           _expr'span
+           !expr'span
          )
   !exit
   !eas =
@@ -1177,7 +1174,6 @@ el'AnalyzeExpr
       Nothing -> el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
       Just !clsName -> do
-        let SrcRange !beginPos !endPos = body'span
         !clsExts <- newTVar []
         !instExts <- newTVar []
         !clsExps <- iopdEmpty
@@ -1185,8 +1181,8 @@ el'AnalyzeExpr
         !clsAttrs <- iopdEmpty
         !clsEffs <- iopdEmpty
         !clsAnnos <- iopdEmpty
-        !scopeEnd <- newTVar beginPos
-        !clsSecs <- newTVar []
+        !clsScopes <- newTVar []
+        !clsRegions <- newTVar []
         !clsSyms <- newTVar []
         let !pwip =
               EL'RunProc
@@ -1195,9 +1191,8 @@ el'AnalyzeExpr
                 clsAttrs
                 clsEffs
                 clsAnnos
-                beginPos
-                scopeEnd
-                clsSecs
+                clsScopes
+                clsRegions
                 clsSyms
             !eacCls =
               eac
@@ -1295,6 +1290,7 @@ el'AnalyzeExpr
                             ( EL'Scope
                                 cls'name'span
                                 V.empty
+                                V.empty
                                 odEmpty
                                 odEmpty
                                 V.empty
@@ -1317,20 +1313,15 @@ el'AnalyzeExpr
             !cls'exps <- iopdSnapshot clsExps
             !scope'attrs <- iopdSnapshot clsAttrs
             !scope'effs <- iopdSnapshot clsEffs
-            !secs <- readTVar clsSecs
+            !innerScopes <- readTVar clsScopes
+            !regions <- readTVar clsRegions
             !scope'symbols <- readTVar clsSyms
             !clsAnno <- newTVar =<< el'ResolveAnnotation outerScope clsName
-            let !fullRegion =
-                  EL'RegionSec $
-                    EL'Region
-                      { el'region'span = body'span,
-                        el'region'attrs = scope'attrs
-                      }
             let !cls'scope =
                   EL'Scope
                     { el'scope'span = body'span,
-                      el'scope'sections =
-                        V.fromList $! reverse $ fullRegion : secs,
+                      el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                      el'scope'regions = V.fromList $! reverse regions,
                       el'scope'attrs = scope'attrs,
                       el'scope'effs = scope'effs,
                       el'scope'symbols = V.fromList $! reverse scope'symbols
@@ -1350,21 +1341,26 @@ el'AnalyzeExpr
                     Nothing
             --
 
+            -- record as an inner scope of outer scope
+            modifyTVar' (el'scope'inner'scopes'wip outerProc) (cls'scope :)
             -- record as artifact of outer scope
-            unless (el'ctx'pure eac) $ do
-              iopdInsert clsName clsDef $
-                if el'ctx'eff'defining eac
-                  then el'scope'effs'wip outerProc
-                  else el'scope'attrs'wip outerProc
-              when (el'ctx'exporting eac) $
-                iopdInsert clsName clsDef $ el'scope'exps'wip outerProc
-            -- record as definition symbol of outer scope
-            modifyTVar' (el'scope'symbols'wip outerProc) (EL'DefSym clsDef :)
+            unless (el'ctx'pure eac) $
+              if el'ctx'eff'defining eac
+                then iopdInsert clsName clsDef $ el'scope'effs'wip outerProc
+                else do
+                  let !attrs = el'scope'attrs'wip outerProc
+                  iopdInsert clsName clsDef attrs
+                  -- record as definition symbol of outer scope
+                  modifyTVar'
+                    (el'scope'symbols'wip outerProc)
+                    (EL'DefSym clsDef :)
+                  -- record a region after this definition for current scope
+                  iopdSnapshot attrs
+                    >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
+                      . EL'Region (src'end expr'span)
 
-            -- append the scope as a section to outer scope
-            modifyTVar' (el'scope'secs'wip outerProc) (EL'ScopeSec cls'scope :)
-            -- extend outer scope end pos
-            writeTVar (el'scope'end'wip outerProc) endPos
+            when (el'ctx'exporting eac) $
+              iopdInsert clsName clsDef $ el'scope'exps'wip outerProc
 
             -- return the class object value
             el'Exit eas exit clsVal
@@ -1420,7 +1416,7 @@ el'AnalyzeExpr
                  )
                !argsPkr
              )
-           _expr'span
+           !expr'span
          )
   !exit
   !eas =
@@ -1428,14 +1424,13 @@ el'AnalyzeExpr
       Nothing -> el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
       Just !nsName -> do
-        let SrcRange !beginPos !endPos = body'span
         !nsExts <- newTVar []
         !nsExps <- iopdEmpty
         !nsAttrs <- iopdEmpty
         !nsEffs <- iopdEmpty
         !nsAnnos <- iopdEmpty
-        !scopeEnd <- newTVar beginPos
-        !nsSecs <- newTVar []
+        !nsScopes <- newTVar []
+        !nsRegions <- newTVar []
         !nsSyms <- newTVar []
         let !pwip =
               EL'RunProc
@@ -1444,9 +1439,8 @@ el'AnalyzeExpr
                 nsAttrs
                 nsEffs
                 nsAnnos
-                beginPos
-                scopeEnd
-                nsSecs
+                nsScopes
+                nsRegions
                 nsSyms
             !eacNs =
               eac
@@ -1535,20 +1529,17 @@ el'AnalyzeExpr
                 !ns'exps <- iopdSnapshot nsExps
                 !scope'attrs <- iopdSnapshot nsAttrs
                 !scope'effs <- iopdSnapshot nsEffs
-                !secs <- readTVar nsSecs
+                !innerScopes <- readTVar nsScopes
+                !regions <- readTVar nsRegions
                 !scope'symbols <- readTVar nsSyms
                 !nsAnno <- newTVar =<< el'ResolveAnnotation outerScope nsName
-                let !fullRegion =
-                      EL'RegionSec $
-                        EL'Region
-                          { el'region'span = body'span,
-                            el'region'attrs = scope'attrs
-                          }
                 let !ns'scope =
                       EL'Scope
                         { el'scope'span = body'span,
-                          el'scope'sections =
-                            V.fromList $! reverse $ fullRegion : secs,
+                          el'scope'inner'scopes =
+                            V.fromList
+                              $! reverse innerScopes,
+                          el'scope'regions = V.fromList $! reverse regions,
                           el'scope'attrs = scope'attrs,
                           el'scope'effs = scope'effs,
                           el'scope'symbols = V.fromList $! reverse scope'symbols
@@ -1572,26 +1563,26 @@ el'AnalyzeExpr
                         Nothing
                 --
 
+                -- record as an inner scope of outer scope
+                modifyTVar' (el'scope'inner'scopes'wip outerProc) (ns'scope :)
                 -- record as artifact of outer scope
-                unless (el'ctx'pure eac) $ do
-                  iopdInsert nsName nsDef $
-                    if el'ctx'eff'defining eac
-                      then el'scope'effs'wip outerProc
-                      else el'scope'attrs'wip outerProc
-                  when (el'ctx'exporting eac) $
-                    iopdInsert nsName nsDef $ el'scope'exps'wip outerProc
-                  -- record as definition symbol of outer scope
-                  modifyTVar'
-                    (el'scope'symbols'wip outerProc)
-                    (EL'DefSym nsDef :)
-                  -- append the scope as a section to outer scope
-                  modifyTVar'
-                    (el'scope'secs'wip outerProc)
-                    (EL'ScopeSec ns'scope :)
-                  -- extend outer scope end pos
-                  writeTVar (el'scope'end'wip outerProc) endPos
-                  -- return the namespace object value
-                  el'Exit eas exit nsVal
+                unless (el'ctx'pure eac) $
+                  if el'ctx'eff'defining eac
+                    then iopdInsert nsName nsDef $ el'scope'effs'wip outerProc
+                    else do
+                      let !attrs = el'scope'attrs'wip outerProc
+                      iopdInsert nsName nsDef attrs
+                      -- record as definition symbol of outer scope
+                      modifyTVar'
+                        (el'scope'symbols'wip outerProc)
+                        (EL'DefSym nsDef :)
+                      -- record a region after this definition for current scope
+                      iopdSnapshot attrs
+                        >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
+                          . EL'Region (src'end expr'span)
+
+                -- return the namespace object value
+                el'Exit eas exit nsVal
     where
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
@@ -1633,20 +1624,19 @@ el'DefineMethod
       Nothing -> el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
       Just !mthName -> do
-        let SrcRange !beginPos !endPos = body'span
         !mthAttrs <- iopdEmpty
         !mthEffs <- iopdEmpty
         !mthAnnos <- iopdEmpty
-        !scopeEnd <- newTVar beginPos
-        !mthSecs <- newTVar []
+        !mthScopes <- newTVar []
+        !mthRegions <- newTVar []
         !mthSyms <- newTVar []
         let !pwip =
               outerProc -- inherit exts/exps from outer scope
                 { el'scope'attrs'wip = mthAttrs,
                   el'scope'effs'wip = mthEffs,
                   el'scope'annos'wip = mthAnnos,
-                  el'scope'end'wip = scopeEnd,
-                  el'scope'secs'wip = mthSecs,
+                  el'scope'inner'scopes'wip = mthScopes,
+                  el'scope'regions'wip = mthRegions,
                   el'scope'symbols'wip = mthSyms
                 }
             !eacMth =
@@ -1672,20 +1662,15 @@ el'DefineMethod
             --
             !scope'attrs <- iopdSnapshot mthAttrs
             !scope'effs <- iopdSnapshot mthEffs
-            !secs <- readTVar mthSecs
+            !innerScopes <- readTVar mthScopes
+            !regions <- readTVar mthRegions
             !scope'symbols <- readTVar mthSyms
             !mthAnno <- newTVar =<< el'ResolveAnnotation outerScope mthName
-            let !fullRegion =
-                  EL'RegionSec $
-                    EL'Region
-                      { el'region'span = body'span,
-                        el'region'attrs = scope'attrs
-                      }
             let !mth'scope =
                   EL'Scope
                     { el'scope'span = body'span,
-                      el'scope'sections =
-                        V.fromList $! reverse $ fullRegion : secs,
+                      el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                      el'scope'regions = V.fromList $! reverse regions,
                       el'scope'attrs = scope'attrs,
                       el'scope'effs = scope'effs,
                       el'scope'symbols = V.fromList $! reverse scope'symbols
@@ -1699,7 +1684,7 @@ el'DefineMethod
                   EL'AttrDef
                     mthName
                     docCmt
-                    "<method-def>"
+                    "<proc-def>"
                     mth'name'span
                     xsrc
                     mthVal
@@ -1707,21 +1692,26 @@ el'DefineMethod
                     Nothing
             --
 
+            -- record as an inner scope of outer scope
+            modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
             -- record as artifact of outer scope
-            unless (el'ctx'pure eac) $ do
-              iopdInsert mthName mthDef $
-                if el'ctx'eff'defining eac
-                  then el'scope'effs'wip outerProc
-                  else el'scope'attrs'wip outerProc
-              when (el'ctx'exporting eac) $
-                iopdInsert mthName mthDef $ el'scope'exps'wip outerProc
-            -- record as definition symbol of outer scope
-            modifyTVar' (el'scope'symbols'wip outerProc) (EL'DefSym mthDef :)
+            unless (el'ctx'pure eac) $
+              if el'ctx'eff'defining eac
+                then iopdInsert mthName mthDef $ el'scope'effs'wip outerProc
+                else do
+                  let !attrs = el'scope'attrs'wip outerProc
+                  iopdInsert mthName mthDef attrs
+                  -- record as definition symbol of outer scope
+                  modifyTVar'
+                    (el'scope'symbols'wip outerProc)
+                    (EL'DefSym mthDef :)
+                  -- record a region after this definition for current scope
+                  iopdSnapshot attrs
+                    >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
+                      . EL'Region (src'end body'span)
 
-            -- append the scope as a section to outer scope
-            modifyTVar' (el'scope'secs'wip outerProc) (EL'ScopeSec mth'scope :)
-            -- extend outer scope end pos
-            writeTVar (el'scope'end'wip outerProc) endPos
+            when (el'ctx'exporting eac) $
+              iopdInsert mthName mthDef $ el'scope'exps'wip outerProc
 
             -- return the procedure object value
             el'Exit eas exit mthVal

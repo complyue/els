@@ -374,6 +374,7 @@ el'MetaClass =
     ( EL'Scope
         noSrcRange
         V.empty
+        V.empty
         ( odFromList
             [ ( AttrByName "name",
                 EL'AttrDef
@@ -409,13 +410,6 @@ el'ScopeClass =
   EL'Class (AttrByName "<scope>") [] [] maoScope odEmpty
 {-# NOINLINE el'ScopeClass #-}
 
-data EL'Section = EL'ScopeSec !EL'Scope | EL'RegionSec !EL'Region
-  deriving (Show)
-
-sectionSpan :: EL'Section -> SrcRange
-sectionSpan (EL'ScopeSec scope) = el'scope'span scope
-sectionSpan (EL'RegionSec region) = el'region'span region
-
 -- | a scope is backed by an entity with arbitrary attributes, as Edh allows
 -- very straight forward sharing of lexical scopes to goroutines spawned from
 -- within an inner scope, it may be more right to assume all attributes ever
@@ -423,17 +417,15 @@ sectionSpan (EL'RegionSec region) = el'region'span region
 -- order of attribute availablility with respect to precise concurrency analysis
 data EL'Scope = EL'Scope
   { el'scope'span :: !SrcRange,
-    -- a scope can have nested scopes, and it at least should have a final
-    -- region to contain all possible annotations and attributes
-    --
-    -- a new region is created upon each (group of) attr definition or deletion,
-    -- consecutive regions within a scope should be ever expanding in src span
-    -- regards
+    -- | nested scopes
+    el'scope'inner'scopes :: !(Vector EL'Scope),
+    -- | a new region is created upon each (group of) attr definition or
+    -- deletion
     --
     -- sections within a scope appear naturally in source order, we use an
     -- immutable vector here, so it can be used with binary search to locate
-    -- the section for a target location within this scope
-    el'scope'sections :: !(Vector EL'Section),
+    -- the region for a target location within this scope
+    el'scope'regions :: !(Vector EL'Region),
     -- | the 1st appearances of each attribute defined in this scope
     el'scope'attrs :: !EL'Artifacts,
     -- | the 1st appearances of each effectful attribute defined in this scope
@@ -445,7 +437,18 @@ data EL'Scope = EL'Scope
 
 -- | 冇 scope
 maoScope :: EL'Scope
-maoScope = EL'Scope noSrcRange V.empty odEmpty odEmpty V.empty
+maoScope = EL'Scope noSrcRange V.empty V.empty odEmpty odEmpty V.empty
+
+-- | a consecutive region covers the src range of its predecessor, with a single
+-- addition or deletion of an attribute definition
+--
+-- note a re-definition or a change of annotation doesn't create a new region
+data EL'Region = EL'Region
+  { el'region'begin :: !SrcPos,
+    -- | available attributes defined in this region
+    el'region'attrs :: !EL'Artifacts
+  }
+  deriving (Show)
 
 type EL'Artifacts = OrderedDict AttrKey EL'AttrDef
 
@@ -456,28 +459,4 @@ instance Show EL'Artifacts where
 -- reference, the order of symbols in this vector reflects the order each
 -- symbol appears in src code reading order
 data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
-  deriving (Show)
-
--- | the last section of a scope should always be the full region with all
--- possible attributes, while empty scope is assumed to have an empty region
-scopeFullRegion :: EL'Scope -> EL'Region
-scopeFullRegion !scope =
-  if nSecs < 1
-    then EL'Region (el'scope'span scope) odEmpty
-    else case V.unsafeIndex secs (nSecs - 1) of
-      EL'RegionSec !region -> region
-      _ -> error "bug: last section of a scope not a region"
-  where
-    !secs = el'scope'sections scope
-    !nSecs = V.length secs
-
--- | a consecutive region covers the src range of its predecessor, with a single
--- addition or deletion of an attribute definition
---
--- note a re-definition or a change of annotation doesn't create a new region
-data EL'Region = EL'Region
-  { el'region'span :: !SrcRange,
-    -- | available attributes defined in this region
-    el'region'attrs :: !EL'Artifacts
-  }
   deriving (Show)

@@ -136,12 +136,10 @@ data EL'RunProc = EL'RunProc
     -- | last appearances of annotations encountered in the direct class scope,
     -- up to time of analysis
     el'scope'annos'wip :: !(IOPD AttrKey EL'AttrAnno),
-    -- | begin position for the scope
-    el'scope'begin'wip :: !SrcPos,
-    -- | end position for current region in the scope, known lately
-    el'scope'end'wip :: !(TVar SrcPos),
-    -- | accumulated sections lately
-    el'scope'secs'wip :: !(TVar [EL'Section]),
+    -- | accumulated inner scopes lately
+    el'scope'inner'scopes'wip :: !(TVar [EL'Scope]),
+    -- | accumulated regions lately
+    el'scope'regions'wip :: !(TVar [EL'Region]),
     -- | accumulated symbols lately
     el'scope'symbols'wip :: !(TVar [EL'AttrSym])
   }
