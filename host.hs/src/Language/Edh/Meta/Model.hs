@@ -236,8 +236,7 @@ data EL'AttrDef = EL'AttrDef
 
 instance Show EL'AttrDef where
   show !adef =
-    "<attr-def: " <> T.unpack (attrKeyStr $ el'attr'def'key adef)
-      <> ">"
+    "<attr-def: " <> T.unpack (attrKeyStr $ el'attr'def'key adef) <> ">"
 
 el'UltimateValue :: EL'AttrDef -> EL'Value
 el'UltimateValue !def = case el'attr'def'value def of
@@ -248,16 +247,10 @@ el'UltimateValue !def = case el'attr'def'value def of
 data EL'AttrAnno = EL'AttrAnno
   { -- | right-hand expression to the (::) operator
     el'anno'expr :: !ExprSrc,
-    -- | source text of the annotation, this can show up on IDE hover, at least
-    -- before we can generate more sophisticated descriptions for that
-    el'anno'text :: !Text,
-    -- | possibly resolved value of the right-hand expression
-    --
-    -- TODO this doesn't seem guaranteed to be resolvable to some value, maybe
-    --      here we need some dedicated data structure for representation of
-    --      various annotations, wrt how they are interpreted - mostly for
-    --      type hints, maybe even more other semantics?
-    el'anno'value :: !(Maybe EL'Value)
+    -- | doc comment of the annotation
+    -- this can show up on IDE hover, at least before we can generate more
+    -- sophisticated descriptions for that
+    el'anno'doc :: !(Maybe DocComment)
   }
 
 -- | 冇 annotation
@@ -466,11 +459,11 @@ data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
   deriving (Show)
 
 -- | the last section of a scope should always be the full region with all
--- possible attributes
+-- possible attributes, while empty scope is assumed to have an empty region
 scopeFullRegion :: EL'Scope -> EL'Region
 scopeFullRegion !scope =
   if nSecs < 1
-    then error "bug: no section in a scope"
+    then EL'Region (el'scope'span scope) odEmpty
     else case V.unsafeIndex secs (nSecs - 1) of
       EL'RegionSec !region -> region
       _ -> error "bug: last section of a scope not a region"

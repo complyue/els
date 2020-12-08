@@ -506,6 +506,7 @@ asModuleResolved !ms !act' !eas =
               moduAttrs
               moduEffs
               moduAnnos
+              beginningSrcPos
               endPos
               moduSecs
               moduSyms
@@ -749,15 +750,10 @@ el'AnalyzeExpr
            !expr'span
          )
   !exit
-  !eas = el'RunTx eas $ -- right-hand expr to be analyzed anyway
-    el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> case opSym of
-      "->" -> undefined -- TODO define branch
-      "=>" -> undefined -- TODO define method/generator arrow procedure
-      "=>*" -> undefined -- TODO define producer arrow procedure
-      -- TODO special treatment of ($) (|) (&) etc. ?
-
-      -- assignment
-      _ | "=" `T.isSuffixOf` opSym -> do
+  !eas = case opSym of
+    -- assignment
+    _ | "=" `T.isSuffixOf` opSym -> el'RunTx eas $
+      el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> do
         case lhExpr of
           ExprSrc (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span))) _ ->
             el'ResolveAttrAddr eac addr >>= \case
@@ -778,6 +774,17 @@ el'AnalyzeExpr
                         rhVal
                         attrAnno
                         prevDef
+
+                -- record a region section before this assignment within
+                -- current scope
+                !regEnd <- readTVar (el'scope'end'wip pwip)
+                !regAttrs <- iopdSnapshot (el'scope'attrs'wip pwip)
+                let !reg =
+                      EL'RegionSec $
+                        EL'Region
+                          (SrcRange (el'scope'begin'wip pwip) regEnd)
+                          regAttrs
+                modifyTVar' (el'scope'secs'wip pwip) (reg :)
 
                 -- record as artifact of current scope
                 unless (el'ctx'pure eac) $ do
@@ -802,7 +809,8 @@ el'AnalyzeExpr
             (AttrExpr (IndirectRef !tgtExpr !addr))
             _expr'span -> el'RunTx eas $
               el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
-                -- TODO add to lh obj attrs for (=) ? other cases ?
+                -- TODO add to lh obj attrs for (=) ?
+                --      other cases ?
                 el'ResolveAttrAddr eac addr >> returnAsExpr
           ExprSrc _ !bad'assign'tgt'span -> do
             el'LogDiag
@@ -812,10 +820,46 @@ el'AnalyzeExpr
               "bad-assign-target"
               "bad assignment target"
             returnAsExpr
+    --
 
-      -- other operations without special treatment
-      _ -> el'RunTx eas $
-        el'AnalyzeExpr Nothing lhExpr $ \_lhVal _eas -> returnAsExpr
+    -- branch
+    "->" -> undefined -- TODO define branch
+
+    -- method/generator arrow procedure
+    "=>" -> undefined -- TODO define
+
+    --  producer arrow procedure
+    "=>*" -> undefined -- TODO define
+    --
+
+    -- annotation
+    "::" -> case lhExpr of
+      ExprSrc (AttrExpr (DirectRef !addr)) _ ->
+        el'ResolveAttrAddr eac addr >>= \case
+          Nothing -> returnAsExpr
+          Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+          Just !attrKey -> do
+            let !attrAnno = EL'AttrAnno rhExpr docCmt
+            iopdInsert attrKey attrAnno (el'scope'annos'wip pwip)
+      ExprSrc _ !bad'anno'span -> do
+        el'LogDiag
+          diags
+          el'Error
+          bad'anno'span
+          "bad-anno"
+          "bad annotation"
+        returnAsExpr
+    --
+
+    -- left-dropping annotation
+    "!" -> el'RunTx eas $ el'AnalyzeExpr docCmt rhExpr exit
+    --
+
+    -- TODO special treatment of ($) (|) (&) etc. ?
+
+    -- other operations without special treatment
+    _ -> el'RunTx eas $
+      el'AnalyzeExpr Nothing lhExpr $ \_lhVal _eas -> returnAsExpr
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
@@ -1151,6 +1195,7 @@ el'AnalyzeExpr
                 clsAttrs
                 clsEffs
                 clsAnnos
+                beginPos
                 scopeEnd
                 clsSecs
                 clsSyms
@@ -1399,6 +1444,7 @@ el'AnalyzeExpr
                 nsAttrs
                 nsEffs
                 nsAnnos
+                beginPos
                 scopeEnd
                 nsSecs
                 nsSyms
