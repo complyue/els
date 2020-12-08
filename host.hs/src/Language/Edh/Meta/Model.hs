@@ -275,7 +275,15 @@ instance Show EL'AttrRef where
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
 
 instance Show EL'ArgsPack where
-  show (EL'ArgsPack !args !kwargs) = "(TODO'el'apk, x= y)" -- XXX
+  show (EL'ArgsPack !args !kwargs) =
+    if null args && odNull kwargs
+      then "()"
+      else "( " <> pos args <> kw (odToList kwargs) <> ")"
+    where
+      pos [] = ""
+      pos (a : rest) = show a <> ", " <> pos rest
+      kw [] = ""
+      kw ((k, a) : rest) = show k <> "= " <> show a <> ", " <> kw rest
 
 data EL'Value
   = -- | runtime constant i.e. decidable at analysis time
