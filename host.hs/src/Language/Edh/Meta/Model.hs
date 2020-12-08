@@ -312,11 +312,12 @@ data EL'Value
 instance Show EL'Value where
   show (EL'Const !x) = show x
   show (EL'External !ms !adef) =
-    let (SrcDoc !file) = el'modu'doc ms
-     in "<ref: " <> show (el'attr'def'key adef) <> " @ " <> T.unpack file <> ">"
+    let !k = el'attr'def'key adef
+        (SrcDoc !file) = el'modu'doc ms
+     in "<ref: " <> show k <> " from " <> T.unpack file <> ">"
   show (EL'Apk !apk) = show apk
-  show (EL'List _lv) = "<list>"
-  show (EL'Dict _dv) = "<dict>"
+  show (EL'List _lv) = "<list>" -- TODO avoid TVar then showable here?
+  show (EL'Dict _dv) = "<dict>" -- TODO avoid TVar then showable here?
   show (EL'ObjVal !obj) = show obj
   show (EL'ClsVal !cls) = show cls
   show (EL'ModuVal !modu) = show modu
