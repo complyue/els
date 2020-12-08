@@ -287,7 +287,7 @@ data EL'Value
   | -- | list at analysis time
     EL'List !(TVar [EL'Value])
   | -- | dict at analyze time
-    EL'Dict !(IOPD AttrKey EL'Value)
+    EL'Dict !(TVar [(EL'Value, EL'Value)])
   | -- | an object
     EL'ObjVal !EL'Object
   | -- | a class

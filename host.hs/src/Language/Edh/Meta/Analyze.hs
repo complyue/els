@@ -638,6 +638,16 @@ el'AnalyzeStmt _stmt !exit !eas =
 
 --
 
+el'LiteralValue :: Literal -> STM EL'Value
+el'LiteralValue = \case
+  DecLiteral !v -> return $ EL'Const (EdhDecimal v)
+  StringLiteral !v -> return $ EL'Const (EdhString v)
+  BoolLiteral !v -> return $ EL'Const (EdhBool v)
+  NilLiteral -> return $ EL'Const nil
+  TypeLiteral !v -> return $ EL'Const (EdhType v)
+  SinkCtor -> EL'Const . EdhSink <$> newEventSink
+  ValueLiteral !v -> return $ EL'Const v
+
 -- | analyze an expression in context
 el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
 --
@@ -882,16 +892,91 @@ el'AnalyzeExpr
       easPure = eas {el'context = eac {el'ctx'pure = True}}
 --
 
+-- apk ctor
+el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
+  el'RunTx easPure $ collectArgs [] [] argSndrs
+  where
+    !eac = el'context eas
+    !easPure = eas {el'context = eac {el'ctx'pure = True}}
+
+    collectArgs :: [EL'Value] -> [(AttrKey, EL'Value)] -> [ArgSender] -> EL'Tx
+    collectArgs !args !kwargs [] = \_eas ->
+      el'Exit eas exit $
+        EL'Apk $
+          EL'ArgsPack (reverse args) $ odFromList $ reverse kwargs
+    collectArgs !args !kwargs (asndr : rest) = case asndr of
+      UnpackPosArgs !ax -> el'AnalyzeExpr Nothing ax $ \_argVal ->
+        -- TODO try analyze the unpacking
+        collectArgs args kwargs rest
+      UnpackKwArgs !ax -> el'AnalyzeExpr Nothing ax $ \_argVal ->
+        -- TODO try analyze the unpacking
+        collectArgs args kwargs rest
+      UnpackPkArgs !ax -> el'AnalyzeExpr Nothing ax $ \_argVal ->
+        -- TODO try analyze the unpacking
+        collectArgs args kwargs rest
+      SendPosArg !ax -> el'AnalyzeExpr Nothing ax $ \ !argVal ->
+        collectArgs (argVal : args) kwargs rest
+      SendKwArg !argAddr !ax -> \_eas ->
+        el'ResolveAttrAddr eac argAddr >>= \case
+          Nothing -> el'RunTx easPure $ collectArgs args kwargs rest
+          Just !argKey -> el'RunTx easPure $
+            el'AnalyzeExpr Nothing ax $ \ !argVal ->
+              collectArgs args ((argKey, argVal) : kwargs) rest
+--
+
+-- list ctor
+el'AnalyzeExpr _docCmt (ExprSrc (ListExpr !xs) _) !exit !eas =
+  el'RunTx easPure $ collectValues [] xs
+  where
+    !eac = el'context eas
+    !easPure = eas {el'context = eac {el'ctx'pure = True}}
+
+    collectValues :: [EL'Value] -> [ExprSrc] -> EL'Tx
+    collectValues !vs [] = \_eas ->
+      el'Exit eas exit . EL'List =<< (newTVar $! reverse vs)
+    collectValues !vs (x : rest) = el'AnalyzeExpr Nothing x $ \ !v ->
+      collectValues (v : vs) rest
+--
+
+-- dict ctor
+el'AnalyzeExpr _docCmt (ExprSrc (DictExpr !es) _) !exit !eas =
+  el'RunTx easPure $ collectEntries [] es
+  where
+    !eac = el'context eas
+    !easPure = eas {el'context = eac {el'ctx'pure = True}}
+
+    collectEntries ::
+      [(EL'Value, EL'Value)] ->
+      [(DictKeyExpr, ExprSrc)] ->
+      EL'Tx
+    collectEntries !evs [] = \_eas ->
+      el'Exit eas exit . EL'Dict =<< (newTVar $! reverse evs)
+    collectEntries !evs ((!dkx, !vx) : rest) =
+      el'AnalyzeExpr Nothing vx $ \ !v -> case dkx of
+        LitDictKey !lit -> \_eas ->
+          el'LiteralValue lit >>= \ !k ->
+            el'RunTx easPure $ collectEntries ((k, v) : evs) rest
+        AddrDictKey !kaddr -> el'AnalyzeExpr
+          Nothing
+          (ExprSrc (AttrExpr kaddr) noSrcRange)
+          $ \ !k ->
+            collectEntries ((k, v) : evs) rest
+        ExprDictKey !kx -> el'AnalyzeExpr Nothing kx $ \ !k ->
+          collectEntries ((k, v) : evs) rest
+--
+
+-- parenthesis
+el'AnalyzeExpr !docCmt (ExprSrc (ParenExpr !x) _) !exit !eas =
+  el'RunTx easPure $
+    el'AnalyzeExpr docCmt x $ \ !val _eas -> el'Exit eas exit val
+  where
+    !eac = el'context eas
+    !easPure = eas {el'context = eac {el'ctx'pure = True}}
+--
+
 -- literal value
 el'AnalyzeExpr _docCmt (ExprSrc (LitExpr !lit) _expr'span) !exit !eas =
-  el'Exit eas exit =<< case lit of
-    DecLiteral !v -> return $ EL'Const (EdhDecimal v)
-    StringLiteral !v -> return $ EL'Const (EdhString v)
-    BoolLiteral !v -> return $ EL'Const (EdhBool v)
-    NilLiteral -> return $ EL'Const nil
-    TypeLiteral !v -> return $ EL'Const (EdhType v)
-    SinkCtor -> EL'Const . EdhSink <$> newEventSink
-    ValueLiteral !v -> return $ EL'Const v
+  el'Exit eas exit =<< el'LiteralValue lit
 --
 
 -- call making
@@ -1637,11 +1722,6 @@ el'AnalyzeExpr
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
       diags = el'ctx'diags eac
---
-
--- apk ctor
-el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
-  undefined
 --
 
 -- TODO recognize more exprs
