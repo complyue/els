@@ -753,7 +753,7 @@ el'AnalyzeExpr
   !exit
   !eas = case opSym of
     -- assignment
-    _ | "=" `T.isSuffixOf` opSym -> el'RunTx eas $
+    _ | "=" `T.isSuffixOf` opSym -> el'RunTx easPure $
       el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> do
         case lhExpr of
           ExprSrc (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span))) _ ->
@@ -779,22 +779,34 @@ el'AnalyzeExpr
                 -- record as artifact of current scope
                 unless (el'ctx'pure eac) $
                   if el'ctx'eff'defining eac
-                    then iopdInsert attrKey attrDef $el'scope'effs'wip pwip
+                    then do
+                      let !effs = el'scope'effs'wip pwip
+                      case rhVal of
+                        EL'Const EdhNil -> iopdDelete attrKey effs
+                        _ -> iopdInsert attrKey attrDef effs
                     else do
                       let !attrs = el'scope'attrs'wip pwip
-                      iopdInsert attrKey attrDef attrs
-                      -- record as definition symbol of current scope
-                      modifyTVar'
-                        (el'scope'symbols'wip pwip)
-                        (EL'DefSym attrDef :)
-                      case prevDef of
-                        -- assignment created a new attr, record a region after
-                        -- this assignment expr for current scope
-                        Nothing ->
+                      case rhVal of
+                        EL'Const EdhNil -> do
+                          iopdDelete attrKey attrs
                           iopdSnapshot attrs
                             >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
                               . EL'Region (src'end expr'span)
-                        _ -> pure ()
+                        _ -> do
+                          iopdInsert attrKey attrDef attrs
+                          -- record as definition symbol of current scope
+                          modifyTVar'
+                            (el'scope'symbols'wip pwip)
+                            (EL'DefSym attrDef :)
+                          case prevDef of
+                            -- assignment created a new attr, record a region
+                            -- after this assignment expr for current scope
+                            Nothing ->
+                              iopdSnapshot attrs
+                                >>= modifyTVar' (el'scope'regions'wip pwip)
+                                  . (:)
+                                  . EL'Region (src'end expr'span)
+                            _ -> pure ()
                 when (el'ctx'exporting eac) $
                   iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
                 --
@@ -804,7 +816,7 @@ el'AnalyzeExpr
                   else returnAsExpr
           ExprSrc
             (AttrExpr (IndirectRef !tgtExpr !addr))
-            _expr'span -> el'RunTx eas $
+            _expr'span -> el'RunTx easPure $
               el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
                 -- TODO add to lh obj attrs for (=) ?
                 --      other cases ?
@@ -855,14 +867,31 @@ el'AnalyzeExpr
     -- TODO special treatment of ($) (|) (&) etc. ?
 
     -- other operations without special treatment
-    _ -> el'RunTx eas $
+    _ -> el'RunTx easPure $
       el'AnalyzeExpr Nothing lhExpr $ \_lhVal _eas -> returnAsExpr
+      --
+
+      --
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
       !swip = el'ctx'scope eac
       !pwip = el'ProcWIP swip
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+
+      easPure = eas {el'context = eac {el'ctx'pure = True}}
+--
+
+-- literal value
+el'AnalyzeExpr _docCmt (ExprSrc (LitExpr !lit) _expr'span) !exit !eas =
+  el'Exit eas exit =<< case lit of
+    DecLiteral !v -> return $ EL'Const (EdhDecimal v)
+    StringLiteral !v -> return $ EL'Const (EdhString v)
+    BoolLiteral !v -> return $ EL'Const (EdhBool v)
+    NilLiteral -> return $ EL'Const nil
+    TypeLiteral !v -> return $ EL'Const (EdhType v)
+    SinkCtor -> EL'Const . EdhSink <$> newEventSink
+    ValueLiteral !v -> return $ EL'Const v
 --
 
 -- call making
@@ -874,8 +903,10 @@ el'AnalyzeExpr
     case calleeExpr of
       ExprSrc (AttrExpr (DirectRef (AttrAddrSrc (NamedAttr "Symbol") _))) _ ->
         case argsSndr of
-          [SendPosArg (ExprSrc (LitExpr (StringLiteral !symRepr)) _)] ->
-            mkSymbol symRepr >>= el'Exit eas exit . EL'Const . EdhSymbol
+          [SendPosArg (ExprSrc (LitExpr (StringLiteral !symRepr)) _)] -> do
+            !sym <- mkSymbol symRepr
+            -- todo special treatment here ?
+            el'Exit eas exit $ EL'Const $ EdhSymbol sym
           _ -> do
             el'LogDiag
               diags
@@ -883,15 +914,33 @@ el'AnalyzeExpr
               (exprSrcSpan calleeExpr)
               "invalid-symbol"
               "invalid argument to create a Symbol"
-            el'Exit eas exit $ EL'Const nil
-      _ ->
-        -- TODO analyze other calls
-        returnAsExpr
+            -- but state that this is a symbol anyway
+            !sym <- mkSymbol "<bad-symbol>"
+            el'Exit eas exit $ EL'Const $ EdhSymbol sym
+      -- other calls, just recognize symbols
+      _ -> el'RunTx easPure $
+        el'AnalyzeExpr Nothing calleeExpr $ \_calleeVal -> goOverArgs argsSndr
     where
       {- HLINT ignore "Reduce duplication" -}
       !eac = el'context eas
       diags = el'ctx'diags eac
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+
+      easPure = eas {el'context = eac {el'ctx'pure = True}}
+
+      goOverArgs :: [ArgSender] -> EL'Tx
+      goOverArgs [] = const returnAsExpr
+      goOverArgs (s : rest) = case s of
+        UnpackPosArgs !ax ->
+          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
+        UnpackKwArgs !ax ->
+          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
+        UnpackPkArgs !ax ->
+          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
+        SendPosArg !ax ->
+          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
+        SendKwArg _kw !ax ->
+          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
 --
 
 -- exporting
