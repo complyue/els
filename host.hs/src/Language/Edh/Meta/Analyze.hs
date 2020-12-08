@@ -1039,10 +1039,23 @@ el'AnalyzeExpr
     "->" -> undefined -- TODO define branch
 
     -- method/generator arrow procedure
-    "=>" -> undefined -- TODO define
-
+    "=>" ->
+      el'RunTx eas $
+        el'DefineArrowProc
+          methodArrowArgsReceiver
+          (AttrByName "<arrow>")
+          lhExpr
+          rhExpr
+          exit
     --  producer arrow procedure
-    "=>*" -> undefined -- TODO define
+    "=>*" ->
+      el'RunTx eas $
+        el'DefineArrowProc
+          producerArrowArgsReceiver
+          (AttrByName "<producer>")
+          lhExpr
+          rhExpr
+          exit
     --
 
     -- annotation
@@ -2062,5 +2075,143 @@ el'DefineMethod
                           args
                         )
                         rest
+
+--
+
+-- | define an arrow procedure
+el'DefineArrowProc ::
+  (Expr -> (Either Text ArgsReceiver -> STM ()) -> STM ()) ->
+  AttrKey ->
+  ExprSrc ->
+  ExprSrc ->
+  EL'Analysis EL'Value
+el'DefineArrowProc
+  !argsRcvrCnvrt
+  !mthName
+  lhExpr@(ExprSrc !argPkr !args'span)
+  rhExpr@(ExprSrc _ !body'span)
+  !exit
+  !eas =
+    argsRcvrCnvrt argPkr $ \case
+      Left !argErr -> do
+        el'LogDiag diags el'Error args'span "bad-arrow-args" argErr
+        goDef (PackReceiver [])
+      Right !argsRcvr -> goDef argsRcvr
+    where
+      !eac = el'context eas
+      !outerScope = el'ctx'scope eac
+      !outerProc = el'ProcWIP outerScope
+      diags = el'ctx'diags eac
+
+      -- define artifacts from arguments for an arrow procedure
+      defArgArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
+      defArgArts !ars = go [] ars
+        where
+          go ::
+            [(AttrKey, EL'AttrDef)] ->
+            [ArgReceiver] ->
+            STM [(AttrKey, EL'AttrDef)]
+          go !args [] = return $ reverse args
+          go !args (ar : rest) = case ar of
+            RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
+              Nothing -> defArgArt argAddr maybeDef
+              Just (DirectRef !argAddr') -> defArgArt argAddr' Nothing
+              Just _otherRename -> go args rest -- TODO elaborate?
+            RecvRestPkArgs !argAddr -> defArgArt argAddr Nothing
+            RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
+            RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
+            where
+              defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
+                el'ResolveAttrAddr eac argAddr >>= \case
+                  Nothing -> go args rest
+                  Just !argKey ->
+                    newTVar Nothing >>= \ !anno ->
+                      go
+                        ( ( argKey,
+                            EL'AttrDef
+                              argKey
+                              Nothing
+                              "<arrow-argument>"
+                              arg'name'span
+                              lhExpr
+                              ( EL'Expr $
+                                  fromMaybe
+                                    ( ExprSrc
+                                        (AttrExpr (DirectRef argAddr))
+                                        arg'name'span
+                                    )
+                                    knownExpr
+                              )
+                              anno
+                              Nothing
+                          ) :
+                          args
+                        )
+                        rest
+
+      goDef :: ArgsReceiver -> STM ()
+      goDef !argsRcvr = do
+        !mthAttrs <- iopdEmpty
+        !mthEffs <- iopdEmpty
+        !mthAnnos <- iopdEmpty
+        !mthScopes <- newTVar []
+        !mthRegions <- newTVar []
+        !mthSyms <- newTVar []
+        let !pwip =
+              outerProc -- inherit exts/exps from outer scope
+                { el'scope'attrs'wip = mthAttrs,
+                  el'scope'effs'wip = mthEffs,
+                  el'scope'annos'wip = mthAnnos,
+                  el'scope'inner'scopes'wip = mthScopes,
+                  el'scope'regions'wip = mthRegions,
+                  el'scope'symbols'wip = mthSyms
+                }
+            !eacMth =
+              eac
+                { el'ctx'scope = EL'ProcWIP pwip,
+                  el'ctx'outers = outerScope : el'ctx'outers eac
+                }
+            !easMth = eas {el'context = eacMth}
+
+        !argArts <- case argsRcvr of
+          WildReceiver -> return []
+          PackReceiver !ars -> defArgArts ars
+          SingleReceiver !ar -> defArgArts [ar]
+        iopdUpdate argArts mthAttrs
+
+        el'RunTx easMth $
+          el'AnalyzeExpr Nothing rhExpr $ \_ _eas -> do
+            -- update annotations for arguments from body
+            forM_ argArts $ \(!argName, !argDef) ->
+              iopdLookup argName mthAnnos >>= \case
+                Nothing -> pure ()
+                Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
+            --
+            !scope'attrs <- iopdSnapshot mthAttrs
+            !scope'effs <- iopdSnapshot mthEffs
+            !innerScopes <- readTVar mthScopes
+            !regions <- readTVar mthRegions
+            !scope'symbols <- readTVar mthSyms
+            let !mth'scope =
+                  EL'Scope
+                    { el'scope'span = body'span,
+                      el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                      el'scope'regions = V.fromList $! reverse regions,
+                      el'scope'attrs = scope'attrs,
+                      el'scope'effs = scope'effs,
+                      el'scope'symbols = V.fromList $! reverse scope'symbols
+                    }
+                -- TODO for sake of parameter hints in IDE
+                -- - elide 1st `callerScope` for interpreter and 3-arg operator
+                -- - supplement `outlet` for producer if omitted
+                !mth = EL'Proc mthName argsRcvr mth'scope
+                !mthVal = EL'ProcVal mth
+            --
+
+            -- record as an inner scope of outer scope
+            modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
+
+            -- return the procedure object value
+            el'Exit eas exit mthVal
 
 --
