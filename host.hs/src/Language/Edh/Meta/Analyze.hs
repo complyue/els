@@ -948,7 +948,7 @@ el'AnalyzeExpr
 el'AnalyzeExpr
   !docCmt
   xsrc@( ExprSrc
-           (InfixExpr !opSym !lhExpr !rhExpr)
+           (InfixExpr !opSym lhExpr@(ExprSrc !lhx lh'span) !rhExpr)
            !expr'span
          )
   !exit
@@ -1036,13 +1036,34 @@ el'AnalyzeExpr
     --
 
     -- branch
-    "->" -> undefined -- TODO define branch
+    -- todo flow analysis here?
+    "->" ->
+      let goAnalyzeRHS :: EL'Tx
+          goAnalyzeRHS =
+            el'AnalyzeExpr Nothing rhExpr $
+              const $ el'ExitTx exit $ EL'Const nil
+          handlePattern :: Expr -> EL'Tx
+          handlePattern = \case
+            -- curly braces at lhs means a pattern
+            DictExpr {} -> goAnalyzeRHS
+            BlockExpr {} -> goAnalyzeRHS
+            -- not a pattern, value match
+            _ -> el'AnalyzeExpr Nothing lhExpr $ const goAnalyzeRHS
+       in el'RunTx eas $ case lhx of
+            -- wild match
+            AttrExpr (DirectRef (AttrAddrSrc (NamedAttr "_") _)) ->
+              goAnalyzeRHS
+            -- guarded, pattern or value match
+            InfixExpr "|" (ExprSrc !matchExpr _) !guardExpr ->
+              el'AnalyzeExpr Nothing guardExpr $ \_ -> handlePattern matchExpr
+            _ -> handlePattern lhx
+    --
 
     -- method/generator arrow procedure
     "=>" ->
       el'RunTx eas $
         el'DefineArrowProc
-          methodArrowArgsReceiver
+          (methodArrowArgsReceiver . deParen'1)
           (AttrByName "<arrow>")
           lhExpr
           rhExpr
@@ -1051,7 +1072,7 @@ el'AnalyzeExpr
     "=>*" ->
       el'RunTx eas $
         el'DefineArrowProc
-          producerArrowArgsReceiver
+          (producerArrowArgsReceiver . deParen'1)
           (AttrByName "<producer>")
           lhExpr
           rhExpr
