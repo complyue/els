@@ -21,54 +21,6 @@ import System.Directory
 import System.FilePath
 import Prelude
 
-el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhTxExit () -> EdhTx
-el'InvalidateModule !srcChanged !ms !exit !ets = do
-  when srcChanged $
-    let !pars = el'modu'parsing ms
-     in tryTakeTMVar pars >>= \case
-          Nothing -> return ()
-          Just parsing@EL'ModuParsing {} -> putTMVar pars parsing
-          Just EL'ModuParsed {} -> return ()
-  let !reso = el'modu'resolution ms
-   in tryTakeTMVar reso >>= \case
-        Nothing -> return ()
-        Just resolving@EL'ModuResolving {} -> putTMVar reso resolving
-        Just (EL'ModuResolved !resolved) ->
-          let invalidateDependants ::
-                [(EL'ModuSlot, Bool)] ->
-                [(EL'ModuSlot, Bool)] ->
-                STM ()
-              invalidateDependants !upds [] = do
-                unless (null upds) $
-                  modifyTVar' (el'resolved'dependants resolved) $
-                    -- todo maybe should delete instead of update here?
-                    -- in case some module file is deleted, this'll leak?
-                    Map.union (Map.fromList upds)
-                exitEdh ets exit ()
-              invalidateDependants !upds ((!dependant, !hold) : rest) =
-                tryTakeTMVar (el'modu'resolution dependant) >>= \case
-                  Nothing -> invalidateDependants upds rest
-                  Just resolving@EL'ModuResolving {} -> do
-                    putTMVar (el'modu'resolution dependant) resolving
-                    invalidateDependants upds rest
-                  Just (EL'ModuResolved !resolved') ->
-                    Map.lookup ms {- HLINT ignore "Redundant <$>" -}
-                      <$> readTVar (el'resolved'dependencies resolved')
-                      >>= \case
-                        Just True ->
-                          runEdhTx ets $
-                            el'InvalidateModule False dependant $ \_ _ets ->
-                              invalidateDependants upds rest
-                        _ ->
-                          if hold
-                            then
-                              invalidateDependants
-                                ((dependant, False) : upds)
-                                rest
-                            else invalidateDependants upds rest
-           in readTVar (el'resolved'dependants resolved)
-                >>= invalidateDependants [] . Map.toList
-
 el'LocateModule :: EL'World -> Text -> EdhProc EL'ModuSlot
 el'LocateModule !elw !moduFile !exit !ets =
   if not $ ".edh" `T.isSuffixOf` moduFile
@@ -255,7 +207,10 @@ el'LocateModule !elw !moduFile !exit !ets =
                           )
          in go $ splitFileName absFile
 
-el'LocateImportee :: EL'ModuSlot -> Text -> EL'Analysis (Either Text EL'ModuSlot)
+el'LocateImportee ::
+  EL'ModuSlot ->
+  Text ->
+  EL'Analysis (Either Text EL'ModuSlot)
 el'LocateImportee !msFrom !impSpec !exit !eas =
   if "." `T.isPrefixOf` impSpec
     then
@@ -328,6 +283,54 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
            in if equalFilePath parentPkgPath absPkgPath
                 then return $ Left $ "no such module: " <> T.pack (show nomSpec)
                 else findAbsImport parentPkgPath
+
+el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhTxExit () -> EdhTx
+el'InvalidateModule !srcChanged !ms !exit !ets = do
+  when srcChanged $
+    let !pars = el'modu'parsing ms
+     in tryTakeTMVar pars >>= \case
+          Nothing -> return ()
+          Just parsing@EL'ModuParsing {} -> putTMVar pars parsing
+          Just EL'ModuParsed {} -> return ()
+  let !reso = el'modu'resolution ms
+   in tryTakeTMVar reso >>= \case
+        Nothing -> return ()
+        Just resolving@EL'ModuResolving {} -> putTMVar reso resolving
+        Just (EL'ModuResolved !resolved) ->
+          let invalidateDependants ::
+                [(EL'ModuSlot, Bool)] ->
+                [(EL'ModuSlot, Bool)] ->
+                STM ()
+              invalidateDependants !upds [] = do
+                unless (null upds) $
+                  modifyTVar' (el'resolved'dependants resolved) $
+                    -- todo maybe should delete instead of update here?
+                    -- in case some module file is deleted, this'll leak?
+                    Map.union (Map.fromList upds)
+                exitEdh ets exit ()
+              invalidateDependants !upds ((!dependant, !hold) : rest) =
+                tryTakeTMVar (el'modu'resolution dependant) >>= \case
+                  Nothing -> invalidateDependants upds rest
+                  Just resolving@EL'ModuResolving {} -> do
+                    putTMVar (el'modu'resolution dependant) resolving
+                    invalidateDependants upds rest
+                  Just (EL'ModuResolved !resolved') ->
+                    Map.lookup ms {- HLINT ignore "Redundant <$>" -}
+                      <$> readTVar (el'resolved'dependencies resolved')
+                      >>= \case
+                        Just True ->
+                          runEdhTx ets $
+                            el'InvalidateModule False dependant $ \_ _ets ->
+                              invalidateDependants upds rest
+                        _ ->
+                          if hold
+                            then
+                              invalidateDependants
+                                ((dependant, False) : upds)
+                                rest
+                            else invalidateDependants upds rest
+           in readTVar (el'resolved'dependants resolved)
+                >>= invalidateDependants [] . Map.toList
 
 asModuleParsed :: EL'ModuSlot -> (EL'ParsedModule -> EL'Tx) -> EL'Tx
 asModuleParsed !ms !act' !eas =
