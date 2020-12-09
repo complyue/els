@@ -1622,6 +1622,7 @@ el'AnalyzeExpr
                   RecvRestKwArgs !dfAddr -> defDataField dfAddr
                   RecvRestPosArgs !dfAddr -> defDataField dfAddr
                   where
+                    defDataField (AttrAddrSrc (NamedAttr "_") _) = go dfs rest
                     defDataField dfAddr@(AttrAddrSrc _ df'name'span) =
                       el'ResolveAttrAddr eac dfAddr >>= \case
                         Nothing -> go dfs rest
@@ -2027,11 +2028,174 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
     !outerProc = el'ProcWIP outerScope
 --
 
--- TODO recognize more exprs
+-- void operator
+el'AnalyzeExpr _docCmt (ExprSrc (VoidExpr !expr) _expr'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+--
+
+-- ai operator
+el'AnalyzeExpr _docCmt (ExprSrc (AtoIsoExpr !expr) _expr'span) !exit !eas =
+  el'RunTx eas $ el'AnalyzeExpr Nothing expr exit
+--
+
+-- prefix operator
+el'AnalyzeExpr _docCmt x@(ExprSrc (PrefixExpr _ !expr) _expr'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+--
+
+-- if
+el'AnalyzeExpr
+  _docCmt
+  x@(ExprSrc (IfExpr !cond !cseq !maybeAlt) _expr'span)
+  !exit
+  !eas =
+    el'RunTx eas $
+      el'AnalyzeExpr Nothing cond $
+        const $
+          el'AnalyzeStmt cseq $
+            const $ case maybeAlt of
+              Nothing -> el'ExitTx exit $ EL'Expr x
+              Just !alt ->
+                el'AnalyzeStmt alt $ const $ el'ExitTx exit $ EL'Expr x
+--
+
+-- case-of
+el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) _expr'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing tgt $
+      const $ el'AnalyzeExpr Nothing bs $ const $ el'ExitTx exit $ EL'Expr x
+--
+
+-- for-from-do
+el'AnalyzeExpr
+  _docCmt
+  x@(ExprSrc (ForExpr !asr !it body@(StmtSrc _ !body'span)) _expr'span)
+  !exit
+  !eas = do
+    !loopArts <- case asr of
+      WildReceiver -> return []
+      PackReceiver !ars -> defLoopArts ars
+      SingleReceiver !ar -> defLoopArts [ar]
+    unless (null loopArts) $ do
+      iopdUpdate loopArts attrs
+      -- record a region before the loop body for current scope
+      iopdSnapshot attrs
+        >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
+          . EL'Region (src'start body'span)
+
+    el'RunTx eas $
+      el'AnalyzeExpr Nothing it $
+        const $ el'AnalyzeStmt body $ const $ el'ExitTx exit $ EL'Expr x
+    where
+      !eac = el'context eas
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      !attrs = el'scope'attrs'wip pwip
+      !annos = el'scope'annos'wip pwip
+
+      -- define artifacts from loop receivers
+      defLoopArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
+      defLoopArts !ars = go [] ars
+        where
+          go ::
+            [(AttrKey, EL'AttrDef)] ->
+            [ArgReceiver] ->
+            STM [(AttrKey, EL'AttrDef)]
+          go !args [] = return $ reverse args
+          go !args (ar : rest) = case ar of
+            RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
+              Nothing -> defLoopArt argAddr maybeDef
+              Just (DirectRef !argAddr') -> defLoopArt argAddr' Nothing
+              Just _otherRename -> go args rest -- TODO elaborate?
+            RecvRestPkArgs !argAddr -> defLoopArt argAddr Nothing
+            RecvRestKwArgs !argAddr -> defLoopArt argAddr Nothing
+            RecvRestPosArgs !argAddr -> defLoopArt argAddr Nothing
+            where
+              defLoopArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
+              defLoopArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
+                el'ResolveAttrAddr eac argAddr >>= \case
+                  Nothing -> go args rest
+                  Just !argKey ->
+                    iopdLookup argKey annos >>= newTVar >>= \ !anno ->
+                      go
+                        ( ( argKey,
+                            EL'AttrDef
+                              argKey
+                              Nothing
+                              "<loop-receiver>"
+                              arg'name'span
+                              x
+                              ( EL'Expr $
+                                  fromMaybe
+                                    ( ExprSrc
+                                        (AttrExpr (DirectRef argAddr))
+                                        arg'name'span
+                                    )
+                                    knownExpr
+                              )
+                              anno
+                              Nothing
+                          ) :
+                          args
+                        )
+                        rest
+--
+
+-- yield
+el'AnalyzeExpr _docCmt x@(ExprSrc (YieldExpr !expr) _expr'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+--
+
+-- indexing
+el'AnalyzeExpr _docCmt x@(ExprSrc (IndexExpr !idx !tgt) _expr'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing tgt $
+      const $ el'AnalyzeExpr Nothing idx $ const $ el'ExitTx exit $ EL'Expr x
+--
+
+-- default
+el'AnalyzeExpr _docCmt x@(ExprSrc (DefaultExpr !expr) _expr'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+--
+
+-- interpolated expr
+-- todo should this reachable ? as the original expr in ExprWithSrc won't be
+-- analyzed.
+el'AnalyzeExpr _docCmt (ExprSrc (IntplExpr !expr) _expr'span) !exit !eas =
+  el'RunTx eas $ el'AnalyzeExpr Nothing expr exit
+--
+
+-- expr with source (including interpolations)
+el'AnalyzeExpr
+  _docCmt
+  (ExprSrc (ExprWithSrc !expr !segs) _expr'span)
+  !exit
+  !eas = go segs
+    where
+      go [] = el'Exit eas exit $ EL'Expr expr
+      go (SrcSeg {} : rest) = go rest
+      go (IntplSeg !ix : rest) = el'RunTx eas $
+        el'AnalyzeExpr Nothing ix $ \_ _eas -> go rest
+--
+
+-- perform
+-- todo analyze dynamic scoped effects
+el'AnalyzeExpr _docCmt x@(ExprSrc (PerformExpr _addr) _expr'span) !exit !eas =
+  el'Exit eas exit $ EL'Expr x
+--
+
+-- behave
+-- todo analyze dynamic scoped effects
+el'AnalyzeExpr _docCmt x@(ExprSrc (BehaveExpr _addr) _expr'span) !exit !eas =
+  el'Exit eas exit $ EL'Expr x
+--
 
 -- the rest of expressions not analyzed
-el'AnalyzeExpr _docCmt !xsrc !exit !eas =
-  el'Exit eas exit $ EL'Expr xsrc
+el'AnalyzeExpr _docCmt !xsrc !exit !eas = el'Exit eas exit $ EL'Expr xsrc
 
 -- | define a method procedure
 el'DefineMethod ::
@@ -2171,6 +2335,7 @@ el'DefineMethod
             RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
             RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
             where
+              defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
               defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
                 el'ResolveAttrAddr eac argAddr >>= \case
                   Nothing -> go args rest
@@ -2244,6 +2409,7 @@ el'DefineArrowProc
             RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
             RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
             where
+              defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
               defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
                 el'ResolveAttrAddr eac argAddr >>= \case
                   Nothing -> go args rest
