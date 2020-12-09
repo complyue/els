@@ -642,6 +642,7 @@ el'AnalyzeStmt
 
             el'Exit eas exit $ EL'Const nil
     where
+      {- HLINT ignore "Reduce duplication" -}
       !eac = el'context eas
       diags = el'ctx'diags eac
       !swip = el'ctx'scope eac
@@ -1234,48 +1235,9 @@ el'AnalyzeExpr
   _docCmt
   xsrc@(ExprSrc (CallExpr !calleeExpr !argsSndr) _expr'span)
   !exit
-  !eas =
-    case calleeExpr of
-      ExprSrc (AttrExpr (DirectRef (AttrAddrSrc (NamedAttr "Symbol") _))) _ ->
-        case argsSndr of
-          [SendPosArg (ExprSrc (LitExpr (StringLiteral !symRepr)) _)] -> do
-            !sym <- mkSymbol symRepr
-            -- todo special treatment here ?
-            el'Exit eas exit $ EL'Const $ EdhSymbol sym
-          _ -> do
-            el'LogDiag
-              diags
-              el'Error
-              (exprSrcSpan calleeExpr)
-              "invalid-symbol"
-              "invalid argument to create a Symbol"
-            -- but state that this is a symbol anyway
-            !sym <- mkSymbol "<bad-symbol>"
-            el'Exit eas exit $ EL'Const $ EdhSymbol sym
-      -- other calls, just recognize symbols
-      _ -> el'RunTx easPure $
-        el'AnalyzeExpr Nothing calleeExpr $ \_calleeVal -> goOverArgs argsSndr
-    where
-      {- HLINT ignore "Reduce duplication" -}
-      !eac = el'context eas
-      diags = el'ctx'diags eac
-      returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
-
-      easPure = eas {el'context = eac {el'ctx'pure = True}}
-
-      goOverArgs :: [ArgSender] -> EL'Tx
-      goOverArgs [] = const returnAsExpr
-      goOverArgs (s : rest) = case s of
-        UnpackPosArgs !ax ->
-          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
-        UnpackKwArgs !ax ->
-          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
-        UnpackPkArgs !ax ->
-          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
-        SendPosArg !ax ->
-          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
-        SendKwArg _kw !ax ->
-          el'AnalyzeExpr Nothing ax $ \_argVal -> goOverArgs rest
+  !eas = el'RunTx eas $
+    el'AnalyzeExpr Nothing calleeExpr $ \_calleeVal -> el'PackArgs argsSndr $
+      \_apk -> el'ExitTx exit $ EL'Expr xsrc
 --
 
 -- exporting
@@ -2192,6 +2154,49 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (PerformExpr _addr) _expr'span) !exit !eas =
 -- todo analyze dynamic scoped effects
 el'AnalyzeExpr _docCmt x@(ExprSrc (BehaveExpr _addr) _expr'span) !exit !eas =
   el'Exit eas exit $ EL'Expr x
+--
+
+-- symbol definition
+el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
+  do
+    !sym <- mkSymbol $ "@" <> attr
+    let !symVal = EL'Const $ EdhSymbol sym
+
+    -- record as artifact of current scope
+    unless (el'ctx'pure eac) $ do
+      !symAnno <- newTVar Nothing
+      let !attrs = el'scope'attrs'wip pwip
+          !symDef =
+            EL'AttrDef
+              symName
+              docCmt
+              "<sym-def>"
+              expr'span
+              xsrc
+              symVal
+              symAnno
+              Nothing
+      iopdInsert symName symDef attrs
+      -- record as definition symbol of current scope
+      modifyTVar'
+        (el'scope'symbols'wip pwip)
+        (EL'DefSym symDef :)
+      -- record a region after this definition for current scope
+      iopdSnapshot attrs
+        >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
+          . EL'Region (src'end expr'span)
+
+      when (el'ctx'exporting eac) $
+        iopdInsert symName symDef $ el'scope'exps'wip pwip
+
+    -- return the symbol value
+    el'Exit eas exit symVal
+  where
+    !eac = el'context eas
+    !swip = el'ctx'scope eac
+    !pwip = el'ProcWIP swip
+
+    !symName = AttrByName attr
 --
 
 -- the rest of expressions not analyzed
