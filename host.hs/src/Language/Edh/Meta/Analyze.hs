@@ -413,6 +413,7 @@ asModuleParsed !ms !act' !eas =
             !world = edh'prog'world $ edh'thread'prog ets
             SrcDoc !moduFile = el'modu'doc ms
 
+-- | schedule an action as the specified module is resolved
 --
 -- todo without an explicit CPS exit, the scheduled action would appear with
 -- subsequent computations as of out-of-order-execution, this may work well
@@ -560,16 +561,6 @@ asModuleResolved !ms !act' !eas =
             go [StmtSrc _ !last'stmt'span] = src'end last'stmt'span
             go (_ : rest'stmts) = go rest'stmts
 
-el'AnalyzeStmts :: [StmtSrc] -> EL'Analysis EL'Value
-el'AnalyzeStmts !stmts !exit !eas = go stmts
-  where
-    go :: [StmtSrc] -> STM ()
-    go [] = el'Exit eas exit $ EL'Const nil
-    go (stmt : rest) = el'RunTx eas $
-      el'AnalyzeStmt stmt $ \ !val _eas' -> case rest of
-        [] -> el'Exit eas exit val
-        _ -> go rest
-
 -- | pack arguments
 el'PackArgs :: ArgsPacker -> EL'Analysis EL'ArgsPack
 el'PackArgs !argSndrs !exit !eas =
@@ -600,7 +591,18 @@ el'PackArgs !argSndrs !exit !eas =
             el'AnalyzeExpr Nothing ax $ \ !argVal ->
               collectArgs args ((argKey, argVal) : kwargs) rest
 
---
+-- * statement analysis
+
+-- | a sequence of statements
+el'AnalyzeStmts :: [StmtSrc] -> EL'Analysis EL'Value
+el'AnalyzeStmts !stmts !exit !eas = go stmts
+  where
+    go :: [StmtSrc] -> STM ()
+    go [] = el'Exit eas exit $ EL'Const nil
+    go (stmt : rest) = el'RunTx eas $
+      el'AnalyzeStmt stmt $ \ !val _eas' -> case rest of
+        [] -> el'Exit eas exit val
+        _ -> go rest
 
 -- | analyze a statement in context
 el'AnalyzeStmt :: StmtSrc -> EL'Analysis EL'Value
@@ -821,14 +823,54 @@ el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
     pwip = el'ProcWIP scope
 --
 
--- TODO recognize more stmts
-
--- the rest of statements not analyzed
-el'AnalyzeStmt _stmt !exit !eas =
-  el'Exit eas exit $ EL'Const nil
-
+-- go
+el'AnalyzeStmt (StmtSrc (GoStmt !expr) _stmt'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
 --
 
+-- defer
+el'AnalyzeStmt (StmtSrc (DeferStmt !expr) _stmt'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+--
+
+-- perceive
+el'AnalyzeStmt (StmtSrc (PerceiveStmt !expr !body) _stmt'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $
+      const $
+        el'AnalyzeStmt body $
+          const $ el'ExitTx exit $ EL'Const nil
+--
+
+-- while
+el'AnalyzeStmt (StmtSrc (WhileStmt !expr !body) _stmt'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $
+      const $
+        el'AnalyzeStmt body $
+          const $ el'ExitTx exit $ EL'Const nil
+--
+
+-- throw
+el'AnalyzeStmt (StmtSrc (ThrowStmt !expr) _stmt'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+--
+
+-- return
+el'AnalyzeStmt (StmtSrc (ReturnStmt !expr) _stmt'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+--
+
+-- the rest of statements not analyzed
+el'AnalyzeStmt _stmt !exit !eas = el'Exit eas exit $ EL'Const nil
+
+-- * expression analysis
+
+-- | literal to analysis time value
 el'LiteralValue :: Literal -> STM EL'Value
 el'LiteralValue = \case
   DecLiteral !v -> return $ EL'Const (EdhDecimal v)
