@@ -1,0 +1,10 @@
+
+import * 'els/RT'
+
+export world = MetaWorld()
+
+if debug then {
+  import * 'els/debug'
+
+  go elsDebug.replHere()
+}

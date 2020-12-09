@@ -1,0 +1,6 @@
+{
+  "edh.terminal.cmdl": [
+    "stack run els",
+    "cabal run haskit:els"
+  ]
+}

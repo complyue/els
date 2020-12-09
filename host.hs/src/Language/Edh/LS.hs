@@ -10,6 +10,7 @@ import Control.Monad
 import Language.Edh.EHI
 import Language.Edh.LS.LangServer
 import Language.Edh.LS.RT
+import Language.Edh.Meta.World
 import Prelude
 
 installLanguageServerBatteries :: EdhWorld -> IO ()
@@ -24,6 +25,8 @@ installLanguageServerBatteries !world =
               (_, EdhObject !addrClass) -> do
                 let !moduScope = contextScope $ edh'context ets
 
+                !msClass <- createMetaModuleClass moduScope
+                !mwClass <- createMetaWorldClass msClass moduScope
                 !lsClass <- createLangServerClass addrClass moduScope
 
                 !moduMths <-
@@ -34,7 +37,11 @@ installLanguageServerBatteries !world =
                     ]
 
                 let !moduArts =
-                      (AttrByName "LangServer", EdhObject lsClass) : moduMths
+                      moduMths
+                        ++ [ (AttrByName "MetaModule", EdhObject msClass),
+                             (AttrByName "MetaWorld", EdhObject mwClass),
+                             (AttrByName "LangServer", EdhObject lsClass)
+                           ]
                 !artsDict <-
                   EdhDict
                     <$> createEdhDict [(attrKeyValue k, v) | (k, v) <- moduArts]

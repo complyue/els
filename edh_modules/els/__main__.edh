@@ -4,6 +4,9 @@
 
 import * 'els/RT'
 
+import * '.'
+
+
 # it's customizable with a nested `els/config.edh`,
 # in `edh_modules` resides in cwd or any upper directory
 import (** cfg ) 'els/config'
