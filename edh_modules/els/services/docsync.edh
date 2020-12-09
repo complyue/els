@@ -13,8 +13,7 @@ export method @'textDocument/didSave' ( textDocument, ***_ ) {
   case textDocument[ 'uri' ] of {
     { URI( scheme, path ) } | scheme is 'file' -> { pass }
     debug and elsDebug.replHere()
-    perform lspError( 'unsupported uri' )
-    return nil
+    return void perform lspError( 'unsupported uri' )
   }
 
   console.debug<| 'forgetting ' ++ path ++ ' as it get saved.'
@@ -23,20 +22,19 @@ export method @'textDocument/didSave' ( textDocument, ***_ ) {
 }
 
 export method @'textDocument/didChange' ( textDocument,
-  contentChanges, ***_ ) {
+  contentChanges, ***_
+) {
   case textDocument[ 'uri' ] of {
     { URI( scheme, path ) } | scheme is 'file' -> { pass }
     debug and elsDebug.replHere()
-    perform lspError( 'unsupported uri' )
-    return nil
+    return void perform lspError( 'unsupported uri' )
   }
 
   version = textDocument[ 'version' ] or 0
   case contentChanges of {
     { chg :> moreChgs } | null( moreChgs ) -> { pass }
     # only Full change is supported by far
-    perform lspError( 'too many changes' )
-    return nil
+    return void perform lspError( 'too many changes' )
   }
   fileContent = chg[ 'text' ] # should be the only field in case of Full change
 
