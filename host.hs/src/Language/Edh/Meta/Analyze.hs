@@ -284,7 +284,7 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
                 then return $ Left $ "no such module: " <> T.pack (show nomSpec)
                 else findAbsImport parentPkgPath
 
-el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhTxExit () -> EdhTx
+el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhProc ()
 el'InvalidateModule !srcChanged !ms !exit !ets = do
   when srcChanged $
     let !pars = el'modu'parsing ms
@@ -332,11 +332,11 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
            in readTVar (el'resolved'dependants resolved)
                 >>= invalidateDependants [] . Map.toList
 
-asModuleParsed :: EL'ModuSlot -> (EL'ParsedModule -> EL'Tx) -> EL'Tx
-asModuleParsed !ms !act' !eas =
+asModuleParsed :: EL'ModuSlot -> EdhProc EL'ParsedModule
+asModuleParsed !ms !exit !ets =
   tryReadTMVar parsingVar >>= \case
     Nothing -> do
-      !acts <- newTVar [\ !modu -> el'RunTx eas $ act' modu]
+      !acts <- newTVar [\ !modu -> runEdhTx ets $ exit modu]
       -- the put will retry if parsingVar has been changed by others
       -- concurrently, so no duplicate effort would incur here
       putTMVar parsingVar (EL'ModuParsing acts)
@@ -364,15 +364,15 @@ asModuleParsed !ms !act' !eas =
       -- note the action will appear executed out-of-order in this case, and
       -- further more, the action can cease execution if the initiating thread
       -- has terminated when the resolution done
-      (:) $ \ !parsed -> el'RunTx eas $ act' parsed
-    Just (EL'ModuParsed !parsed) -> el'RunTx eas $ act' parsed
+      (:) $ \ !parsed -> runEdhTx ets $ exit parsed
+    Just (EL'ModuParsed !parsed) -> runEdhTx ets $ exit parsed
   where
     !parsingVar = el'modu'parsing ms
 
     doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
     doParseModule !exit' = edhCatch
-      (el'ets eas)
-      doParse
+      ets
+      (parseModuleOnDisk ms)
       exit'
       $ \ !etsCatching !exv !recover !rethrow -> case exv of
         EdhNil -> rethrow nil
@@ -387,45 +387,48 @@ asModuleParsed !ms !act' !eas =
                   "err-parse"
                   exDesc
               ]
-      where
-        doParse :: EdhTxExit EL'ParsedModule -> EdhTx
-        doParse !exit !ets =
-          unsafeIOToSTM
-            ( streamDecodeUtf8With lenientDecode
-                <$> B.readFile
-                  ( T.unpack
-                      moduFile
-                  )
-            )
-            >>= \case
-              Some !moduSource _ _ ->
-                parseEdh world moduFile moduSource >>= \case
-                  Left !err -> do
-                    let !msg = T.pack $ errorBundlePretty err
-                        !edhWrapException = edh'exception'wrapper world
-                        !edhErr =
-                          EdhError ParseError msg (toDyn nil) $
-                            getEdhErrCtx
-                              0
-                              ets
-                    edhWrapException (toException edhErr)
-                      >>= \ !exo -> edhThrow ets (EdhObject exo)
-                  Right (!stmts, !docCmt) ->
-                    exitEdh ets exit $ EL'ParsedModule docCmt stmts []
-          where
-            !world = edh'prog'world $ edh'thread'prog ets
-            SrcDoc !moduFile = el'modu'doc ms
 
--- | schedule an action as the specified module is resolved
+parseModuleOnDisk :: EL'ModuSlot -> EdhProc EL'ParsedModule
+parseModuleOnDisk !ms !exit !ets =
+  unsafeIOToSTM
+    ( streamDecodeUtf8With lenientDecode
+        <$> B.readFile
+          ( T.unpack
+              moduFile
+          )
+    )
+    >>= \case
+      Some !moduSource _ _ ->
+        parseEdh world moduFile moduSource >>= \case
+          Left !err -> do
+            let !msg = T.pack $ errorBundlePretty err
+                !edhWrapException = edh'exception'wrapper world
+                !edhErr =
+                  EdhError ParseError msg (toDyn nil) $
+                    getEdhErrCtx
+                      0
+                      ets
+            edhWrapException (toException edhErr)
+              >>= \ !exo -> edhThrow ets (EdhObject exo)
+          Right (!stmts, !docCmt) ->
+            exitEdh ets exit $ EL'ParsedModule docCmt stmts []
+  where
+    !world = edh'prog'world $ edh'thread'prog ets
+    SrcDoc !moduFile = el'modu'doc ms
+
+-- | obtain the result as the specified module is resolved
 --
--- todo without an explicit CPS exit, the scheduled action would appear with
--- subsequent computations as of out-of-order-execution, this may work well
--- enough from the main loop of the LSP server, any possible gotchas ?
-asModuleResolved :: EL'ModuSlot -> (EL'ResolvedModule -> EL'Tx) -> EL'Tx
-asModuleResolved !ms !act' !eas =
+-- return from this procedure can be delayed, if the calling thread has no
+-- subsequent transaction to process, it'll terminate without receiving the
+-- result in such cases. it is assumed this called by a LSP serving thread,
+-- thus ever waiting for new LSP client requests, so never be the case. while
+-- it can still execute OoO (out of order) wrt processing of subsequent LSP
+-- client requests.
+asModuleResolved :: EL'World -> EL'ModuSlot -> EdhProc EL'ResolvedModule
+asModuleResolved !world !ms !exit !ets =
   tryReadTMVar resoVar >>= \case
     Nothing -> do
-      !acts <- newTVar [\ !modu -> el'RunTx eas $ act' modu]
+      !acts <- newTVar [\ !modu -> runEdhTx ets $ exit modu]
       -- the put will retry if parsingVar has been changed by others
       -- concurrently, so no duplicate effort would incur here
       putTMVar resoVar (EL'ModuResolving acts)
@@ -453,17 +456,16 @@ asModuleResolved !ms !act' !eas =
       -- note the action will appear executed out-of-order in this case, and
       -- further more, the action can cease execution if the initiating thread
       -- has terminated when the parsing done
-      (:) $ \ !resolved -> el'RunTx eas $ act' resolved
-    Just (EL'ModuResolved !resolved) -> el'RunTx eas $ act' resolved
+      (:) $ \ !resolved -> runEdhTx ets $ exit resolved
+    Just (EL'ModuResolved !resolved) -> runEdhTx ets $ exit resolved
   where
-    !eac = el'context eas
     !resoVar = el'modu'resolution ms
 
     doResolveModule :: (EL'ResolvedModule -> STM ()) -> STM ()
-    doResolveModule !exit' = el'RunTx eas $
+    doResolveModule !exit' = runEdhTx ets $
       asModuleParsed ms $ \ !parsed _eas -> edhCatch
-        (el'ets eas)
-        (doResolve $ el'modu'stmts parsed)
+        ets
+        (resolveParsedModule world ms $ el'modu'stmts parsed)
         exit'
         $ \ !etsCatching !exv !recover !rethrow -> case exv of
           EdhNil -> rethrow nil
@@ -491,78 +493,90 @@ asModuleResolved !ms !act' !eas =
                     exDesc
                 ]
 
-    doResolve :: [StmtSrc] -> EdhTxExit EL'ResolvedModule -> EdhTx
-    doResolve !stmts !exit !ets = do
-      !diagsVar <- newTVar []
-      !moduExts <- newTVar []
-      !moduExps <- iopdEmpty
-      !moduDependants <- newTVar Map.empty
-      !moduDepencencies <- newTVar Map.empty
-      !moduAttrs <- iopdEmpty
-      !moduEffs <- iopdEmpty
-      !moduAnnos <- iopdEmpty
-      !moduScopes <- newTVar []
-      !moduRegions <- newTVar []
-      !moduSyms <- newTVar []
-      let !pwip =
-            EL'RunProc
-              moduExts
-              moduExps
-              moduAttrs
-              moduEffs
-              moduAnnos
-              moduScopes
-              moduRegions
-              moduSyms
+resolveParsedModule ::
+  EL'World ->
+  EL'ModuSlot ->
+  [StmtSrc] ->
+  EdhProc EL'ResolvedModule
+resolveParsedModule !world !ms !body !exit !ets = do
+  !diagsVar <- newTVar []
+  !moduExts <- newTVar []
+  !moduExps <- iopdEmpty
+  !moduDependants <- newTVar Map.empty
+  !moduDepencencies <- newTVar Map.empty
+  !moduAttrs <- iopdEmpty
+  !moduEffs <- iopdEmpty
+  !moduAnnos <- iopdEmpty
+  !moduScopes <- newTVar []
+  !moduRegions <- newTVar []
+  !moduSyms <- newTVar []
+  let !pwip =
+        EL'RunProc
+          moduExts
+          moduExps
+          moduAttrs
+          moduEffs
+          moduAnnos
+          moduScopes
+          moduRegions
+          moduSyms
+      !eac =
+        EL'Context
+          { el'ctx'scope =
+              EL'ModuWIP
+                ms
+                ( EL'InitModu
+                    moduExts
+                    moduExps
+                    moduDependants
+                    moduDepencencies
+                )
+                pwip,
+            -- TODO gen & put put the root scope at analysis time
+            el'ctx'outers = [],
+            el'ctx'pure = False,
+            el'ctx'exporting = False,
+            el'ctx'eff'defining = False,
+            el'ctx'diags = diagsVar
+          }
+      !eas =
+        EL'AnalysisState
+          { el'world = world,
+            el'context = eac,
+            el'ets = ets
+          }
 
-          !eacModu =
-            eac
-              { el'ctx'diags = diagsVar,
-                el'ctx'scope =
-                  EL'ModuWIP
-                    ms
-                    ( EL'InitModu
-                        moduExts
-                        moduExps
-                        moduDependants
-                        moduDepencencies
-                    )
-                    pwip,
-                el'ctx'outers = el'ctx'scope eac : el'ctx'outers eac
+  el'RunTx eas $
+    el'AnalyzeStmts body $ \_ _eas -> do
+      !diags <- readTVar diagsVar
+      !scope'attrs <- iopdSnapshot moduAttrs
+      !scope'effs <- iopdSnapshot moduEffs
+      !innerScopes <- readTVar moduScopes
+      !regions <- readTVar moduRegions
+      !scope'symbols <- readTVar moduSyms
+      let !el'scope =
+            EL'Scope
+              { el'scope'span = SrcRange beginningSrcPos moduEnd,
+                el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                el'scope'regions = V.fromList $! reverse regions,
+                el'scope'attrs = scope'attrs,
+                el'scope'effs = scope'effs,
+                el'scope'symbols = V.fromList $! reverse scope'symbols
               }
-          !easModu = eas {el'context = eacModu}
-
-      el'RunTx easModu $
-        el'AnalyzeStmts stmts $ \_ _eas -> do
-          !diags <- readTVar diagsVar
-          !scope'attrs <- iopdSnapshot moduAttrs
-          !scope'effs <- iopdSnapshot moduEffs
-          !innerScopes <- readTVar moduScopes
-          !regions <- readTVar moduRegions
-          !scope'symbols <- readTVar moduSyms
-          let !el'scope =
-                EL'Scope
-                  { el'scope'span = SrcRange beginningSrcPos moduEnd,
-                    el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                    el'scope'regions = V.fromList $! reverse regions,
-                    el'scope'attrs = scope'attrs,
-                    el'scope'effs = scope'effs,
-                    el'scope'symbols = V.fromList $! reverse scope'symbols
-                  }
-          exitEdh ets exit $
-            EL'ResolvedModule
-              el'scope
-              moduExps
-              moduDependants
-              moduDepencencies
-              (reverse diags)
+      exitEdh ets exit $
+        EL'ResolvedModule
+          el'scope
+          moduExps
+          moduDependants
+          moduDepencencies
+          (reverse diags)
+  where
+    moduEnd :: SrcPos
+    moduEnd = go body
       where
-        moduEnd :: SrcPos
-        moduEnd = go stmts
-          where
-            go [] = beginningSrcPos
-            go [StmtSrc _ !last'stmt'span] = src'end last'stmt'span
-            go (_ : rest'stmts) = go rest'stmts
+        go [] = beginningSrcPos
+        go [StmtSrc _ !last'stmt'span] = src'end last'stmt'span
+        go (_ : rest'stmts) = go rest'stmts
 
 -- | pack arguments
 el'PackArgs :: ArgsPacker -> EL'Analysis EL'ArgsPack
@@ -1285,8 +1299,8 @@ el'AnalyzeExpr
                   el'Exit eas exit $ EL'Const nil
                 Right !msImportee -> do
                   !chkExp <- chkExport
-                  el'RunTx eas $
-                    asModuleResolved msImportee $ \ !resolved _eas ->
+                  runEdhTx ets $
+                    asModuleResolved world msImportee $ \ !resolved _ets ->
                       -- TODO find mechanism in LSP to report diags discovered
                       -- here asynchronously, to not missing them
                       impIntoScope chkExp msImportee resolved argsRcvr
@@ -1309,6 +1323,8 @@ el'AnalyzeExpr
             "dynamic import specification not analyzed yet"
           el'Exit eas exit $ EL'Const nil
     where
+      !world = el'world eas
+      !ets = el'ets eas
       !eac = el'context eas
       swip = el'ctx'scope eac
       pwip = el'ProcWIP swip
