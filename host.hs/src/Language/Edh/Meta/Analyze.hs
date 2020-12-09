@@ -377,7 +377,7 @@ asModuleParsed !ms !exit !ets =
     doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
     doParseModule !exit' = edhCatch
       ets
-      (parseModuleOnDisk ms)
+      (parseModuleOnDisk $ el'modu'doc ms)
       exit'
       $ \ !etsCatching !exv !recover !rethrow -> case exv of
         EdhNil -> rethrow nil
@@ -393,8 +393,8 @@ asModuleParsed !ms !exit !ets =
                   exDesc
               ]
 
-parseModuleOnDisk :: EL'ModuSlot -> EdhProc EL'ParsedModule
-parseModuleOnDisk !ms !exit !ets =
+parseModuleOnDisk :: SrcDoc -> EdhProc EL'ParsedModule
+parseModuleOnDisk moduDoc@(SrcDoc !moduFile) !exit !ets =
   unsafeIOToSTM
     ( streamDecodeUtf8With lenientDecode
         <$> B.readFile
@@ -403,9 +403,7 @@ parseModuleOnDisk !ms !exit !ets =
           )
     )
     >>= \case
-      Some !moduSource _ _ -> parseModuleSource moduSource ms exit ets
-  where
-    SrcDoc !moduFile = el'modu'doc ms
+      Some !moduSource _ _ -> parseModuleSource moduSource moduDoc exit ets
 
 -- | fill in module source on the fly, usually pending save from an IDE editor
 --
@@ -447,7 +445,7 @@ el'FillModuleSource !moduSource !ms !exit !ets = do
     doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
     doParseModule !exit' = edhCatch
       ets
-      (parseModuleSource moduSource ms)
+      (parseModuleSource moduSource $ el'modu'doc ms)
       exit'
       $ \ !etsCatching !exv !recover !rethrow -> case exv of
         EdhNil -> rethrow nil
@@ -463,8 +461,8 @@ el'FillModuleSource !moduSource !ms !exit !ets = do
                   exDesc
               ]
 
-parseModuleSource :: Text -> EL'ModuSlot -> EdhProc EL'ParsedModule
-parseModuleSource !moduSource !ms !exit !ets =
+parseModuleSource :: Text -> SrcDoc -> EdhProc EL'ParsedModule
+parseModuleSource !moduSource (SrcDoc !moduFile) !exit !ets =
   parseEdh world moduFile moduSource >>= \case
     Left !err -> do
       let !msg = T.pack $ errorBundlePretty err
@@ -480,7 +478,6 @@ parseModuleSource !moduSource !ms !exit !ets =
       exitEdh ets exit $ EL'ParsedModule docCmt stmts []
   where
     !world = edh'prog'world $ edh'thread'prog ets
-    SrcDoc !moduFile = el'modu'doc ms
 
 -- | obtain the result as the specified module is resolved
 --
