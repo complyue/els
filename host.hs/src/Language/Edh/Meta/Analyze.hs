@@ -843,6 +843,11 @@ el'LiteralValue = \case
 el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
 --
 
+-- block
+el'AnalyzeExpr _docCmt (ExprSrc (BlockExpr !stmts) _blk'span) !exit !eas =
+  el'RunTx eas $ el'AnalyzeStmts stmts exit
+--
+
 -- direct attribute addressing
 el'AnalyzeExpr
   _docCmt
@@ -945,10 +950,11 @@ el'AnalyzeExpr
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 --
 
+-- infix operator application
 el'AnalyzeExpr
   !docCmt
   xsrc@( ExprSrc
-           (InfixExpr !opSym lhExpr@(ExprSrc !lhx lh'span) !rhExpr)
+           (InfixExpr !opSym lhExpr@(ExprSrc !lhx _lh'span) !rhExpr)
            !expr'span
          )
   !exit
@@ -1923,6 +1929,60 @@ el'AnalyzeExpr
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
       diags = el'ctx'diags eac
+--
+
+-- scoped block
+el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
+  do
+    !blkAttrs <- iopdEmpty
+    !blkEffs <- iopdEmpty
+    !blkAnnos <- iopdEmpty
+    !blkScopes <- newTVar []
+    !blkRegions <- newTVar []
+    !blkSyms <- newTVar []
+    let !pwip =
+          outerProc -- inherit exts/exps from outer scope
+            { el'scope'attrs'wip = blkAttrs,
+              el'scope'effs'wip = blkEffs,
+              el'scope'annos'wip = blkAnnos,
+              el'scope'inner'scopes'wip = blkScopes,
+              el'scope'regions'wip = blkRegions,
+              el'scope'symbols'wip = blkSyms
+            }
+        !eacBlk =
+          eac
+            { el'ctx'scope = EL'ProcWIP pwip,
+              el'ctx'outers = outerScope : el'ctx'outers eac
+            }
+        !easBlk = eas {el'context = eacBlk}
+
+    el'RunTx easBlk $
+      el'AnalyzeStmts stmts $ \ !resultVal _eas -> do
+        !scope'attrs <- iopdSnapshot blkAttrs
+        !scope'effs <- iopdSnapshot blkEffs
+        !innerScopes <- readTVar blkScopes
+        !regions <- readTVar blkRegions
+        !scope'symbols <- readTVar blkSyms
+        let !blk'scope =
+              EL'Scope
+                { el'scope'span = blk'span,
+                  el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                  el'scope'regions = V.fromList $! reverse regions,
+                  el'scope'attrs = scope'attrs,
+                  el'scope'effs = scope'effs,
+                  el'scope'symbols = V.fromList $! reverse scope'symbols
+                }
+        --
+
+        -- record as an inner scope of outer scope
+        modifyTVar' (el'scope'inner'scopes'wip outerProc) (blk'scope :)
+
+        -- return the result value
+        el'Exit eas exit resultVal
+  where
+    !eac = el'context eas
+    !outerScope = el'ctx'scope eac
+    !outerProc = el'ProcWIP outerScope
 --
 
 -- TODO recognize more exprs
