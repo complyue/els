@@ -284,59 +284,65 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
                 then return $ Left $ "no such module: " <> T.pack (show nomSpec)
                 else findAbsImport parentPkgPath
 
+-- | invalidate resolution results of this module and all known dependants
+-- will have parsing result invaliated as well if `srcChanged` is @True@
 el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhProc ()
 el'InvalidateModule !srcChanged !ms !exit !ets = do
-  when srcChanged $
-    let !pars = el'modu'parsing ms
-     in tryTakeTMVar pars >>= \case
-          Nothing -> return ()
-          Just parsing@EL'ModuParsing {} -> putTMVar pars parsing
-          Just EL'ModuParsed {} -> return ()
-  let !reso = el'modu'resolution ms
-   in tryTakeTMVar reso >>= \case
-        Nothing -> return ()
-        Just resolving@EL'ModuResolving {} -> putTMVar reso resolving
-        Just (EL'ModuResolved !resolved) ->
-          let invalidateDependants ::
-                [(EL'ModuSlot, Bool)] ->
-                [(EL'ModuSlot, Bool)] ->
-                STM ()
-              invalidateDependants !upds [] = do
-                unless (null upds) $
-                  modifyTVar' (el'resolved'dependants resolved) $
-                    -- todo maybe should delete instead of update here?
-                    -- in case some module file is deleted, this'll leak?
-                    Map.union (Map.fromList upds)
-                exitEdh ets exit ()
-              invalidateDependants !upds ((!dependant, !hold) : rest) =
-                tryTakeTMVar (el'modu'resolution dependant) >>= \case
-                  Nothing -> invalidateDependants upds rest
-                  Just resolving@EL'ModuResolving {} -> do
-                    putTMVar (el'modu'resolution dependant) resolving
-                    invalidateDependants upds rest
-                  Just (EL'ModuResolved !resolved') ->
-                    Map.lookup ms {- HLINT ignore "Redundant <$>" -}
-                      <$> readTVar (el'resolved'dependencies resolved')
-                      >>= \case
-                        Just True ->
-                          runEdhTx ets $
-                            el'InvalidateModule False dependant $ \_ _ets ->
-                              invalidateDependants upds rest
-                        _ ->
-                          if hold
-                            then
-                              invalidateDependants
-                                ((dependant, False) : upds)
-                                rest
-                            else invalidateDependants upds rest
-           in readTVar (el'resolved'dependants resolved)
-                >>= invalidateDependants [] . Map.toList
+  when srcChanged $ void $ tryTakeTMVar (el'modu'parsing ms)
+  tryTakeTMVar reso >>= \case
+    Nothing -> pure ()
+    Just EL'ModuResolving {} -> pure ()
+    Just (EL'ModuResolved !resolved) ->
+      readTVar (el'resolved'dependants resolved)
+        >>= invalidateDeps resolved . Map.toList
+  where
+    !reso = el'modu'resolution ms
+    invalidateDeps :: EL'ResolvedModule -> [(EL'ModuSlot, Bool)] -> STM ()
+    invalidateDeps !resolved !deps = go [] deps
+      where
+        go :: [(EL'ModuSlot, Bool)] -> [(EL'ModuSlot, Bool)] -> STM ()
+        go !upds [] = do
+          unless (null upds) $
+            modifyTVar' (el'resolved'dependants resolved) $
+              -- todo maybe should delete instead of update here?
+              -- in case some module file is deleted, this'll leak?
+              Map.union (Map.fromList upds)
+          exitEdh ets exit ()
+        go !upds ((!dependant, !hold) : rest) =
+          tryTakeTMVar (el'modu'resolution dependant) >>= \case
+            Nothing -> go upds rest
+            Just resolving@EL'ModuResolving {} -> do
+              putTMVar (el'modu'resolution dependant) resolving
+              go upds rest
+            Just (EL'ModuResolved !resolved') ->
+              Map.lookup ms {- HLINT ignore "Redundant <$>" -}
+                <$> readTVar (el'resolved'dependencies resolved')
+                >>= \case
+                  Just True ->
+                    runEdhTx ets $
+                      el'InvalidateModule False dependant $ \_ _ets ->
+                        go upds rest
+                  _ ->
+                    if hold
+                      then
+                        go
+                          ((dependant, False) : upds)
+                          rest
+                      else go upds rest
 
+-- | obtain the result as the specified module is parsed
+--
+-- return from this procedure can be delayed, if the calling thread has no
+-- subsequent transaction to process, it'll terminate without receiving the
+-- result in such cases. it is assumed this called by a LSP serving thread,
+-- thus ever waiting for new LSP client requests, so never be the case. while
+-- it can still execute OoO (out of order) wrt processing of subsequent LSP
+-- client requests.
 asModuleParsed :: EL'ModuSlot -> EdhProc EL'ParsedModule
 asModuleParsed !ms !exit !ets =
   tryReadTMVar parsingVar >>= \case
     Nothing -> do
-      !acts <- newTVar [\ !modu -> runEdhTx ets $ exit modu]
+      !acts <- newTVar []
       -- the put will retry if parsingVar has been changed by others
       -- concurrently, so no duplicate effort would incur here
       putTMVar parsingVar (EL'ModuParsing acts)
@@ -357,13 +363,12 @@ asModuleParsed !ms !exit !ets =
         -- their respective initiating thread's task queue, so
         -- here we care neither about exceptions nor orders
         readTVar acts >>= sequence_ . (<*> pure parsed)
+
+        -- return from this procedure
+        exitEdh ets exit parsed
     Just (EL'ModuParsing !acts) -> modifyTVar' acts $
-      -- always run the post action on the initiating thread
-      -- TODO on entry, check not in an `ai` tx which this can break
-      --
-      -- note the action will appear executed out-of-order in this case, and
-      -- further more, the action can cease execution if the initiating thread
-      -- has terminated when the resolution done
+      -- note the action installed may be executed on another thread
+      -- so make sure to schedule the CPS return on this origin Edh thread
       (:) $ \ !parsed -> runEdhTx ets $ exit parsed
     Just (EL'ModuParsed !parsed) -> runEdhTx ets $ exit parsed
   where
@@ -398,20 +403,81 @@ parseModuleOnDisk !ms !exit !ets =
           )
     )
     >>= \case
-      Some !moduSource _ _ ->
-        parseEdh world moduFile moduSource >>= \case
-          Left !err -> do
-            let !msg = T.pack $ errorBundlePretty err
-                !edhWrapException = edh'exception'wrapper world
-                !edhErr =
-                  EdhError ParseError msg (toDyn nil) $
-                    getEdhErrCtx
-                      0
-                      ets
-            edhWrapException (toException edhErr)
-              >>= \ !exo -> edhThrow ets (EdhObject exo)
-          Right (!stmts, !docCmt) ->
-            exitEdh ets exit $ EL'ParsedModule docCmt stmts []
+      Some !moduSource _ _ -> parseModuleSource moduSource ms exit ets
+  where
+    SrcDoc !moduFile = el'modu'doc ms
+
+-- | fill in module source on the fly, usually pending save from an IDE editor
+--
+-- todo track document version to cancel parsing attempts for old versions
+el'FillModuleSource :: Text -> EL'ModuSlot -> EdhProc EL'ParsedModule
+el'FillModuleSource !moduSource !ms !exit !ets = do
+  void $ tryTakeTMVar parsingVar
+  !acts <- newTVar []
+  -- the put will retry if parsingVar has been changed by others
+  -- concurrently, so no duplicate effort would incur here
+  putTMVar parsingVar (EL'ModuParsing acts)
+
+  -- invalidate resolution results of this module and all dependants
+  runEdhTx ets $
+    el'InvalidateModule True ms $ \() _ets ->
+      -- parse & install the result
+      doParseModule $ \ !parsed -> do
+        tryTakeTMVar parsingVar >>= \case
+          Just (EL'ModuParsing acts')
+            | acts' == acts ->
+              putTMVar parsingVar $ EL'ModuParsed parsed
+          Just !other ->
+            -- invalidated & new analysation wip
+            putTMVar parsingVar other
+          _ ->
+            -- invalidated meanwhile
+            return ()
+        -- trigger post actions
+        -- note they should just enque a proper Edh task to
+        -- their respective initiating thread's task queue, so
+        -- here we care neither about exceptions nor orders
+        readTVar acts >>= sequence_ . (<*> pure parsed)
+
+        -- return from this procedure
+        exitEdh ets exit parsed
+  where
+    !parsingVar = el'modu'parsing ms
+
+    doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
+    doParseModule !exit' = edhCatch
+      ets
+      (parseModuleSource moduSource ms)
+      exit'
+      $ \ !etsCatching !exv !recover !rethrow -> case exv of
+        EdhNil -> rethrow nil
+        _ -> edhValueDesc etsCatching exv $ \ !exDesc ->
+          recover $
+            EL'ParsedModule
+              Nothing
+              []
+              [ el'Diag
+                  el'Error
+                  noSrcRange
+                  "err-parse"
+                  exDesc
+              ]
+
+parseModuleSource :: Text -> EL'ModuSlot -> EdhProc EL'ParsedModule
+parseModuleSource !moduSource !ms !exit !ets =
+  parseEdh world moduFile moduSource >>= \case
+    Left !err -> do
+      let !msg = T.pack $ errorBundlePretty err
+          !edhWrapException = edh'exception'wrapper world
+          !edhErr =
+            EdhError ParseError msg (toDyn nil) $
+              getEdhErrCtx
+                0
+                ets
+      edhWrapException (toException edhErr)
+        >>= \ !exo -> edhThrow ets (EdhObject exo)
+    Right (!stmts, !docCmt) ->
+      exitEdh ets exit $ EL'ParsedModule docCmt stmts []
   where
     !world = edh'prog'world $ edh'thread'prog ets
     SrcDoc !moduFile = el'modu'doc ms
@@ -449,13 +515,12 @@ asModuleResolved !world !ms !exit !ets =
         -- their respective initiating thread's task queue, so
         -- here we care neither about exceptions nor orders
         readTVar acts >>= sequence_ . (<*> pure resolved)
+
+        -- return from this procedure
+        exitEdh ets exit resolved
     Just (EL'ModuResolving !acts) -> modifyTVar' acts $
-      -- always run the post action on the initiating thread
-      -- TODO on entry, check not in an `ai` tx which this can break
-      --
-      -- note the action will appear executed out-of-order in this case, and
-      -- further more, the action can cease execution if the initiating thread
-      -- has terminated when the parsing done
+      -- note the action installed may be executed on another thread
+      -- so make sure to schedule the CPS return on this origin Edh thread
       (:) $ \ !resolved -> runEdhTx ets $ exit resolved
     Just (EL'ModuResolved !resolved) -> runEdhTx ets $ exit resolved
   where
