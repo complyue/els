@@ -1,5 +1,7 @@
 module Language.Edh.Meta.Analyze where
 
+-- import Debug.Trace
+
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
@@ -116,6 +118,12 @@ el'LocateModule !elw !moduFile !exit !ets =
                 else newHome $ V.splitAt homeIdx homesVec
         _ -> newHome (homesVec, V.empty)
 
+    -- splitFileName leaves trailing / for dir, get rid of it
+    splitDirFile :: FilePath -> (FilePath, FilePath)
+    splitDirFile path = (takeDirectory dir, file)
+      where
+        (dir, file) = splitFileName path
+
     fsSearch ::
       IO
         ( Either
@@ -137,8 +145,8 @@ el'LocateModule !elw !moduFile !exit !ets =
                         (Text, ModuleName, Text, Text)
                     )
                 )
-            go (!dir, !relPath) = case splitFileName dir of
-              (!homeDir, "edh_modules") -> case splitFileName relPath of
+            go (!dir, !relPath) = case splitDirFile dir of
+              (!homeDir, "edh_modules") -> case splitDirFile relPath of
                 (!moduName, "__main__.edh") ->
                   return $
                     Right $
@@ -191,7 +199,7 @@ el'LocateModule !elw !moduFile !exit !ets =
                                   T.pack absFile
                                 )
               (!gpdir, !pdir) ->
-                doesDirectoryExist (dir </> "edh_modules") >>= \case
+                doesDirectoryExist (gpdir </> "edh_modules") >>= \case
                   False ->
                     if gpdir == dir -- reached fs root
                       then return $ Left "not in any edh home"
@@ -205,7 +213,7 @@ el'LocateModule !elw !moduFile !exit !ets =
                             T.pack (takeDirectory relPath),
                             T.pack absFile
                           )
-         in go $ splitFileName absFile
+         in go $ splitDirFile absFile
 
 el'LocateImportee ::
   EL'ModuSlot ->

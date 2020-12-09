@@ -6,5 +6,11 @@ export world = MetaWorld()
 if debug then {
   import * 'els/debug'
 
-  go elsDebug.replHere()
+  {
+    go elsDebug.replHere()
+
+    thisModule = world.locate( __file__ )
+  } $=> { exc } -> {
+    console.error<| desc( exc )
+  }
 }
