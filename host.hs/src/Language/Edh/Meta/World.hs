@@ -65,7 +65,8 @@ createMetaWorldClass !msClass !clsOuterScope =
         sequence $
           [ (AttrByName nm,) <$> mkHostProc clsOuterScope vc nm hp
             | (nm, vc, hp) <-
-                [ ("locate", EdhMethod, wrapHostProc locateProc)
+                [ ("locate", EdhMethod, wrapHostProc locateProc),
+                  ("locateByFile", EdhMethod, wrapHostProc locateByFileProc)
                 ]
           ]
             ++ [ (AttrByName nm,)
@@ -89,10 +90,18 @@ createMetaWorldClass !msClass !clsOuterScope =
         let !hvs = V.toList $ V.map (EdhString . el'home'path) homes
         exitEdh ets exit $ EdhArgsPack $ ArgsPack hvs odEmpty
 
-    locateProc :: "moduleFile" !: Text -> EdhHostProc
-    locateProc (mandatoryArg -> !moduFile) !exit !ets =
+    locateProc :: "moduSpec" !: Text -> EdhHostProc
+    locateProc (mandatoryArg -> !moduSpec) !exit !ets =
       withThisHostObj ets $ \ !elw ->
         runEdhTx ets $
-          el'LocateModule elw moduFile $ \ !ms _ets ->
+          el'LocateModule elw moduSpec $ \ !ms _ets ->
+            edhCreateHostObj msClass (toDyn ms) []
+              >>= \ !msObj -> exitEdh ets exit $ EdhObject msObj
+
+    locateByFileProc :: "moduleFile" !: Text -> EdhHostProc
+    locateByFileProc (mandatoryArg -> !moduFile) !exit !ets =
+      withThisHostObj ets $ \ !elw ->
+        runEdhTx ets $
+          el'LocateModuleByFile elw moduFile $ \ !ms _ets ->
             edhCreateHostObj msClass (toDyn ms) []
               >>= \ !msObj -> exitEdh ets exit $ EdhObject msObj

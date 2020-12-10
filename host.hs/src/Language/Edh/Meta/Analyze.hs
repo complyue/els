@@ -24,9 +24,24 @@ import System.FilePath
 import Prelude
 
 el'LocateModule :: EL'World -> Text -> EdhProc EL'ModuSlot
-el'LocateModule !elw !moduFile !exit !ets =
+el'LocateModule !elw !absModuSpec !exit !ets =
+  if "." `T.isPrefixOf` nomSpec
+    then
+      throwEdh ets UsageError $
+        "not a valid absolute Edh module spec: " <> absModuSpec
+    else
+      unsafeIOToSTM (resolveAbsoluteImport nomSpec ".") >>= \case
+        Left !err -> throwEdh ets PackageError err
+        Right (_moduName, _moduPath, !moduFile) -> runEdhTx ets $
+          el'LocateModule elw (T.pack moduFile) $ \ !ms _ets ->
+            exitEdh ets exit ms
+  where
+    !nomSpec = normalizeImportSpec absModuSpec
+
+el'LocateModuleByFile :: EL'World -> Text -> EdhProc EL'ModuSlot
+el'LocateModuleByFile !elw !moduFile !exit !ets =
   if not $ ".edh" `T.isSuffixOf` moduFile
-    then throwEdh ets UsageError $ "Not a .edh file: " <> moduFile
+    then throwEdh ets UsageError $ "not a .edh file: " <> moduFile
     else
       runEdhTx ets $
         edhContIO $
@@ -220,77 +235,16 @@ el'LocateImportee ::
   Text ->
   EL'Analysis (Either Text EL'ModuSlot)
 el'LocateImportee !msFrom !impSpec !exit !eas =
-  if "." `T.isPrefixOf` impSpec
-    then
-      if null relPath
-        then
-          el'Exit eas exit $
-            Left $ "can not do relative import from " <> fromFile
-        else
-          unsafeIOToSTM (findRelImport nomSpec) >>= \case
-            Left !err -> el'Exit eas exit $ Left err
-            Right !moduFile -> runEdhTx ets $
-              el'LocateModule elw moduFile $ \ !ms _ets ->
-                el'Exit eas exit $ Right ms
-    else
-      unsafeIOToSTM
-        (findAbsImport $ T.unpack $ el'home'path $ el'modu'home msFrom)
-        >>= \case
-          Left !err -> el'Exit eas exit $ Left err
-          Right !moduFile -> runEdhTx ets $
-            el'LocateModule elw moduFile $ \ !ms _ets ->
-              el'Exit eas exit $ Right ms
+  unsafeIOToSTM (locateEdhModule nomSpec relPath) >>= \case
+    Left !err -> el'Exit eas exit $ Left err
+    Right (_moduName, _moduPath, !moduFile) -> runEdhTx ets $
+      el'LocateModule elw (T.pack moduFile) $ \ !ms _ets ->
+        el'Exit eas exit $ Right ms
   where
     elw = el'world eas
     ets = el'ets eas
-    relPath = T.unpack $ el'modu'rel'base msFrom
-    SrcDoc fromFile = el'modu'doc msFrom
-    !nomSpec = T.unpack $ normalizeImpSpec impSpec
-    normalizeImpSpec :: Text -> Text
-    normalizeImpSpec = withoutLeadingSlash . withoutTrailingSlash
-    withoutLeadingSlash spec = fromMaybe spec $ T.stripPrefix "/" spec
-    withoutTrailingSlash spec = fromMaybe spec $ T.stripSuffix "/" spec
-
-    findRelImport :: FilePath -> IO (Either Text Text)
-    findRelImport !relImp = do
-      !nomPath <- canonicalizePath $ relPath </> relImp
-      let !edhFilePath = nomPath <> ".edh"
-      doesFileExist edhFilePath >>= \case
-        True -> return $ Right $ T.pack edhFilePath
-        False ->
-          let !edhIdxPath = nomPath </> "__init__.edh"
-           in doesFileExist edhIdxPath >>= \case
-                True -> return $ Right $ T.pack edhIdxPath
-                False ->
-                  return $
-                    Left $
-                      "no such module: " <> T.pack (show relImp)
-                        <> " relative to: "
-                        <> T.pack relPath
-
-    findAbsImport :: FilePath -> IO (Either Text Text)
-    findAbsImport !absPkgPath =
-      let !emsDir = absPkgPath </> "edh_modules"
-       in doesDirectoryExist emsDir >>= \case
-            False -> tryParentDir
-            True -> do
-              let !nomPath = emsDir </> nomSpec
-                  !edhFilePath = nomPath <> ".edh"
-              doesFileExist edhFilePath >>= \case
-                True ->
-                  return $ Right $ T.pack edhFilePath
-                False -> do
-                  let !edhIdxPath = nomPath </> "__init__.edh"
-                  doesFileExist edhIdxPath >>= \case
-                    True ->
-                      return $ Right $ T.pack edhIdxPath
-                    False -> tryParentDir
-      where
-        tryParentDir =
-          let !parentPkgPath = takeDirectory absPkgPath
-           in if equalFilePath parentPkgPath absPkgPath
-                then return $ Left $ "no such module: " <> T.pack (show nomSpec)
-                else findAbsImport parentPkgPath
+    !relPath = T.unpack $ el'modu'rel'base msFrom
+    !nomSpec = normalizeImportSpec impSpec
 
 -- | invalidate resolution results of this module and all known dependants
 -- will have parsing result invaliated as well if `srcChanged` is @True@

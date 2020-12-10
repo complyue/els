@@ -9,7 +9,7 @@ if debug then {
   {
     go elsDebug.replHere()
 
-    thisModule = world.locate( __file__ )
+    thisModule = world.locateByFile( __file__ )
   } $=> { exc } -> {
     console.error<| desc( exc )
   }
