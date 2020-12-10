@@ -107,7 +107,7 @@ defer {
 while eol() is false {
 
   case recvOnePkt() of { rpcIn } -> {@
-    # note the scoped block reserves effectful context for the lsp request,
+    # note this scoped block retains effectful context for the lsp request,
     # e.g. lspRequest
 
     case rpcIn[ 'jsonrpc' ] of {
