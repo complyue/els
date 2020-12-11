@@ -8,8 +8,8 @@ import Data.Text (Text)
 import qualified Data.Vector as V
 import Language.Edh.EHI
 import Language.Edh.Meta.Analyze
+import Language.Edh.Meta.AtTypes
 import Language.Edh.Meta.Model
-import Language.Edh.Meta.RtTypes
 import Prelude
 
 createMetaModuleClass :: Scope -> STM Object
@@ -78,11 +78,46 @@ createMetaWorldClass !msClass !clsOuterScope =
       iopdUpdate arts $ edh'scope'entity clsScope
   where
     elwAllocator :: EdhObjectAllocator
-    elwAllocator !ctorExit _etsCtor = do
+    elwAllocator !ctorExit !etsCtor = do
       !homes <- newTMVar V.empty
-      !eow <- newEventSink
-      let !elw = EL'World homes eow
-      ctorExit $ HostStore (toDyn elw)
+      let !bootstrapWorld = EL'World homes odEmpty
+      runEdhTx etsCtor $
+        el'LocateModule bootstrapWorld "batteries/meta" $
+          \ !msMeta -> asModuleResolved bootstrapWorld msMeta $
+            \ !resolvedMeta _ets -> do
+              case el'resolution'diags resolvedMeta of
+                [] -> pure ()
+                !resoDiags ->
+                  logger
+                    40 -- error
+                    (Just "<els-meta-world>")
+                    ( ArgsPack
+                        (EdhString . el'diag'message <$> resoDiags)
+                        odEmpty
+                    )
+              runEdhTx etsCtor $
+                asModuleParsed msMeta $
+                  \ !parsedMeta _ets -> do
+                    case el'parsing'diags parsedMeta of
+                      [] -> pure ()
+                      !resoDiags ->
+                        logger
+                          40 -- error
+                          (Just "<els-meta-world>")
+                          ( ArgsPack
+                              (EdhString . el'diag'message <$> resoDiags)
+                              odEmpty
+                          )
+
+                    -- return the world
+                    let !metaRootScope = el'resolved'scope resolvedMeta
+                        !ambient = el'scope'attrs metaRootScope
+                        !elw = EL'World homes ambient
+                    ctorExit $ HostStore (toDyn elw)
+      where
+        world = edh'prog'world $ edh'thread'prog etsCtor
+        console = edh'world'console world
+        logger = consoleLogger console
 
     homesProc :: EdhHostProc
     homesProc !exit !ets = withThisHostObj ets $ \ !elw ->

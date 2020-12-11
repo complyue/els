@@ -1,4 +1,5 @@
-module Language.Edh.Meta.RtTypes where
+-- Analyzetime types
+module Language.Edh.Meta.AtTypes where
 
 import Control.Concurrent.STM
 import Data.HashMap.Strict (HashMap)
@@ -12,8 +13,10 @@ data EL'World = EL'World
     -- their respective path, modifications should be mutually exclusive by
     -- taking from and putting back to this `TMVar`
     el'homes :: !(TMVar (Vector EL'Home)),
-    -- | signal for end-of-world
-    el'eow :: !EventSink
+    -- | root artifacts at analysis time
+    --
+    -- this corresponds to root scope at runtime
+    el'ambient :: !EL'Artifacts
   }
 
 type EL'Analysis a = EL'TxExit a -> EL'Tx
@@ -51,12 +54,12 @@ data EL'Context = EL'Context
   }
 
 data EL'ScopeWIP
-  = EL'ProcWIP !EL'RunProc
-  | EL'ClassWIP !EL'DefineClass !EL'RunProc
-  | EL'ObjectWIP !EL'InitObject !EL'RunProc
-  | EL'ModuWIP !EL'ModuSlot !EL'InitModu !EL'RunProc
+  = EL'ProcWIP !EL'AnaProc
+  | EL'ClassWIP !EL'DefineClass !EL'AnaProc
+  | EL'ObjectWIP !EL'InitObject !EL'AnaProc
+  | EL'ModuWIP !EL'ModuSlot !EL'InitModu !EL'AnaProc
 
-el'ProcWIP :: EL'ScopeWIP -> EL'RunProc
+el'ProcWIP :: EL'ScopeWIP -> EL'AnaProc
 el'ProcWIP (EL'ProcWIP p) = p
 el'ProcWIP (EL'ClassWIP _ p) = p
 el'ProcWIP (EL'ObjectWIP _ p) = p
@@ -122,7 +125,7 @@ data EL'DefineClass = EL'DefineClass
 
 -- a method procedure, including vanilla method, generator, producer, operator,
 -- (vanilla/generator/producer) arrow, and maybe a bit confusing, scoped blocks
-data EL'RunProc = EL'RunProc
+data EL'AnaProc = EL'AnaProc
   { -- | this points to `el'modu'exts'wip` or `el'obj'exts'wip` or
     -- `el'class'exts'wip` or `el'inst'exts'wip` whichever is appropriate
     el'scope'exts'wip :: !(TVar [EL'Object]),
@@ -151,17 +154,22 @@ el'ResolveLexicalAttr (swip : outers) !key =
     Nothing -> el'ResolveLexicalAttr outers key
     Just !def -> return $ Just def
 
-el'ResolveContextAttr :: EL'Context -> AttrKey -> STM (Maybe EL'AttrDef)
-el'ResolveContextAttr !eac !key =
+el'ResolveContextAttr :: EL'AnalysisState -> AttrKey -> STM (Maybe EL'AttrDef)
+el'ResolveContextAttr !eas !key =
   el'ResolveLexicalAttr (el'ctx'scope eac : el'ctx'outers eac) key
+    >>= \case
+      Nothing -> return $ odLookup key $ el'ambient $ el'world eas
+      result@Just {} -> return result
+  where
+    !eac = el'context eas
 
-el'ResolveAttrAddr :: EL'Context -> AttrAddrSrc -> STM (Maybe AttrKey)
+el'ResolveAttrAddr :: EL'AnalysisState -> AttrAddrSrc -> STM (Maybe AttrKey)
 el'ResolveAttrAddr _ (AttrAddrSrc (NamedAttr !attrName) _) =
   return $ Just $ AttrByName attrName
 el'ResolveAttrAddr _ (AttrAddrSrc (QuaintAttr !attrName) _) =
   return $ Just $ AttrByName attrName
-el'ResolveAttrAddr !eac (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
-  el'ResolveContextAttr eac (AttrByName symName) >>= \case
+el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
+  el'ResolveContextAttr eas (AttrByName symName) >>= \case
     Nothing -> return Nothing
     Just !def -> case el'UltimateValue def of
       EL'Const (EdhSymbol !symVal) -> return $ Just $ AttrBySym symVal
@@ -175,6 +183,7 @@ el'ResolveAttrAddr !eac (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
           "no such attribute defined"
         return Nothing
   where
+    eac = el'context eas
     diags = el'ctx'diags eac
 
 el'ResolveAnnotation :: EL'ScopeWIP -> AttrKey -> STM (Maybe EL'AttrAnno)

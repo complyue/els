@@ -16,8 +16,8 @@ import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Vector as V
 import GHC.Conc (unsafeIOToSTM)
 import Language.Edh.EHI
+import Language.Edh.Meta.AtTypes
 import Language.Edh.Meta.Model
-import Language.Edh.Meta.RtTypes
 import Numeric.Search.Range
 import System.Directory
 import System.FilePath
@@ -33,7 +33,7 @@ el'LocateModule !elw !absModuSpec !exit !ets =
       unsafeIOToSTM (resolveAbsoluteImport nomSpec ".") >>= \case
         Left !err -> throwEdh ets PackageError err
         Right (_moduName, _moduPath, !moduFile) -> runEdhTx ets $
-          el'LocateModule elw (T.pack moduFile) $ \ !ms _ets ->
+          el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
             exitEdh ets exit ms
   where
     !nomSpec = normalizeImportSpec absModuSpec
@@ -238,7 +238,7 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
   unsafeIOToSTM (locateEdhModule nomSpec relPath) >>= \case
     Left !err -> el'Exit eas exit $ Left err
     Right (_moduName, _moduPath, !moduFile) -> runEdhTx ets $
-      el'LocateModule elw (T.pack moduFile) $ \ !ms _ets ->
+      el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
         el'Exit eas exit $ Right ms
   where
     elw = el'world eas
@@ -316,10 +316,11 @@ asModuleParsed !ms !exit !ets =
               putTMVar parsingVar $ EL'ModuParsed parsed
           Just !other ->
             -- invalidated & new analysation wip
-            putTMVar parsingVar other
+            void $ tryPutTMVar parsingVar other
           _ ->
             -- invalidated meanwhile
             return ()
+
         -- trigger post actions
         -- note they should just enque a proper Edh task to
         -- their respective initiating thread's task queue, so
@@ -331,8 +332,8 @@ asModuleParsed !ms !exit !ets =
     Just (EL'ModuParsing !acts) -> modifyTVar' acts $
       -- note the action installed may be executed on another thread
       -- so make sure to schedule the CPS return on this origin Edh thread
-      (:) $ \ !parsed -> runEdhTx ets $ exit parsed
-    Just (EL'ModuParsed !parsed) -> runEdhTx ets $ exit parsed
+      (:) $ \ !parsed -> exitEdh ets exit parsed
+    Just (EL'ModuParsed !parsed) -> exitEdh ets exit parsed
   where
     !parsingVar = el'modu'parsing ms
 
@@ -453,7 +454,7 @@ asModuleResolved :: EL'World -> EL'ModuSlot -> EdhProc EL'ResolvedModule
 asModuleResolved !world !ms !exit !ets =
   tryReadTMVar resoVar >>= \case
     Nothing -> do
-      !acts <- newTVar [\ !modu -> runEdhTx ets $ exit modu]
+      !acts <- newTVar []
       -- the put will retry if parsingVar has been changed by others
       -- concurrently, so no duplicate effort would incur here
       putTMVar resoVar (EL'ModuResolving acts)
@@ -461,14 +462,15 @@ asModuleResolved !world !ms !exit !ets =
         -- installed the resolved record
         tryTakeTMVar resoVar >>= \case
           Just (EL'ModuResolving acts')
-            | acts' == acts ->
+            | acts' == acts -> -- the most expected scenario
               putTMVar resoVar $ EL'ModuResolved resolved
           Just !other ->
             -- invalidated & new analysation wip
-            putTMVar resoVar other
+            void $ tryPutTMVar resoVar other
           _ ->
             -- invalidated meanwhile
             return ()
+
         -- trigger post actions
         -- note they should just enque a proper Edh task to
         -- their respective initiating thread's task queue, so
@@ -480,14 +482,14 @@ asModuleResolved !world !ms !exit !ets =
     Just (EL'ModuResolving !acts) -> modifyTVar' acts $
       -- note the action installed may be executed on another thread
       -- so make sure to schedule the CPS return on this origin Edh thread
-      (:) $ \ !resolved -> runEdhTx ets $ exit resolved
-    Just (EL'ModuResolved !resolved) -> runEdhTx ets $ exit resolved
+      (:) $ \ !resolved -> exitEdh ets exit resolved
+    Just (EL'ModuResolved !resolved) -> exitEdh ets exit resolved
   where
     !resoVar = el'modu'resolution ms
 
     doResolveModule :: (EL'ResolvedModule -> STM ()) -> STM ()
     doResolveModule !exit' = runEdhTx ets $
-      asModuleParsed ms $ \ !parsed _eas -> edhCatch
+      asModuleParsed ms $ \ !parsed _ets -> edhCatch
         ets
         (resolveParsedModule world ms $ el'modu'stmts parsed)
         exit'
@@ -535,7 +537,7 @@ resolveParsedModule !world !ms !body !exit !ets = do
   !moduRegions <- newTVar []
   !moduSyms <- newTVar []
   let !pwip =
-        EL'RunProc
+        EL'AnaProc
           moduExts
           moduExps
           moduAttrs
@@ -556,7 +558,6 @@ resolveParsedModule !world !ms !body !exit !ets = do
                     moduDepencencies
                 )
                 pwip,
-            -- TODO gen & put put the root scope at analysis time
             el'ctx'outers = [],
             el'ctx'pure = False,
             el'ctx'exporting = False,
@@ -626,7 +627,7 @@ el'PackArgs !argSndrs !exit !eas =
       SendPosArg !ax -> el'AnalyzeExpr Nothing ax $ \ !argVal ->
         collectArgs (argVal : args) kwargs rest
       SendKwArg !argAddr !ax -> \_eas ->
-        el'ResolveAttrAddr eac argAddr >>= \case
+        el'ResolveAttrAddr eas argAddr >>= \case
           Nothing -> el'RunTx easPure $ collectArgs args kwargs rest
           Just !argKey -> el'RunTx easPure $
             el'AnalyzeExpr Nothing ax $ \ !argVal ->
@@ -737,7 +738,7 @@ el'AnalyzeStmt
         RecvArg addr@(AttrAddrSrc _ arg'span) !maybeRename maybeDef ->
           let goRecv :: AttrAddrSrc -> (AttrKey -> EL'Value -> STM ()) -> STM ()
               goRecv !recvAddr !received =
-                el'ResolveAttrAddr eac recvAddr >>= \case
+                el'ResolveAttrAddr eas recvAddr >>= \case
                   Nothing -> done args kwargs
                   Just !recvKey -> case odTakeOut recvKey kwargs of
                     (Just !kwVal, kwargs') -> do
@@ -777,7 +778,7 @@ el'AnalyzeStmt
 
       recvOne :: AttrAddrSrc -> EL'Value -> STM ()
       recvOne addr@(AttrAddrSrc _ !addr'span) !v =
-        el'ResolveAttrAddr eac addr >>= \case
+        el'ResolveAttrAddr eas addr >>= \case
           Nothing -> return ()
           Just !k -> recvOne' addr'span k v
 
@@ -941,7 +942,7 @@ el'AnalyzeExpr
          )
   !exit
   !eas =
-    el'ResolveAttrAddr eac addr >>= \case
+    el'ResolveAttrAddr eas addr >>= \case
       Nothing -> returnAsExpr
       Just (AttrByName "_") -> do
         el'LogDiag
@@ -952,7 +953,7 @@ el'AnalyzeExpr
           "referencing underscore"
         el'Exit eas exit $ EL'Const nil
       Just !refKey ->
-        el'ResolveContextAttr eac refKey >>= \case
+        el'ResolveContextAttr eas refKey >>= \case
           Nothing -> returnAsExpr
           Just !attrDef -> do
             let !attrRef = EL'AttrRef addr attrDef
@@ -980,7 +981,7 @@ el'AnalyzeExpr
   !eas = el'RunTx eas $
     el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal _eas -> case tgtVal of
       EL'ObjVal !obj ->
-        el'ResolveAttrAddr eac addr >>= \case
+        el'ResolveAttrAddr eas addr >>= \case
           Nothing -> returnAsExpr
           Just !refKey -> case odLookup refKey (el'obj'attrs obj) of
             Nothing -> do
@@ -999,7 +1000,7 @@ el'AnalyzeExpr
 
               el'Exit eas exit $ el'attr'def'value attrDef
       EL'ClsVal !cls ->
-        el'ResolveAttrAddr eac addr >>= \case
+        el'ResolveAttrAddr eas addr >>= \case
           Nothing -> returnAsExpr
           Just !refKey -> case odLookup
             refKey
@@ -1048,7 +1049,7 @@ el'AnalyzeExpr
       el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> do
         case lhExpr of
           ExprSrc (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span))) _ ->
-            el'ResolveAttrAddr eac addr >>= \case
+            el'ResolveAttrAddr eas addr >>= \case
               Nothing -> returnAsExpr
               Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
               Just !attrKey -> do
@@ -1114,7 +1115,7 @@ el'AnalyzeExpr
               el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
                 -- TODO add to lh obj attrs for (=) ?
                 --      other cases ?
-                el'ResolveAttrAddr eac addr >> returnAsExpr
+                el'ResolveAttrAddr eas addr >> returnAsExpr
           ExprSrc _ !bad'assign'tgt'span -> do
             el'LogDiag
               diags
@@ -1172,7 +1173,7 @@ el'AnalyzeExpr
     -- annotation
     "::" -> case lhExpr of
       ExprSrc (AttrExpr (DirectRef !addr)) _ ->
-        el'ResolveAttrAddr eac addr >>= \case
+        el'ResolveAttrAddr eas addr >>= \case
           Nothing -> returnAsExpr
           Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
           Just !attrKey -> do
@@ -1470,7 +1471,7 @@ el'AnalyzeExpr
                 "rest-apk-import"
                 "rest apk receiver in import specification"
             RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) ->
-              el'ResolveAttrAddr eac localAddr >>= \case
+              el'ResolveAttrAddr eas localAddr >>= \case
                 Nothing ->
                   -- invalid attr addr, error should have been logged
                   go srcArts rest
@@ -1496,12 +1497,12 @@ el'AnalyzeExpr
             where
               processImp :: AttrAddrSrc -> AttrAddrSrc -> STM ()
               processImp srcAddr@(AttrAddrSrc _ !src'span) !localAddr = do
-                el'ResolveAttrAddr eac localAddr >>= \case
+                el'ResolveAttrAddr eas localAddr >>= \case
                   Nothing ->
                     -- invalid attr addr, error should have been logged
                     go srcArts rest
                   Just !localKey ->
-                    el'ResolveAttrAddr eac srcAddr >>= \case
+                    el'ResolveAttrAddr eas srcAddr >>= \case
                       Nothing ->
                         -- invalid attr addr, error should have been logged
                         go srcArts rest
@@ -1558,7 +1559,7 @@ el'AnalyzeExpr
          )
   !exit
   !eas =
-    el'ResolveAttrAddr eac cls'name >>= \case
+    el'ResolveAttrAddr eas cls'name >>= \case
       Nothing -> el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
       Just !clsName -> do
@@ -1573,7 +1574,7 @@ el'AnalyzeExpr
         !clsRegions <- newTVar []
         !clsSyms <- newTVar []
         let !pwip =
-              EL'RunProc
+              EL'AnaProc
                 clsExts
                 clsExps
                 clsAttrs
@@ -1629,7 +1630,7 @@ el'AnalyzeExpr
                   where
                     defDataField (AttrAddrSrc (NamedAttr "_") _) = go dfs rest
                     defDataField dfAddr@(AttrAddrSrc _ df'name'span) =
-                      el'ResolveAttrAddr eac dfAddr >>= \case
+                      el'ResolveAttrAddr eas dfAddr >>= \case
                         Nothing -> go dfs rest
                         Just !dfKey -> do
                           !dfAnno <- newTVar =<< iopdLookup dfKey clsAnnos
@@ -1809,7 +1810,7 @@ el'AnalyzeExpr
          )
   !exit
   !eas =
-    el'ResolveAttrAddr eac ns'name >>= \case
+    el'ResolveAttrAddr eas ns'name >>= \case
       Nothing -> el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
       Just !nsName -> do
@@ -1822,7 +1823,7 @@ el'AnalyzeExpr
         !nsRegions <- newTVar []
         !nsSyms <- newTVar []
         let !pwip =
-              EL'RunProc
+              EL'AnaProc
                 nsExts
                 nsExps
                 nsAttrs
@@ -1848,7 +1849,7 @@ el'AnalyzeExpr
                 go !argArts [] = nsaExit $ reverse argArts
                 go !argArts (argSndr : rest) = case argSndr of
                   SendKwArg argAddr@(AttrAddrSrc _ !arg'name'span) !argExpr ->
-                    el'ResolveAttrAddr eac argAddr >>= \case
+                    el'ResolveAttrAddr eas argAddr >>= \case
                       Nothing -> go argArts rest
                       Just !argKey -> el'RunTx eas $
                         el'AnalyzeExpr docCmt argExpr $ \ !argVal _eas -> do
@@ -2120,7 +2121,7 @@ el'AnalyzeExpr
             where
               defLoopArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
               defLoopArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
-                el'ResolveAttrAddr eac argAddr >>= \case
+                el'ResolveAttrAddr eas argAddr >>= \case
                   Nothing -> go args rest
                   Just !argKey ->
                     iopdLookup argKey annos >>= newTVar >>= \ !anno ->
@@ -2264,7 +2265,7 @@ el'DefineMethod
     )
   !exit
   !eas =
-    el'ResolveAttrAddr eac mth'name >>= \case
+    el'ResolveAttrAddr eas mth'name >>= \case
       Nothing -> el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
       Just !mthName -> do
@@ -2385,7 +2386,7 @@ el'DefineMethod
             where
               defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
               defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
-                el'ResolveAttrAddr eac argAddr >>= \case
+                el'ResolveAttrAddr eas argAddr >>= \case
                   Nothing -> go args rest
                   Just !argKey ->
                     newTVar Nothing >>= \ !anno ->
@@ -2459,7 +2460,7 @@ el'DefineArrowProc
             where
               defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
               defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
-                el'ResolveAttrAddr eac argAddr >>= \case
+                el'ResolveAttrAddr eas argAddr >>= \case
                   Nothing -> go args rest
                   Just !argKey ->
                     newTVar Nothing >>= \ !anno ->

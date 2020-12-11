@@ -1,11 +1,11 @@
 
 import * 'els/RT'
 
+import * './debug'
+
 export world = MetaWorld()
 
 if debug then {
-  import * 'els/debug'
-
   {
     go elsDebug.replHere()
 
