@@ -85,39 +85,32 @@ createMetaWorldClass !msClass !clsOuterScope =
         el'LocateModule bootstrapWorld "batteries/meta" $
           \ !msMeta -> asModuleResolved bootstrapWorld msMeta $
             \ !resolvedMeta _ets -> do
-              case el'resolution'diags resolvedMeta of
-                [] -> pure ()
-                !resoDiags ->
-                  logger
-                    40 -- error
-                    (Just "<els-meta-world>")
-                    ( ArgsPack
-                        (EdhString . el'diag'message <$> resoDiags)
-                        odEmpty
-                    )
-              runEdhTx etsCtor $
-                asModuleParsed msMeta $
-                  \ !parsedMeta _ets -> do
-                    case el'parsing'diags parsedMeta of
-                      [] -> pure ()
-                      !resoDiags ->
-                        logger
-                          40 -- error
-                          (Just "<els-meta-world>")
-                          ( ArgsPack
-                              (EdhString . el'diag'message <$> resoDiags)
-                              odEmpty
-                          )
-
-                    -- return the world
-                    let !metaRootScope = el'resolved'scope resolvedMeta
-                        !ambient = el'scope'attrs metaRootScope
-                        !elw = EL'World homes ambient
-                    ctorExit $ HostStore (toDyn elw)
+              reportLater msMeta 100 -- TODO need better way to delay this
+              -- return the world
+              let !metaRootScope = el'resolved'scope resolvedMeta
+                  !ambient = el'scope'attrs metaRootScope
+                  !elw = EL'World homes ambient
+              ctorExit $ HostStore (toDyn elw)
       where
         world = edh'prog'world $ edh'thread'prog etsCtor
         console = edh'world'console world
         logger = consoleLogger console
+
+        reportLater :: EL'ModuSlot -> Int -> STM ()
+        reportLater !msRoot !n =
+          if n > 0
+            then runEdhTx etsCtor $ edhContSTM $ reportLater msRoot (n - 1)
+            else do
+              -- log all parsing/resolution diags as error
+              el'WalkParsingDiags msRoot logDiagsAsErr
+              el'WalkResolutionDiags msRoot logDiagsAsErr
+              -- logger 50 (Just "<xxx>") (ArgsPack [EdhString "xxx-xxx"] odEmpty)
+          where
+            logDiagsAsErr !ms !diags = forM_ diags $ \ !diag ->
+              logger
+                40 -- error
+                (Just "<els-meta-world>")
+                (ArgsPack [EdhString $ el'PrettyDiag ms diag] odEmpty)
 
     homesProc :: EdhHostProc
     homesProc !exit !ets = withThisHostObj ets $ \ !elw ->

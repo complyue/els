@@ -246,6 +246,52 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
     !relPath = T.unpack $ el'modu'rel'base msFrom
     !nomSpec = normalizeImportSpec impSpec
 
+-- | walk through all diagnostics for a module, including all its dependencies
+el'WalkResolutionDiags ::
+  EL'ModuSlot ->
+  (EL'ModuSlot -> [EL'Diagnostic] -> STM ()) ->
+  STM ()
+el'WalkResolutionDiags !ms !walker = do
+  tryReadTMVar reso >>= \case
+    Nothing -> return ()
+    Just EL'ModuResolving {} -> return ()
+    Just (EL'ModuResolved !resolved) -> do
+      walker ms $ el'resolution'diags resolved
+      readTVar (el'resolved'dependencies resolved)
+        >>= walkDeps . Map.toList
+  where
+    !reso = el'modu'resolution ms
+    walkDeps :: [(EL'ModuSlot, Bool)] -> STM ()
+    walkDeps [] = return ()
+    walkDeps ((!dep, !hold) : rest) = do
+      when hold $ el'WalkResolutionDiags dep walker
+      walkDeps rest
+
+-- | walk through all diagnostics for a module, including all its dependencies
+el'WalkParsingDiags ::
+  EL'ModuSlot ->
+  (EL'ModuSlot -> [EL'Diagnostic] -> STM ()) ->
+  STM ()
+el'WalkParsingDiags !ms !walker = do
+  tryReadTMVar pars >>= \case
+    Just (EL'ModuParsed !parsed) ->
+      walker ms $ el'parsing'diags parsed
+    _ -> return ()
+  tryReadTMVar reso >>= \case
+    Nothing -> return ()
+    Just EL'ModuResolving {} -> return ()
+    Just (EL'ModuResolved !resolved) ->
+      readTVar (el'resolved'dependencies resolved)
+        >>= walkDeps . Map.toList
+  where
+    !pars = el'modu'parsing ms
+    !reso = el'modu'resolution ms
+    walkDeps :: [(EL'ModuSlot, Bool)] -> STM ()
+    walkDeps [] = return ()
+    walkDeps ((!dep, !hold) : rest) = do
+      when hold $ el'WalkParsingDiags dep walker
+      walkDeps rest
+
 -- | invalidate resolution results of this module and all known dependants
 -- will have parsing result invaliated as well if `srcChanged` is @True@
 el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhProc ()
