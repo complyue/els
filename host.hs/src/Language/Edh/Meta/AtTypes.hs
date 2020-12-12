@@ -170,18 +170,26 @@ el'ResolveAttrAddr _ (AttrAddrSrc (QuaintAttr !attrName) _) =
   return $ Just $ AttrByName attrName
 el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
   el'ResolveContextAttr eas (AttrByName symName) >>= \case
-    Nothing -> return Nothing
+    Nothing -> do
+      el'LogDiag
+        diags
+        el'Error
+        addr'span
+        "bad-attr-ref"
+        "no such attribute defined"
+      return Nothing
     Just !def -> case el'UltimateValue def of
-      EL'Const (EdhSymbol !symVal) -> return $ Just $ AttrBySym symVal
-      EL'Const (EdhString !nameVal) -> return $ Just $ AttrByName nameVal
+      EL'Const (EdhSymbol !symKey) -> return $ Just $ AttrBySym symKey
+      EL'Const (EdhString !nameKey) -> return $ Just $ AttrByName nameKey
       _ -> do
         el'LogDiag
           diags
-          el'Error
+          el'Warning
           addr'span
-          "bad-attr-ref"
-          "no such attribute defined"
-        return Nothing
+          "dyn-attr-ref"
+          "dynamic attribute reference"
+        !dynSym <- mkSymbol "<dynamic-attr-key>"
+        return $ Just $ AttrBySym dynSym
   where
     eac = el'context eas
     diags = el'ctx'diags eac
