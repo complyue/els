@@ -1162,6 +1162,13 @@ el'AnalyzeExpr
                 -- TODO add to lh obj attrs for (=) ?
                 --      other cases ?
                 el'ResolveAttrAddr eas addr >> returnAsExpr
+          ExprSrc
+            (IndexExpr !idxExpr !tgtExpr)
+            _expr'span ->
+              el'RunTx easPure $
+                el'AnalyzeExpr Nothing idxExpr $ \_idxVal ->
+                  el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
+                    returnAsExpr
           ExprSrc _ !bad'assign'tgt'span -> do
             el'LogDiag
               diags

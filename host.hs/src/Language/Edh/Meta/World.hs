@@ -102,14 +102,13 @@ createMetaWorldClass !msClass !clsOuterScope =
             then runEdhTx etsCtor $ edhContSTM $ reportLater msRoot (n - 1)
             else do
               -- log all parsing/resolution diags as error
-              el'WalkParsingDiags msRoot logDiagsAsErr
-              el'WalkResolutionDiags msRoot logDiagsAsErr
-              -- logger 50 (Just "<xxx>") (ArgsPack [EdhString "xxx-xxx"] odEmpty)
+              el'WalkParsingDiags msRoot $ logDiagsAsErr "parsing"
+              el'WalkResolutionDiags msRoot $ logDiagsAsErr "resolution"
           where
-            logDiagsAsErr !ms !diags = forM_ diags $ \ !diag ->
+            logDiagsAsErr !cate !ms !diags = forM_ diags $ \ !diag ->
               logger
                 40 -- error
-                (Just "<els-meta-world>")
+                (Just $ "<els-world: " <> cate <> ">")
                 (ArgsPack [EdhString $ el'PrettyDiag ms diag] odEmpty)
 
     homesProc :: EdhHostProc
