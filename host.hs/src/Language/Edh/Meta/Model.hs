@@ -59,13 +59,11 @@ el'Unnecessary, el'Deprecated :: EL'DiagnosticTag
 el'Unnecessary = 1
 el'Deprecated = 2
 
-el'PrettyDiag :: EL'ModuSlot -> EL'Diagnostic -> Text
-el'PrettyDiag !ms !diag =
+el'PrettyLoc :: EL'ModuSlot -> EL'Diagnostic -> Text
+el'PrettyLoc !ms !diag =
   prettySrcRange
     (el'modu'doc ms)
     (el'diag'range diag)
-    <> "\n"
-    <> el'diag'message diag
 
 -- Edh module files are organized into a hierarchy of Edh homes, they can import
 -- eachothers, where cyclic imports are allowed, but each module is evaluated

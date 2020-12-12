@@ -102,14 +102,26 @@ createMetaWorldClass !msClass !clsOuterScope =
             then runEdhTx etsCtor $ edhContSTM $ reportLater msRoot (n - 1)
             else do
               -- log all parsing/resolution diags as error
-              el'WalkParsingDiags msRoot $ logDiagsAsErr "parsing"
-              el'WalkResolutionDiags msRoot $ logDiagsAsErr "resolution"
+              el'WalkParsingDiags msRoot $ logDiagsAsErr "Đ syntax"
+              el'WalkResolutionDiags msRoot $ logDiagsAsErr "Đ semantics"
           where
             logDiagsAsErr !cate !ms !diags = forM_ diags $ \ !diag ->
-              logger
-                40 -- error
-                (Just $ "<els-world: " <> cate <> ">")
-                (ArgsPack [EdhString $ el'PrettyDiag ms diag] odEmpty)
+              let !severity = case el'diag'severity diag of
+                    -- TODO does PatternSynonyms worth its weight for here?
+                    --      EL'DiagSeverity will need to be a newtype then
+                    1 -> 40 -- error
+                    2 -> 30 -- warning
+                    3 -> 20 -- information
+                    4 -> 10 -- hint -> debug
+                    _ -> 30 -- others unknown
+               in logger
+                    severity
+                    (Just $ el'PrettyLoc ms diag)
+                    ( ArgsPack
+                        [ EdhString $ cate <> ": " <> el'diag'message diag
+                        ]
+                        odEmpty
+                    )
 
     homesProc :: EdhHostProc
     homesProc !exit !ets = withThisHostObj ets $ \ !elw ->
