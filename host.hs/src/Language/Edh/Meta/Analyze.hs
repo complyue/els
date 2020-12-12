@@ -91,10 +91,6 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
           Nothing -> do
             !parsing <- newEmptyTMVar
             !resolution <- newEmptyTMVar
-            -- !exports <- newEmptyTMVar
-            -- !exps'upd <- newBroadcastTChan
-            -- !dependants <- newTVar Map.empty
-            -- !dependencies <- newTVar Map.empty
             let !ms =
                   EL'ModuSlot
                     home
@@ -102,10 +98,6 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                     (SrcDoc absFile)
                     parsing
                     resolution
-            -- exports
-            -- exps'upd
-            -- dependants
-            -- dependencies
             putTMVar mmVar (Map.insert name ms mm)
             exitEdh ets exit ms
       where
@@ -207,9 +199,7 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                               Right
                                 ( T.pack homeDir,
                                   fromJust $
-                                    T.stripSuffix ".edh" $
-                                      T.pack
-                                        relPath,
+                                    T.stripSuffix ".edh" $ T.pack relPath,
                                   T.pack (takeDirectory relPath),
                                   T.pack absFile
                                 )
@@ -235,15 +225,17 @@ el'LocateImportee ::
   Text ->
   EL'Analysis (Either Text EL'ModuSlot)
 el'LocateImportee !msFrom !impSpec !exit !eas =
-  unsafeIOToSTM (locateEdhModule nomSpec relPath) >>= \case
-    Left !err -> el'Exit eas exit $ Left err
-    Right (_moduName, _moduPath, !moduFile) -> runEdhTx ets $
-      el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
-        el'Exit eas exit $ Right ms
+  unsafeIOToSTM
+    (locateEdhModule nomSpec $ edhRelativePathFrom $ T.unpack docFile)
+    >>= \case
+      Left !err -> el'Exit eas exit $ Left err
+      Right (_moduName, _moduPath, !moduFile) -> runEdhTx ets $
+        el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
+          el'Exit eas exit $ Right ms
   where
     elw = el'world eas
     ets = el'ets eas
-    !relPath = T.unpack $ el'modu'rel'base msFrom
+    SrcDoc !docFile = el'modu'doc msFrom
     !nomSpec = normalizeImportSpec impSpec
 
 -- | walk through all diagnostics for a module, including all its dependencies
