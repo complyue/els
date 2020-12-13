@@ -81,19 +81,14 @@ data EL'InitModu = EL'InitModu
     -- | 1st appearances of exported artifacts in the direct scope and nested
     -- (method) scopes (i.e. module exports), up to time of analysis
     el'modu'exps'wip :: !EL'ArtsWIP,
-    -- | other modules those should be invalidated once this module is changed
+    -- | dependencies modules pending to be imported, there may be re-exports
+    -- not yet appeared in `el'modu'exps'wip`, before this map returns empty
     --
-    -- note a dependant may stop depending on this module due to src changes,
-    -- so cross checking of its `el'modu'dependencies` should be performed and
-    -- have this `el'modu'dependants` updated upon such changes
-    el'modu'dependants :: !(TVar (HashMap EL'ModuSlot Bool)),
-    -- | other modules this module depends on
-    --
-    -- a dependency module's `el'modu'dependants` should be updated marking
-    -- this module as a dependant as well
-    --
-    -- note after invalidated, re-analysation of this module may install a new
-    -- version of this map reflecting dependencies up-to-date
+    -- this will finally be the `el'pending'imps` field of the
+    -- `EL'ResolvedModule` record
+    el'modu'imps'wip :: !(TVar (HashMap EL'ModuSlot Bool)),
+    -- | this will finally be the `el'resolved'dependencies` field of the
+    -- `EL'ResolvedModule` record
     el'modu'dependencies :: !(TVar (HashMap EL'ModuSlot Bool))
   }
 

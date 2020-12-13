@@ -1,8 +1,11 @@
 module Language.Edh.Meta.World where
 
+-- import Debug.Trace
+
 import Control.Concurrent.STM
 import Control.Monad
 import Data.Dynamic
+import qualified Data.HashMap.Strict as Map
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Vector as V
@@ -84,44 +87,49 @@ createMetaWorldClass !msClass !clsOuterScope =
       runEdhTx etsCtor $
         el'LocateModule bootstrapWorld "batteries/meta" $
           \ !msMeta -> asModuleResolved bootstrapWorld msMeta $
-            \ !resolvedMeta _ets -> do
-              reportLater msMeta 100 -- TODO need better way to delay this
-              -- return the world
-              let !metaRootScope = el'resolved'scope resolvedMeta
-                  !ambient = el'scope'attrs metaRootScope
-                  !elw = EL'World homes ambient
-              ctorExit $ HostStore (toDyn elw)
+            \ !resolvedMeta _ets ->
+              let !piVar = el'pending'imps resolvedMeta
+                  untilMetaFullyLoaded :: STM ()
+                  untilMetaFullyLoaded =
+                    {- HLINT ignore "Redundant <$>" -}
+                    Map.null <$> readTVar piVar >>= \case
+                      False ->
+                        -- not fully loaded yet
+                        runEdhTx etsCtor $ edhContSTM untilMetaFullyLoaded
+                      True -> do
+                        -- log all parsing/resolution diags as error
+                        el'WalkParsingDiags msMeta $
+                          logDiagsAsErr "Đ syntax"
+                        el'WalkResolutionDiags msMeta $
+                          logDiagsAsErr "Đ semantics"
+                        -- return the world
+                        let !metaRootScope = el'resolved'scope resolvedMeta
+                            !ambient = el'scope'attrs metaRootScope
+                            !elw = EL'World homes ambient
+                        ctorExit $ HostStore (toDyn elw)
+               in untilMetaFullyLoaded
       where
         world = edh'prog'world $ edh'thread'prog etsCtor
         console = edh'world'console world
         logger = consoleLogger console
 
-        reportLater :: EL'ModuSlot -> Int -> STM ()
-        reportLater !msRoot !n =
-          if n > 0
-            then runEdhTx etsCtor $ edhContSTM $ reportLater msRoot (n - 1)
-            else do
-              -- log all parsing/resolution diags as error
-              el'WalkParsingDiags msRoot $ logDiagsAsErr "Đ syntax"
-              el'WalkResolutionDiags msRoot $ logDiagsAsErr "Đ semantics"
-          where
-            logDiagsAsErr !cate !ms !diags = forM_ diags $ \ !diag ->
-              let !severity = case el'diag'severity diag of
-                    -- TODO does PatternSynonyms worth its weight for here?
-                    --      EL'DiagSeverity will need to be a newtype then
-                    1 -> 40 -- error
-                    2 -> 30 -- warning
-                    3 -> 20 -- information
-                    4 -> 10 -- hint -> debug
-                    _ -> 30 -- others unknown
-               in logger
-                    severity
-                    (Just $ el'PrettyLoc ms diag)
-                    ( ArgsPack
-                        [ EdhString $ cate <> ": " <> el'diag'message diag
-                        ]
-                        odEmpty
-                    )
+        logDiagsAsErr !cate !ms !diags = forM_ diags $ \ !diag ->
+          let !severity = case el'diag'severity diag of
+                -- TODO does PatternSynonyms worth its weight for here?
+                --      EL'DiagSeverity will need to be a newtype then
+                1 -> 40 -- error
+                2 -> 30 -- warning
+                3 -> 20 -- information
+                4 -> 10 -- hint -> debug
+                _ -> 30 -- others unknown
+           in logger
+                severity
+                (Just $ el'PrettyLoc ms diag)
+                ( ArgsPack
+                    [ EdhString $ cate <> ": " <> el'diag'message diag
+                    ]
+                    odEmpty
+                )
 
     homesProc :: EdhHostProc
     homesProc !exit !ets = withThisHostObj ets $ \ !elw ->

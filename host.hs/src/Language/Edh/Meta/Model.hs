@@ -182,22 +182,30 @@ data EL'ResolvedModule = EL'ResolvedModule
     -- | exports from this module, mutated upon any origin module of re-exports
     -- get resolved
     el'resolved'exports :: !EL'ArtsWIP,
-    -- | other modules those should be invalidated once this module is changed
-    --
-    -- note a dependant may stop depending on this module due to src changes,
-    -- so cross checking of its `el'resolved'dependencies` should be performed and
-    -- have this `el'resolved'dependants` updated upon such changes
-    el'resolved'dependants :: !(TVar (HashMap EL'ModuSlot Bool)),
+    -- | dependencies modules pending to be imported, there may be re-exports
+    -- not yet appeared in `el'resolved'exports`, before this map returns empty
+    el'pending'imps :: !(TVar (HashMap EL'ModuSlot Bool)),
     -- | other modules this module depends on
     --
     -- a dependency module's `el'resolved'dependants` should be updated marking
     -- this module as a dependant as well
-    --
-    -- note after invalidated, re-analysation of this module may install a new
-    -- version of this map reflecting dependencies up-to-date
-    el'resolved'dependencies :: !(TVar (HashMap EL'ModuSlot Bool)),
+    el'resolved'dependencies :: !(HashMap EL'ModuSlot Bool),
     -- | diagnostics generated from this stage of analysis
-    el'resolution'diags :: ![EL'Diagnostic]
+    el'resolution'diags :: ![EL'Diagnostic],
+    -- | other modules depending on this module, and resolved with this revision
+    -- of resolution for this module
+    --
+    -- the depdneant modules listed in this field should be invalidated alone
+    -- with this module upon invalidation
+    --
+    -- note a dependant may stop depending on this module due to src changes,
+    -- so cross checking of its `el'resolved'dependencies` should be performed
+    -- and honored, to avoid incorrect result due to race condition
+    --
+    -- TODO invalidaton of a dependency module tends to be a one-shot action,
+    --      if a dependant is added after the invalidation is done, need some
+    --      way to warrant proper invalidation of that dependant module.
+    el'resolved'dependants :: !(TVar (HashMap EL'ModuSlot Bool))
   }
 
 -- All attributes are local to a context module, with respects to both defining

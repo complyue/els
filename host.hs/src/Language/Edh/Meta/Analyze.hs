@@ -47,33 +47,30 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
         edhContIO $
           fsSearch >>= \case
             Left !err -> atomically $ throwEdh ets UsageError err
-            Right (Left (!homePath, !scriptName, !relPath, !absFile)) ->
+            Right (Left (!homePath, !scriptName, !absFile)) ->
               atomically (prepareHome homePath)
                 -- with 2 separate STM txs
                 >>= atomically
                   . goWith
                     scriptName
-                    relPath
                     absFile
                     el'home'scripts
-            Right (Right (!homePath, !moduName, !relPath, !absFile)) ->
+            Right (Right (!homePath, !moduName, !absFile)) ->
               atomically (prepareHome homePath)
                 -- with 2 separate STM txs
                 >>= atomically
                   . goWith
                     moduName
-                    relPath
                     absFile
                     el'home'modules
   where
     goWith ::
       Text ->
       Text ->
-      Text ->
       (EL'Home -> TMVar (Map.HashMap ModuleName EL'ModuSlot)) ->
       EL'Home ->
       STM ()
-    goWith !name !relPath !absFile !mmField !home =
+    goWith !name !absFile !mmField !home =
       takeTMVar mmVar >>= \ !mm ->
         case Map.lookup name mm of
           Just !ms ->
@@ -94,7 +91,7 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
             let !ms =
                   EL'ModuSlot
                     home
-                    relPath
+                    name
                     (SrcDoc absFile)
                     parsing
                     resolution
@@ -136,8 +133,8 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
         ( Either
             Text
             ( Either
-                (Text, ScriptName, Text, Text)
-                (Text, ModuleName, Text, Text)
+                (Text, ScriptName, Text)
+                (Text, ModuleName, Text)
             )
         )
     fsSearch =
@@ -148,8 +145,8 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                 ( Either
                     Text
                     ( Either
-                        (Text, ScriptName, Text, Text)
-                        (Text, ModuleName, Text, Text)
+                        (Text, ScriptName, Text)
+                        (Text, ModuleName, Text)
                     )
                 )
             go (!dir, !relPath) = case splitDirFile dir of
@@ -160,7 +157,6 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                       Left
                         ( T.pack homeDir,
                           T.pack moduName,
-                          T.pack (dir </> moduName),
                           T.pack absFile
                         )
                 (!moduName, "__init__.edh") ->
@@ -177,7 +173,6 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                               Right
                                 ( T.pack homeDir,
                                   T.pack moduName,
-                                  T.pack (dir </> moduName),
                                   T.pack absFile
                                 )
                 _ ->
@@ -200,7 +195,6 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                                 ( T.pack homeDir,
                                   fromJust $
                                     T.stripSuffix ".edh" $ T.pack relPath,
-                                  T.pack (takeDirectory relPath),
                                   T.pack absFile
                                 )
               (!gpdir, !pdir) ->
@@ -213,9 +207,8 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                     return $
                       Right $
                         Left
-                          ( T.pack dir,
-                            T.pack relPath,
-                            T.pack (takeDirectory relPath),
+                          ( T.pack gpdir,
+                            T.pack $ pdir </> relPath,
                             T.pack absFile
                           )
          in go $ splitDirFile absFile
@@ -249,8 +242,7 @@ el'WalkResolutionDiags !ms !walker = do
     Just EL'ModuResolving {} -> return ()
     Just (EL'ModuResolved !resolved) -> do
       walker ms $ el'resolution'diags resolved
-      readTVar (el'resolved'dependencies resolved)
-        >>= walkDeps . Map.toList
+      walkDeps $ Map.toList $ el'resolved'dependencies resolved
   where
     !reso = el'modu'resolution ms
     walkDeps :: [(EL'ModuSlot, Bool)] -> STM ()
@@ -266,15 +258,13 @@ el'WalkParsingDiags ::
   STM ()
 el'WalkParsingDiags !ms !walker = do
   tryReadTMVar pars >>= \case
-    Just (EL'ModuParsed !parsed) ->
-      walker ms $ el'parsing'diags parsed
+    Just (EL'ModuParsed !parsed) -> walker ms $ el'parsing'diags parsed
     _ -> return ()
   tryReadTMVar reso >>= \case
     Nothing -> return ()
     Just EL'ModuResolving {} -> return ()
     Just (EL'ModuResolved !resolved) ->
-      readTVar (el'resolved'dependencies resolved)
-        >>= walkDeps . Map.toList
+      walkDeps $ Map.toList $ el'resolved'dependencies resolved
   where
     !pars = el'modu'parsing ms
     !reso = el'modu'resolution ms
@@ -315,20 +305,18 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
               putTMVar (el'modu'resolution dependant) resolving
               go upds rest
             Just (EL'ModuResolved !resolved') ->
-              Map.lookup ms {- HLINT ignore "Redundant <$>" -}
-                <$> readTVar (el'resolved'dependencies resolved')
-                >>= \case
-                  Just True ->
-                    runEdhTx ets $
-                      el'InvalidateModule False dependant $ \_ _ets ->
-                        go upds rest
-                  _ ->
-                    if hold
-                      then
-                        go
-                          ((dependant, False) : upds)
-                          rest
-                      else go upds rest
+              case Map.lookup ms (el'resolved'dependencies resolved') of
+                Just True ->
+                  runEdhTx ets $
+                    el'InvalidateModule False dependant $ \_ _ets ->
+                      go upds rest
+                _ ->
+                  if hold
+                    then
+                      go
+                        ((dependant, False) : upds)
+                        rest
+                    else go upds rest
 
 -- | obtain the result as the specified module is parsed
 --
@@ -535,8 +523,8 @@ asModuleResolved !world !ms !exit !ets =
           EdhNil -> rethrow nil
           _ -> edhValueDesc etsCatching exv $ \ !exDesc -> do
             !expsVar <- iopdEmpty
+            !pendImpsVar <- newTVar Map.empty
             !dependantsVar <- newTVar Map.empty
-            !dependenciesVar <- newTVar Map.empty
             recover $
               EL'ResolvedModule
                 ( EL'Scope
@@ -548,14 +536,15 @@ asModuleResolved !world !ms !exit !ets =
                     V.empty
                 )
                 expsVar
-                dependantsVar
-                dependenciesVar
+                pendImpsVar
+                Map.empty
                 [ el'Diag
                     el'Error
                     noSrcRange
                     "resolve-err"
                     exDesc
                 ]
+                dependantsVar
 
 resolveParsedModule ::
   EL'World ->
@@ -566,6 +555,7 @@ resolveParsedModule !world !ms !body !exit !ets = do
   !diagsVar <- newTVar []
   !moduExts <- newTVar []
   !moduExps <- iopdEmpty
+  !pendImpsVar <- newTVar Map.empty
   !moduDependants <- newTVar Map.empty
   !moduDepencencies <- newTVar Map.empty
   !moduAttrs <- iopdEmpty
@@ -592,7 +582,7 @@ resolveParsedModule !world !ms !body !exit !ets = do
                 ( EL'InitModu
                     moduExts
                     moduExps
-                    moduDependants
+                    pendImpsVar
                     moduDepencencies
                 )
                 pwip,
@@ -612,6 +602,7 @@ resolveParsedModule !world !ms !body !exit !ets = do
   el'RunTx eas $
     el'AnalyzeStmts body $ \_ _eas -> do
       !diags <- readTVar diagsVar
+      !dependencies <- readTVar moduDepencencies
       !scope'attrs <- iopdSnapshot moduAttrs
       !scope'effs <- iopdSnapshot moduEffs
       !innerScopes <- readTVar moduScopes
@@ -630,9 +621,10 @@ resolveParsedModule !world !ms !body !exit !ets = do
         EL'ResolvedModule
           el'scope
           moduExps
-          moduDependants
-          moduDepencencies
+          pendImpsVar
+          dependencies
           (reverse diags)
+          moduDependants
   where
     moduEnd :: SrcPos
     moduEnd = go body
@@ -1224,6 +1216,7 @@ el'AnalyzeExpr
           Just !attrKey -> do
             let !attrAnno = EL'AttrAnno rhExpr docCmt
             iopdInsert attrKey attrAnno (el'scope'annos'wip pwip)
+            el'Exit eas exit $ EL'Const nil
       ExprSrc _ !bad'anno'span -> do
         el'LogDiag
           diags
@@ -1361,19 +1354,29 @@ el'AnalyzeExpr
               "moduleless-import"
               "import from non-module context"
             el'Exit eas exit $ EL'Const nil
-          Just (!msImporter, _miImporter) -> el'RunTx eas $
+          Just (!msImporter, !miImporter) -> el'RunTx eas $
             el'LocateImportee msImporter litSpec $ \ !impResult _eas ->
               case impResult of
                 Left !err -> do
                   el'LogDiag diags el'Error spec'span "err-import" err
                   el'Exit eas exit $ EL'Const nil
                 Right !msImportee -> do
+                  -- record as a dependency
+                  modifyTVar' (el'modu'dependencies miImporter) $
+                    Map.insert msImportee True
+                  -- record as modu pending imported
+                  modifyTVar' (el'modu'imps'wip miImporter) $
+                    Map.insert msImportee True
+                  -- schedule importing after importee resolved
                   !chkExp <- chkExport
                   runEdhTx ets $
-                    asModuleResolved world msImportee $ \ !resolved _ets ->
+                    asModuleResolved world msImportee $ \ !resolved _ets -> do
                       -- TODO find mechanism in LSP to report diags discovered
                       -- here asynchronously, to not missing them
                       impIntoScope chkExp msImportee resolved argsRcvr
+                      -- mark module finished importing
+                      modifyTVar' (el'modu'imps'wip miImporter) $
+                        Map.delete msImportee
                   -- above can finish synchronously or asynchronously, return
                   -- the importee module now anyway, as waiting for the
                   -- resolved record is deadlock prone here, in case of cyclic
@@ -1419,13 +1422,11 @@ el'AnalyzeExpr
       impIntoScope !chkExp !srcModu !srcResolved !asr = do
         case el'ContextModule eac of
           Nothing -> pure ()
-          Just (!localModu, !localInit) -> do
+          Just (!localModu, _localInit) -> do
             modifyTVar' (el'resolved'dependants srcResolved) $
               Map.insert localModu True
-            modifyTVar' (el'modu'dependencies localInit) $
-              Map.insert srcModu True
         odMap (EL'External srcModu)
-          <$> iopdSnapshot
+          <$> iopdSnapshot {- HLINT ignore "Redundant <$>" -}
             (el'resolved'exports srcResolved)
             >>= \ !srcArts -> do
               case asr of
