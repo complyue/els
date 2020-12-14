@@ -4,6 +4,7 @@
  #}
 export {
   port = 1707
-  port'max = 2700
+  port'max = 1707
+  # port'max = 2700
   addr = '127.0.0.1'
 }

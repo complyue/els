@@ -2,7 +2,7 @@
 import ( elsDebug, **_ ) 'els/debug'
 
 
-data TxtDocWithFile ( absFilePath ) {
+export data TxtDocWithFile ( absFilePath ) {
 
   method __match__ ( textDocument ) case textDocument[ 'uri' ] of {
     { URI( scheme, path ) } | scheme is 'file' -> {

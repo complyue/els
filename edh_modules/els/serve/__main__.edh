@@ -63,7 +63,7 @@ defer {
       'positional args ignored with keyword args present' )
     outDict = {
       'method': mth,
-      'params': objParams or arrayParams or nil, # note nil deletes the entry
+      'params': objectParams or arrayParams or nil, # note nil deletes the entry
     }
     postOnePkt( json$ outDict )
   }
@@ -221,6 +221,7 @@ while eol() is false {
       # try call the designated lsp method
       mth(** args )
     } $=> { exc } -> {
+      console.debug<| desc( exc )
       # report back for an uncaught exception as internal error
       postOnePkt( json$ {
           'id': rpcIn[ 'id' ],
