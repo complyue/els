@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+while true; do 
+	stack run els
+	echo 'els quitted, restarting ...'
+	sleep 1
+done

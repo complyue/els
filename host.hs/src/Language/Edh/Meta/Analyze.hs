@@ -420,6 +420,7 @@ el'FillModuleSource !moduSource !ms !exit !ets = do
           _ ->
             -- invalidated meanwhile
             return ()
+
         -- trigger post actions
         -- note they should just enque a proper Edh task to
         -- their respective initiating thread's task queue, so
@@ -452,6 +453,7 @@ el'FillModuleSource !moduSource !ms !exit !ets = do
 
 parseModuleSource :: Text -> SrcDoc -> EdhProc EL'ParsedModule
 parseModuleSource !moduSource (SrcDoc !moduFile) !exit !ets =
+  -- TODO use partial parser, and gather diags
   parseEdh world moduFile moduSource >>= \case
     Left !err -> do
       let !msg = T.pack $ errorBundlePretty err
@@ -1220,7 +1222,7 @@ el'AnalyzeExpr
       ExprSrc _ !bad'anno'span -> do
         el'LogDiag
           diags
-          el'Error
+          el'Warning
           bad'anno'span
           "bad-anno"
           "bad annotation"

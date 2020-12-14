@@ -113,11 +113,14 @@ diag2Json
           (AttrByName "source", EdhString source),
           (AttrByName "message", EdhString msg),
           ( AttrByName "tags",
-            EdhArgsPack
-              ( ArgsPack
-                  (EdhDecimal . fromIntegral <$> tags)
-                  odEmpty
-              )
+            if null tags
+              then nil
+              else
+                EdhArgsPack
+                  ( ArgsPack
+                      (EdhDecimal . fromIntegral <$> tags)
+                      odEmpty
+                  )
           )
         ]
 

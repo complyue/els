@@ -22,7 +22,13 @@ pass # notification, don't mandate a response
 
 export method @'textDocument/didChange' ( textDocument, contentChanges, ***_ ) {
   case contentChanges of {
-    { chgContent :> moreChgs } | null( moreChgs ) -> { pass }
+    { chgContent :> moreChgs } | null( moreChgs )
+    -> case chgContent[ 'text' ] of {
+      { fullTxt } | type( fullTxt ) is StringType
+      -> { pass }
+      error( 'no text in the sole change' )
+    }
+
     # only Full change is supported by far
     error( 'too many changes' )
   }
@@ -31,7 +37,7 @@ export method @'textDocument/didChange' ( textDocument, contentChanges, ***_ ) {
   # to not block subsequent requests from the lsp client
   case textDocument of { TxtDocWithFile ( absFilePath ) } -> { go {
       moduChgd = world.locateByFile( absFilePath )
-      moduChgd.fill( chgContent )
+      moduChgd.fill( fullTxt )
       perform lspNotify( 'textDocument/publishDiagnostics',
         uri= textDocument[ 'uri' ],
         version= textDocument[ 'version' ],

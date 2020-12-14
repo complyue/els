@@ -1,5 +1,6 @@
 {
   "edh.terminal.cmdl": [
+    "els-forever",
     "stack run els",
     "cabal run haskit:els"
   ]
