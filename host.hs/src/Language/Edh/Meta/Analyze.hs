@@ -398,28 +398,27 @@ parseModuleOnDisk moduDoc@(SrcDoc !moduFile) !exit !ets =
 --
 -- todo track document version to cancel parsing attempts for old versions
 el'FillModuleSource :: Text -> EL'ModuSlot -> EdhProc EL'ParsedModule
-el'FillModuleSource !moduSource !ms !exit !ets = do
-  void $ tryTakeTMVar parsingVar
-  !acts <- newTVar []
-  -- the put will retry if parsingVar has been changed by others
-  -- concurrently, so no duplicate effort would incur here
-  putTMVar parsingVar (EL'ModuParsing acts)
-
-  -- invalidate resolution results of this module and all dependants
+el'FillModuleSource !moduSource !ms !exit !ets =
+  -- invalidate parsing/resolution results of this module and all dependants
   runEdhTx ets $
-    el'InvalidateModule True ms $ \() _ets ->
+    el'InvalidateModule True ms $ \() _ets -> do
+      void $ tryTakeTMVar parsingVar
+      -- now parse the supplied source and get the result,
+      -- try install only if it's still up-to-date
+      !acts <- newTVar []
+      -- the put will retry if parsingVar has been changed by others
+      -- concurrently, so no duplicate effort would incur here
+      putTMVar parsingVar (EL'ModuParsing acts)
+
       -- parse & install the result
       doParseModule $ \ !parsed -> do
         tryTakeTMVar parsingVar >>= \case
           Just (EL'ModuParsing acts')
-            | acts' == acts ->
-              putTMVar parsingVar $ EL'ModuParsed parsed
-          Just !other ->
-            -- invalidated & new analysation wip
-            putTMVar parsingVar other
-          _ ->
-            -- invalidated meanwhile
-            return ()
+            | acts' == acts -> putTMVar parsingVar $ EL'ModuParsed parsed
+          -- invalidated & new analysation wip
+          Just !other -> putTMVar parsingVar other
+          -- invalidated meanwhile
+          _ -> return ()
 
         -- trigger post actions
         -- note they should just enque a proper Edh task to
