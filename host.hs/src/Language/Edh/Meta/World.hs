@@ -23,7 +23,8 @@ createMetaModuleClass !clsOuterScope =
         sequence $
           [ (AttrByName nm,) <$> mkHostProc clsOuterScope vc nm hp
             | (nm, vc, hp) <-
-                [ ("invalidate", EdhMethod, wrapHostProc invalidateProc)
+                [ ("invalidate", EdhMethod, wrapHostProc invalidateProc),
+                  ("fill", EdhMethod, wrapHostProc fillProc)
                 ]
           ]
             ++ [ (AttrByName nm,)
@@ -60,6 +61,13 @@ createMetaModuleClass !clsOuterScope =
           el'InvalidateModule srcChanged ms $
             \() _ets -> exitEdh ets exit nil
 
+    fillProc :: "srcOTF" !: Text -> EdhHostProc
+    fillProc (mandatoryArg -> !srcOTF) !exit !ets =
+      withThisHostObj ets $ \ !ms ->
+        runEdhTx ets $
+          el'FillModuleSource srcOTF ms $
+            \_parsed _ets -> exitEdh ets exit nil
+
 createMetaWorldClass :: Object -> Scope -> STM Object
 createMetaWorldClass !msClass !clsOuterScope =
   mkHostClass clsOuterScope "MetaWorld" (allocEdhObj elwAllocator) [] $
@@ -69,7 +77,8 @@ createMetaWorldClass !msClass !clsOuterScope =
           [ (AttrByName nm,) <$> mkHostProc clsOuterScope vc nm hp
             | (nm, vc, hp) <-
                 [ ("locate", EdhMethod, wrapHostProc locateProc),
-                  ("locateByFile", EdhMethod, wrapHostProc locateByFileProc)
+                  ("locateByFile", EdhMethod, wrapHostProc locateByFileProc),
+                  ("diags", EdhMethod, wrapHostProc diagsProc)
                 ]
           ]
             ++ [ (AttrByName nm,)
@@ -152,3 +161,18 @@ createMetaWorldClass !msClass !clsOuterScope =
           el'LocateModuleByFile elw moduFile $ \ !ms _ets ->
             edhCreateHostObj msClass (toDyn ms) []
               >>= \ !msObj -> exitEdh ets exit $ EdhObject msObj
+
+    diagsProc :: "modu" !: EL'ModuSlot -> EdhHostProc
+    diagsProc (mandatoryArg -> !ms) !exit !ets =
+      withThisHostObj ets $ \ !elw ->
+        runEdhTx ets $
+          asModuleResolved elw ms $ \ !resolved _ets -> do
+            !diags <-
+              fmap (el'resolution'diags resolved ++) $
+                tryReadTMVar (el'modu'parsing ms) >>= \case
+                  Just (EL'ModuParsed !parsed) ->
+                    return $ el'parsing'diags parsed
+                  _ -> return []
+            exitEdh ets exit $
+              EdhArgsPack . flip ArgsPack odEmpty $
+                flip fmap diags $ EdhArgsPack . diag2Json

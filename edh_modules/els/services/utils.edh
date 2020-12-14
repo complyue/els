@@ -1,0 +1,22 @@
+
+import ( elsDebug, **_ ) 'els/debug'
+
+
+data TxtDocWithFile ( absFilePath ) {
+
+  method __match__ ( textDocument ) case textDocument[ 'uri' ] of {
+    { URI( scheme, path ) } | scheme is 'file' -> {
+      return TxtDocWithFile( path )
+    }
+    debug and elsDebug.replHere()
+    return void perform lspError( 'unsupported uri' )
+  }
+
+  method __json__() case this.absFilePath of {
+    { '/' >@ _ } -> { return {
+        'uri': 'file://' ++ this.absFilePath,
+    } }
+    error( 'path not absolute: ' ++ this.absFilePath )
+  }
+
+}

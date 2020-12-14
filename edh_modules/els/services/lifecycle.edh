@@ -11,7 +11,9 @@ export method initialize(
 
   console.debug<| 'Initializing els for client ' ++ clientInfo
 
-  # uncomment to inspect the parameters and raw request data with a web REPL
+  # uncomment to inspect the parameters and raw request data with a web REPL,
+  # the launch link will be logged to stderr
+  #
   # req = perform lspRequest
   # elsDebug.replHere()
 
@@ -19,16 +21,14 @@ export method initialize(
       'capabilities' : {
 
         'textDocumentSync' : {
+          'openClose' : true,
           'change' : 1, # 0/1/2 None/Full/Incremental
-          'save' : {
-            'includeText': false,
-          },
-          'openClose' : false,
+          'save' : { 'includeText': false, },
           'willSave' : false,
           'willSaveWaitUntil' : false,
         },
 
-        'foldingRangeProvider' : true,
+        # 'foldingRangeProvider' : true,
 
         # TODO impl. them
         # 'documentSymbolProvider' : false,

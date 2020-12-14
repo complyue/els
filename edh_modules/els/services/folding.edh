@@ -1,27 +1,15 @@
 
-import * 'els/debug'
+import * 'els'
 
-import ( wipDocs, **_ ) './docsync'
+import * './utils'
 
 
-export method @'textDocument/foldingRange' ( textDocument, ***_ ) {
-  case textDocument[ 'uri' ] of {
-    { URI( scheme, path ) } | scheme is 'file' -> { pass }
-    debug and elsDebug.replHere()
-    perform lspError( 'unsupported uri' )
-    return nil
-  }
+export method @'textDocument/foldingRange' ( textDocument, ***_ )
+case textDocument of { TxtDocWithFile ( absFilePath ) } -> {
+  moduOpen = world.locateByFile( absFilePath )
 
-  fileContent = case wipDocs[ path ] of {
-    { cacheEntry } -> { cacheEntry[ 'content' ] }
-    # TODO LS impl this
-    # readFile( path )
-  }
 
-  # TODO parse fileContent
-  console.info<| 'to parse for folding ranges ' ++ path
   perform lspRespond( [
-      { 'startLine': 3, 'startCharacter': 0,
-        'endLine': 7, 'endCharacter': 0, }
-  ] )
+      {}
+  ])
 }

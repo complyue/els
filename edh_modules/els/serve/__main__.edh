@@ -6,7 +6,11 @@
  # VSCode workspace session.
  #}
 
-import * 'els/debug'
+import * 'els'
+effect import * 'els/effects'
+
+# pull-in all service methods
+import (** allMethods ) 'els/services'
 
 
 # mocking artifacts those should have been implanted by host
@@ -52,6 +56,19 @@ defer {
 {
 
   {##
+   # for a service method to post a lsp notification
+   #}
+  effect method lspNotify( mth, *arrayParams, **objectParams ) {
+    objectParams and arrayParams and ( console.warn<|
+      'positional args ignored with keyword args present' )
+    outDict = {
+      'method': mth,
+      'params': objParams or arrayParams or nil, # note nil deletes the entry
+    }
+    postOnePkt( json$ outDict )
+  }
+
+  {##
    # for a service method to post a lsp response
    #}
   effect method lspRespond( result, **headers ) {
@@ -94,9 +111,6 @@ defer {
   effect method lspReceiveResponse( idReq, listener ) {
     responseListeners[ idReq ] = listener
   }
-
-  # pull-in all service methods
-  import (** allMethods ) 'els/services'
 
 } $=> { exc } -> {
   console.error<| 'Failed preparing els service environment: ' ++ desc( exc )

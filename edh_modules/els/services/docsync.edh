@@ -1,49 +1,45 @@
 
-import * 'els/debug'
+import ( world, elsDebug, **_ ) 'els'
+
+import * './utils'
 
 
-export wipDocs = {}
+export method @'textDocument/didOpen' ( textDocument, ***_ )
+# try parse & resolve then publish the diagnostics asynchronously,
+# to not block subsequent requests from the lsp client
+case textDocument of { TxtDocWithFile ( absFilePath ) } -> { go {
+    moduOpen = world.locateByFile( absFilePath )
+    perform lspNotify( 'textDocument/publishDiagnostics',
+      uri= textDocument[ 'uri' ],
+      version= textDocument[ 'version' ],
+      diagnostics= world.diags( moduOpen ),
+    )
+} }
+
+export method @'textDocument/didClose' ( textDocument, ***_ )
+pass # notification, don't mandate a response
 
 
-export method @'textDocument/didOpen' ( textDocument, ***_ ) {
-  # elsDebug.replHere()
-}
-
-export method @'textDocument/didSave' ( textDocument, ***_ ) {
-  case textDocument[ 'uri' ] of {
-    { URI( scheme, path ) } | scheme is 'file' -> { pass }
-    debug and elsDebug.replHere()
-    return void perform lspError( 'unsupported uri' )
-  }
-
-  console.debug<| 'forgetting ' ++ path ++ ' as it get saved.'
-  # forget about it
-  wipDocs[ path ] = nil
-}
-
-export method @'textDocument/didChange' ( textDocument,
-  contentChanges, ***_
-) {
-  case textDocument[ 'uri' ] of {
-    { URI( scheme, path ) } | scheme is 'file' -> { pass }
-    debug and elsDebug.replHere()
-    return void perform lspError( 'unsupported uri' )
-  }
-
-  version = textDocument[ 'version' ] or 0
+export method @'textDocument/didChange' ( textDocument, contentChanges, ***_ ) {
   case contentChanges of {
-    { chg :> moreChgs } | null( moreChgs ) -> { pass }
+    { chgContent :> moreChgs } | null( moreChgs ) -> { pass }
     # only Full change is supported by far
-    return void perform lspError( 'too many changes' )
-  }
-  fileContent = chg[ 'text' ] # should be the only field in case of Full change
-
-  ai case wipDocs[ path ] of {
-    { entry } -> { pass }
-    nil -> wipDocs[ path ] = entry = {}
-  }
-  entry =< {
-    'version': version, 'content': fileContent,
+    error( 'too many changes' )
   }
 
+  # try parse & resolve then publish the diagnostics asynchronously,
+  # to not block subsequent requests from the lsp client
+  case textDocument of { TxtDocWithFile ( absFilePath ) } -> { go {
+      moduChgd = world.locateByFile( absFilePath )
+      moduChgd.fill( chgContent )
+      perform lspNotify( 'textDocument/publishDiagnostics',
+        uri= textDocument[ 'uri' ],
+        version= textDocument[ 'version' ],
+        diagnostics= world.diags( moduChgd ),
+      )
+  } }
 }
+
+
+export method @'textDocument/didSave' ( textDocument, ***_ )
+pass # notification, don't mandate a response

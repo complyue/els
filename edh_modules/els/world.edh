@@ -1,5 +1,5 @@
 
-import * 'els/RT'
+import ( MetaWorld, **_ ) 'els/RT'
 
 import * './debug'
 
@@ -9,7 +9,7 @@ if debug then {
   {
     go elsDebug.replHere()
 
-    thisModule = world.locateByFile( __file__ )
+    # thisModule = world.locateByFile( __file__ )
   } $=> { exc } -> {
     console.error<| desc( exc )
   }
