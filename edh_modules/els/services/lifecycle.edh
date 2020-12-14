@@ -28,15 +28,15 @@ export method initialize(
           'willSaveWaitUntil' : false,
         },
 
-        # 'foldingRangeProvider' : true,
-
         # TODO impl. them
+
+        # 'definitionProvider' : true,
+        # 'referencesProvider' : true,
+        # 'hoverProvider' : false,
+        # 'foldingRangeProvider' : false,
+
         # 'documentSymbolProvider' : false,
         # 'workspaceSymbolProvider' : false,
-        # 'hoverProvider' : false,
-        # 'declarationProvider' : false,
-        # 'definitionProvider' : false,
-        # 'referencesProvider' : false,
 
         # todo impl. these ?
         # 'renameProvider' : false,
