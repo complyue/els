@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# this means forever try to build and run an els from local source, assuming
+# port'max is set to same as port, then we should finally bind to the single
+# specified port to serve lsp
+
 while true; do 
 	stack run els
 	echo 'els quitted, restarting ...'
