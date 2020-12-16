@@ -11,9 +11,9 @@ export method @'textDocument/definition' (
   # to not block subsequent requests from the lsp client
   case textDocument of { TxtDocFile ( absFilePath ) } ->
   case position of { Position( line, character ) } ->
-  return { go {
-      modu = world.locateByFile( absFilePath )
-      perform lspRespond( world.defi( modu, line, character ) )
-  } }
+  { return { go {
+        modu = world.locateByFile( absFilePath )
+        perform lspRespond( world.defi( modu, line, character ) )
+  } } }
   error( 'unexpected lsp params' )
 }

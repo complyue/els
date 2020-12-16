@@ -483,12 +483,23 @@ instance Show EL'Artifacts where
 data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
   deriving (Show)
 
-locateSymbolInScope :: EL'Scope -> Int -> Int -> Maybe EL'AttrSym
-locateSymbolInScope !s !line !char = case srcPosCmp2Range p $ el'scope'span s of
-  EQ -> locateSym $ V.toList $ el'scope'symbols s
-  _ -> Nothing
+locateSymbolInScope :: Int -> Int -> EL'Scope -> Maybe EL'AttrSym
+locateSymbolInScope !line !char = searchScope
   where
     !p = SrcPos line char
+
+    searchScope :: EL'Scope -> Maybe EL'AttrSym
+    searchScope !s = case srcPosCmp2Range p $ el'scope'span s of
+      EQ -> case locateSym $ V.toList $ el'scope'symbols s of
+        gotIt@Just {} -> gotIt
+        Nothing -> searchInners $ V.toList $ el'scope'inner'scopes s
+      _ -> Nothing
+
+    searchInners :: [EL'Scope] -> Maybe EL'AttrSym
+    searchInners [] = Nothing
+    searchInners (i : rest) = case searchScope i of
+      gotIt@Just {} -> gotIt
+      Nothing -> searchInners rest
 
     -- TODO use binary search for performance on large scopes
     locateSym :: [EL'AttrSym] -> Maybe EL'AttrSym
