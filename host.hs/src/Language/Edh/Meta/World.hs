@@ -79,7 +79,8 @@ createMetaWorldClass !msClass !clsOuterScope =
             | (nm, vc, hp) <-
                 [ ("locate", EdhMethod, wrapHostProc locateProc),
                   ("locateByFile", EdhMethod, wrapHostProc locateByFileProc),
-                  ("diags", EdhMethod, wrapHostProc diagsProc)
+                  ("diags", EdhMethod, wrapHostProc diagsProc),
+                  ("defi", EdhMethod, wrapHostProc defiProc)
                 ]
           ]
             ++ [ (AttrByName nm,)
@@ -175,3 +176,22 @@ createMetaWorldClass !msClass !clsOuterScope =
                     return $ el'parsing'diags parsed
                   _ -> return []
             exitEdh ets exit $ jsonArray $ fmap toLSP diags
+
+    defiProc ::
+      "modu" !: EL'ModuSlot ->
+      "line" !: Int ->
+      "char" !: Int ->
+      EdhHostProc
+    defiProc
+      (mandatoryArg -> !ms)
+      (mandatoryArg -> !line)
+      (mandatoryArg -> !char)
+      !exit
+      !ets =
+        withThisHostObj ets $ \ !elw ->
+          runEdhTx ets $
+            asModuleResolved elw ms $ \ !resolved _ets ->
+              case locateSymbolInScope (el'resolved'scope resolved) line char of
+                Nothing -> exitEdh ets exit nil
+                Just (EL'RefSym !ref) -> exitEdh ets exit $ toLSP (ms, ref)
+                Just (EL'DefSym !def) -> exitEdh ets exit $ toLSP (ms, def)

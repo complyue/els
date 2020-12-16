@@ -5,11 +5,9 @@ import * './utils'
 
 
 export method @'textDocument/foldingRange' ( textDocument, ***_ )
-case textDocument of { TxtDocWithFile ( absFilePath ) } -> {
+case textDocument of { TxtDocFile ( absFilePath ) } -> {
   moduOpen = world.locateByFile( absFilePath )
 
 
-  perform lspRespond( [
-      {}
-  ])
+  perform lspRespond([])
 }

@@ -482,3 +482,25 @@ instance Show EL'Artifacts where
 -- symbol appears in src code reading order
 data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
   deriving (Show)
+
+locateSymbolInScope :: EL'Scope -> Int -> Int -> Maybe EL'AttrSym
+locateSymbolInScope !s !line !char = case srcPosCmp2Range p $ el'scope'span s of
+  EQ -> locateSym $ V.toList $ el'scope'symbols s
+  _ -> Nothing
+  where
+    !p = SrcPos line char
+
+    -- TODO use binary search for performance on large scopes
+    locateSym :: [EL'AttrSym] -> Maybe EL'AttrSym
+    locateSym [] = Nothing
+    locateSym (x : rest) = case x of
+      EL'DefSym !def -> case srcPosCmp2Range p $ el'attr'def'focus def of
+        EQ -> Just $ EL'DefSym def
+        LT -> Nothing
+        GT -> locateSym rest
+      EL'RefSym !ref ->
+        let AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
+         in case srcPosCmp2Range p ref'span of
+              EQ -> Just $ EL'RefSym ref
+              LT -> Nothing
+              GT -> locateSym rest

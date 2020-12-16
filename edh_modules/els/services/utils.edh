@@ -2,11 +2,11 @@
 import ( elsDebug, **_ ) 'els/debug'
 
 
-export data TxtDocWithFile ( absFilePath ) {
+export data TxtDocFile ( absFilePath ) {
 
   method __match__ ( textDocument ) case textDocument[ 'uri' ] of {
     { URI( scheme, path ) } | scheme is 'file' -> {
-      return TxtDocWithFile( path )
+      return TxtDocFile( path )
     }
     debug and elsDebug.replHere()
     return void perform lspError( 'unsupported uri' )
@@ -17,6 +17,51 @@ export data TxtDocWithFile ( absFilePath ) {
         'uri': 'file://' ++ this.absFilePath,
     } }
     error( 'path not absolute: ' ++ this.absFilePath )
+  }
+
+}
+
+export data Position( line, character ) {
+
+  method __match__( jsonRepr ) {
+    case jsonRepr[ 'line' ] of { line } | line >= 0 ->
+    case jsonRepr[ 'character' ] of { char } | char >= 0 ->
+    Position( line, char )
+  } $=> nil
+
+  method __json__() {
+    'line': this.line,
+    'character': this.character,
+  }
+
+}
+
+export data Range( start, end ) {
+
+  method __match__( jsonRepr ) {
+    case jsonRepr[ 'start' ] of { Position() = start } ->
+    case jsonRepr[ 'end' ] of { Position() = end } ->
+    Range( start, end )
+  } $=> nil
+
+  method __json__() {
+    'start': json( this.start ),
+    'end': json( this.end ),
+  }
+
+}
+
+export data Location( uri, range_ ) {
+
+  method __match__( jsonRepr ) {
+    case jsonRepr[ 'uri' ] of { URI() = uri } ->
+    case jsonRepr[ 'range' ] of { Range() = range_ } ->
+    Location( uri, range_ )
+  } $=> nil
+
+  method __json__() {
+    'uri': json( this.uri ),
+    'range': json( this.range_ ),
   }
 
 }

@@ -4,10 +4,10 @@ import ( world, elsDebug, **_ ) 'els'
 import * './utils'
 
 
-export method @'textDocument/didOpen' ( textDocument, ***_ )
+export method @'textDocument/didOpen' ( textDocument, ***_ ) void
 # try parse & resolve then publish the diagnostics asynchronously,
 # to not block subsequent requests from the lsp client
-case textDocument of { TxtDocWithFile ( absFilePath ) } -> { go {
+case textDocument of { TxtDocFile ( absFilePath ) } -> { go {
     moduOpen = world.locateByFile( absFilePath )
     perform lspNotify( 'textDocument/publishDiagnostics',
       uri= textDocument[ 'uri' ],
@@ -20,7 +20,9 @@ export method @'textDocument/didClose' ( textDocument, ***_ )
 pass # notification, don't mandate a response
 
 
-export method @'textDocument/didChange' ( textDocument, contentChanges, ***_ ) {
+export method @'textDocument/didChange' (
+  textDocument, contentChanges, ***_
+) void {
   case contentChanges of {
     { chgContent :> moreChgs } | null( moreChgs )
     -> case chgContent[ 'text' ] of {
@@ -35,7 +37,7 @@ export method @'textDocument/didChange' ( textDocument, contentChanges, ***_ ) {
 
   # try parse & resolve then publish the diagnostics asynchronously,
   # to not block subsequent requests from the lsp client
-  case textDocument of { TxtDocWithFile ( absFilePath ) } -> { go {
+  case textDocument of { TxtDocFile ( absFilePath ) } -> { go {
       moduChgd = world.locateByFile( absFilePath )
       moduChgd.fill( fullTxt )
       perform lspNotify( 'textDocument/publishDiagnostics',
