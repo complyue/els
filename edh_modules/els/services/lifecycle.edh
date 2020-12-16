@@ -28,9 +28,9 @@ export method initialize(
           'willSaveWaitUntil' : false,
         },
 
-        # TODO impl. them
+        'definitionProvider' : true,
 
-        # 'definitionProvider' : true,
+        # TODO impl. them
         # 'referencesProvider' : true,
         # 'hoverProvider' : false,
         # 'foldingRangeProvider' : false,

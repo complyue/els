@@ -2,6 +2,6 @@ export {
 
   import * './lifecycle'
   import * './docsync'
-  import * './folding'
+  import * './defi'
 
 }

@@ -1,0 +1,13 @@
+
+import ( world, elsDebug, **_ ) 'els'
+
+import * './utils'
+
+
+export method @'textDocument/definition' ( textDocument, position, ***_ )
+# try parse & resolve then obtain definition asynchronously,
+# to not block subsequent requests from the lsp client
+case textDocument of { TxtDocWithFile ( absFilePath ) } -> { go {
+    modu = world.locateByFile( absFilePath )
+    perform lspRespond( None )
+} }

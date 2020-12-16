@@ -30,6 +30,7 @@ library
 
   other-modules:
     Language.Edh.LS.BaseLSP
+    Language.Edh.LS.Json
     Language.Edh.LS.LangServer
     Language.Edh.LS.RT
     Language.Edh.Meta.Analyze

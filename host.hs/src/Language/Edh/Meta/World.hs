@@ -10,6 +10,7 @@ import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Vector as V
 import Language.Edh.EHI
+import Language.Edh.LS.Json
 import Language.Edh.Meta.Analyze
 import Language.Edh.Meta.AtTypes
 import Language.Edh.Meta.Model
@@ -173,6 +174,4 @@ createMetaWorldClass !msClass !clsOuterScope =
                   Just (EL'ModuParsed !parsed) ->
                     return $ el'parsing'diags parsed
                   _ -> return []
-            exitEdh ets exit $
-              EdhArgsPack . flip ArgsPack odEmpty $
-                flip fmap diags $ EdhArgsPack . diag2Json
+            exitEdh ets exit $ jsonArray $ fmap toLSP diags
