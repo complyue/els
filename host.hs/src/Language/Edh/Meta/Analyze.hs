@@ -1089,93 +1089,20 @@ el'AnalyzeExpr
          )
   !exit
   !eas = case opSym of
+    -- comparisons
+    "==" -> doCmp
+    "!=" -> doCmp
+    ">=" -> doCmp
+    "<=" -> doCmp
+    ">" -> doCmp
+    "<" -> doCmp
+    "is" -> doCmp
+    "is not" -> doCmp
+    "?<=" -> doCmp
+    --
+
     -- assignment
-    _ | "=" `T.isSuffixOf` opSym -> el'RunTx easPure $
-      el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> do
-        case lhExpr of
-          ExprSrc (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span))) _ ->
-            el'ResolveAttrAddr eas addr >>= \case
-              Nothing -> returnAsExpr
-              Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
-              Just !attrKey -> do
-                !attrAnno <-
-                  newTVar =<< iopdLookup attrKey (el'scope'annos'wip pwip)
-                !prevDef <-
-                  iopdLookup attrKey $
-                    if el'ctx'eff'defining eac
-                      then el'scope'effs'wip pwip
-                      else el'scope'attrs'wip pwip
-                let !attrDef =
-                      EL'AttrDef
-                        attrKey
-                        docCmt
-                        opSym
-                        addr'span
-                        xsrc
-                        rhVal
-                        attrAnno
-                        prevDef
-
-                -- record as artifact of current scope
-                unless (el'ctx'pure eac) $
-                  if el'ctx'eff'defining eac
-                    then do
-                      let !effs = el'scope'effs'wip pwip
-                      case rhVal of
-                        EL'Const EdhNil -> iopdDelete attrKey effs
-                        _ -> iopdInsert attrKey attrDef effs
-                    else do
-                      let !attrs = el'scope'attrs'wip pwip
-                      case rhVal of
-                        EL'Const EdhNil -> do
-                          iopdDelete attrKey attrs
-                          iopdSnapshot attrs
-                            >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-                              . EL'Region (src'end expr'span)
-                        _ -> do
-                          iopdInsert attrKey attrDef attrs
-                          -- record as definition symbol of current scope
-                          modifyTVar'
-                            (el'scope'symbols'wip pwip)
-                            (EL'DefSym attrDef :)
-                          case prevDef of
-                            -- assignment created a new attr, record a region
-                            -- after this assignment expr for current scope
-                            Nothing ->
-                              iopdSnapshot attrs
-                                >>= modifyTVar' (el'scope'regions'wip pwip)
-                                  . (:)
-                                  . EL'Region (src'end expr'span)
-                            _ -> pure ()
-                when (el'ctx'exporting eac) $
-                  iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
-                --
-
-                if "=" == opSym || ":=" == opSym
-                  then el'Exit eas exit rhVal
-                  else returnAsExpr
-          ExprSrc
-            (AttrExpr (IndirectRef !tgtExpr !addr))
-            _expr'span -> el'RunTx easPure $
-              el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
-                -- TODO add to lh obj attrs for (=) ?
-                --      other cases ?
-                el'ResolveAttrAddr eas addr >> returnAsExpr
-          ExprSrc
-            (IndexExpr !idxExpr !tgtExpr)
-            _expr'span ->
-              el'RunTx easPure $
-                el'AnalyzeExpr Nothing idxExpr $ \_idxVal ->
-                  el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
-                    returnAsExpr
-          ExprSrc _ !bad'assign'tgt'span -> do
-            el'LogDiag
-              diags
-              el'Error
-              bad'assign'tgt'span
-              "bad-assign-target"
-              "bad assignment target"
-            returnAsExpr
+    _ | "=" `T.isSuffixOf` opSym -> doAssign
     --
 
     -- branch
@@ -1263,6 +1190,97 @@ el'AnalyzeExpr
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 
       easPure = eas {el'context = eac {el'ctx'pure = True}}
+
+      doCmp = el'RunTx easPure $
+        el'AnalyzeExpr Nothing lhExpr $ \_lhVal ->
+          el'AnalyzeExpr Nothing rhExpr $ \_rhVal _eas -> returnAsExpr
+
+      doAssign = el'RunTx easPure $
+        el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> do
+          case lhExpr of
+            ExprSrc (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span))) _ ->
+              el'ResolveAttrAddr eas addr >>= \case
+                Nothing -> returnAsExpr
+                Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+                Just !attrKey -> do
+                  !attrAnno <-
+                    newTVar =<< iopdLookup attrKey (el'scope'annos'wip pwip)
+                  !prevDef <-
+                    iopdLookup attrKey $
+                      if el'ctx'eff'defining eac
+                        then el'scope'effs'wip pwip
+                        else el'scope'attrs'wip pwip
+                  let !attrDef =
+                        EL'AttrDef
+                          attrKey
+                          docCmt
+                          opSym
+                          addr'span
+                          xsrc
+                          rhVal
+                          attrAnno
+                          prevDef
+
+                  -- record as artifact of current scope
+                  unless (el'ctx'pure eac) $
+                    if el'ctx'eff'defining eac
+                      then do
+                        let !effs = el'scope'effs'wip pwip
+                        case rhVal of
+                          EL'Const EdhNil -> iopdDelete attrKey effs
+                          _ -> iopdInsert attrKey attrDef effs
+                      else do
+                        let !attrs = el'scope'attrs'wip pwip
+                        case rhVal of
+                          EL'Const EdhNil -> do
+                            iopdDelete attrKey attrs
+                            iopdSnapshot attrs
+                              >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
+                                . EL'Region (src'end expr'span)
+                          _ -> do
+                            iopdInsert attrKey attrDef attrs
+                            -- record as definition symbol of current scope
+                            modifyTVar'
+                              (el'scope'symbols'wip pwip)
+                              (EL'DefSym attrDef :)
+                            case prevDef of
+                              -- assignment created a new attr, record a region
+                              -- after this assignment expr for current scope
+                              Nothing ->
+                                iopdSnapshot attrs
+                                  >>= modifyTVar' (el'scope'regions'wip pwip)
+                                    . (:)
+                                    . EL'Region (src'end expr'span)
+                              _ -> pure ()
+                  when (el'ctx'exporting eac) $
+                    iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
+                  --
+
+                  if "=" == opSym || ":=" == opSym
+                    then el'Exit eas exit rhVal
+                    else returnAsExpr
+            ExprSrc
+              (AttrExpr (IndirectRef !tgtExpr !addr))
+              _expr'span -> el'RunTx easPure $
+                el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
+                  -- TODO add to lh obj attrs for (=) ?
+                  --      other cases ?
+                  el'ResolveAttrAddr eas addr >> returnAsExpr
+            ExprSrc
+              (IndexExpr !idxExpr !tgtExpr)
+              _expr'span ->
+                el'RunTx easPure $
+                  el'AnalyzeExpr Nothing idxExpr $ \_idxVal ->
+                    el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
+                      returnAsExpr
+            ExprSrc _ !bad'assign'tgt'span -> do
+              el'LogDiag
+                diags
+                el'Error
+                bad'assign'tgt'span
+                "bad-assign-target"
+                "bad assignment target"
+              returnAsExpr
 --
 
 -- apk ctor

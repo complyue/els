@@ -198,7 +198,12 @@ while eol() is false {
 
     case allMethods ?@ mthName of {
       nil -> {
-        if debug then elsDebug.replHere()
+        case mthName of { '$/' >@ _ } -> # protocol implementation dependent
+        case rpcIn[ 'id' ] of nil -> # it's a notification
+        { continue } # ignore this per
+        # https://github.com/microsoft/vscode-languageserver-node/issues/170
+
+        debug and elsDebug.replHere()
         postOnePkt( json$ {
             'id': rpcIn[ 'id' ],
             'error': {
