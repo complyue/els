@@ -2,7 +2,6 @@
 module Language.Edh.Meta.AtTypes where
 
 import Control.Concurrent.STM
-import Data.HashMap.Strict (HashMap)
 import Data.Vector (Vector)
 import Language.Edh.EHI
 import Language.Edh.Meta.Model
@@ -57,7 +56,7 @@ data EL'ScopeWIP
   = EL'ProcWIP !EL'AnaProc
   | EL'ClassWIP !EL'DefineClass !EL'AnaProc
   | EL'ObjectWIP !EL'InitObject !EL'AnaProc
-  | EL'ModuWIP !EL'ModuSlot !EL'InitModu !EL'AnaProc
+  | EL'ModuWIP !EL'ModuSlot !EL'ResolvingModu !EL'AnaProc
 
 el'ProcWIP :: EL'ScopeWIP -> EL'AnaProc
 el'ProcWIP (EL'ProcWIP p) = p
@@ -65,32 +64,13 @@ el'ProcWIP (EL'ClassWIP _ p) = p
 el'ProcWIP (EL'ObjectWIP _ p) = p
 el'ProcWIP (EL'ModuWIP _ _ p) = p
 
-el'ContextModule :: EL'Context -> Maybe (EL'ModuSlot, EL'InitModu)
+el'ContextModule :: EL'Context -> Maybe (EL'ModuSlot, EL'ResolvingModu)
 el'ContextModule !eac = go $ el'ctx'scope eac : el'ctx'outers eac
   where
     go [] = Nothing
     go (scope : outers) = case scope of
       EL'ModuWIP !ms !mi _ -> Just (ms, mi)
       _ -> go outers
-
--- | a modu initializing procedure
-data EL'InitModu = EL'InitModu
-  { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
-    -- super modules),  up to time of analysis
-    el'modu'exts'wip :: !(TVar [EL'Object]),
-    -- | 1st appearances of exported artifacts in the direct scope and nested
-    -- (method) scopes (i.e. module exports), up to time of analysis
-    el'modu'exps'wip :: !EL'ArtsWIP,
-    -- | dependencies modules pending to be imported, there may be re-exports
-    -- not yet appeared in `el'modu'exps'wip`, before this map returns empty
-    --
-    -- this will finally be the `el'pending'imps` field of the
-    -- `EL'ResolvedModule` record
-    el'modu'imps'wip :: !(TVar (HashMap EL'ModuSlot Bool)),
-    -- | this will finally be the `el'resolved'dependencies` field of the
-    -- `EL'ResolvedModule` record
-    el'modu'dependencies :: !(TVar (HashMap EL'ModuSlot Bool))
-  }
 
 -- | an object initializing procedure, by far tends to be a namespace procedure
 data EL'InitObject = EL'InitObject

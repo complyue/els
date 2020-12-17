@@ -5,7 +5,6 @@ module Language.Edh.Meta.World where
 import Control.Concurrent.STM
 import Control.Monad
 import Data.Dynamic
-import qualified Data.HashMap.Strict as Map
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Vector as V
@@ -98,33 +97,23 @@ createMetaWorldClass !msClass !clsOuterScope =
       runEdhTx etsCtor $
         el'LocateModule bootstrapWorld "batteries/meta" $
           \ !msMeta -> asModuleResolved bootstrapWorld msMeta $
-            \ !resolvedMeta _ets ->
-              let !piVar = el'pending'imps resolvedMeta
-                  untilMetaFullyLoaded :: STM ()
-                  untilMetaFullyLoaded =
-                    {- HLINT ignore "Redundant <$>" -}
-                    Map.null <$> readTVar piVar >>= \case
-                      False ->
-                        -- not fully loaded yet
-                        runEdhTx etsCtor $ edhContSTM untilMetaFullyLoaded
-                      True -> do
-                        -- log all parsing/resolution diags
-                        el'WalkParsingDiags msMeta $ logDiags "Đ syntax"
-                        el'WalkResolutionDiags msMeta $ logDiags "Đ semantics"
-                        -- make the meta scope for ambient of all modules
-                        let !metaRootScope = el'resolved'scope resolvedMeta
-                            !ambient = odMap ext (el'scope'attrs metaRootScope)
-                            ext !def =
-                              def
-                                { el'attr'def'focus = noSrcRange,
-                                  el'attr'def'value =
-                                    EL'External msMeta def,
-                                  el'attr'prev'def = Nothing
-                                }
-                            !elw = EL'World homes ambient
-                        -- return the world
-                        ctorExit $ HostStore (toDyn elw)
-               in untilMetaFullyLoaded
+            \ !resolvedMeta _ets -> do
+              -- log all parsing/resolution diags
+              el'WalkParsingDiags msMeta $ logDiags "Đ syntax"
+              el'WalkResolutionDiags msMeta $ logDiags "Đ semantics"
+              -- make the meta scope for ambient of all modules
+              let !metaRootScope = el'modu'scope resolvedMeta
+                  !ambient = odMap ext (el'scope'attrs metaRootScope)
+                  ext !def =
+                    def
+                      { el'attr'def'focus = noSrcRange,
+                        el'attr'def'value =
+                          EL'External msMeta def,
+                        el'attr'prev'def = Nothing
+                      }
+                  !elw = EL'World homes ambient
+              -- return the world
+              ctorExit $ HostStore (toDyn elw)
       where
         world = edh'prog'world $ edh'thread'prog etsCtor
         console = edh'world'console world
@@ -197,7 +186,7 @@ createMetaWorldClass !msClass !clsOuterScope =
         withThisHostObj ets $ \ !elw ->
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
-              case locateSymbolInScope line char $ el'resolved'scope resolved of
+              case locateSymbolInScope line char $ el'modu'scope resolved of
                 Nothing -> exitEdh ets exit $ jsonArray []
                 Just (EL'RefSym !ref) -> exitEdh ets exit $ toLSP (ms, ref)
                 Just (EL'DefSym !def) -> exitEdh ets exit $ toLSP (ms, def)

@@ -7,6 +7,7 @@ import Control.Exception
 import Control.Monad
 import qualified Data.ByteString as B
 import Data.Dynamic
+import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
 import Data.Maybe
 import Data.Text (Text)
@@ -239,10 +240,14 @@ el'WalkResolutionDiags ::
 el'WalkResolutionDiags !ms !walker = do
   tryReadTMVar reso >>= \case
     Nothing -> return ()
-    Just EL'ModuResolving {} -> return ()
+    Just (EL'ModuResolving !resolving _acts) -> do
+      !diags <- readTVar $ el'resolving'diags resolving
+      !deps <- readTVar $ el'resolving'dependants resolving
+      walker ms diags
+      walkDeps $ Map.toList deps
     Just (EL'ModuResolved !resolved) -> do
       walker ms $ el'resolution'diags resolved
-      walkDeps $ Map.toList $ el'resolved'dependencies resolved
+      walkDeps $ Map.toList $ el'modu'dependencies resolved
   where
     !reso = el'modu'resolution ms
     walkDeps :: [(EL'ModuSlot, Bool)] -> STM ()
@@ -264,7 +269,7 @@ el'WalkParsingDiags !ms !walker = do
     Nothing -> return ()
     Just EL'ModuResolving {} -> return ()
     Just (EL'ModuResolved !resolved) ->
-      walkDeps $ Map.toList $ el'resolved'dependencies resolved
+      walkDeps $ Map.toList $ el'modu'dependencies resolved
   where
     !pars = el'modu'parsing ms
     !reso = el'modu'resolution ms
@@ -281,19 +286,21 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
   when srcChanged $ void $ tryTakeTMVar (el'modu'parsing ms)
   tryTakeTMVar reso >>= \case
     Nothing -> pure ()
-    Just EL'ModuResolving {} -> pure ()
+    Just (EL'ModuResolving !resolving _acts) ->
+      readTVar (el'resolving'dependants resolving)
+        >>= invalidateDeps (el'resolving'dependants resolving) . Map.toList
     Just (EL'ModuResolved !resolved) ->
-      readTVar (el'resolved'dependants resolved)
-        >>= invalidateDeps resolved . Map.toList
+      readTVar (el'modu'dependants resolved)
+        >>= invalidateDeps (el'modu'dependants resolved) . Map.toList
   where
     !reso = el'modu'resolution ms
-    invalidateDeps :: EL'ResolvedModule -> [(EL'ModuSlot, Bool)] -> STM ()
-    invalidateDeps !resolved !deps = go [] deps
+    invalidateDeps :: TVar (HashMap EL'ModuSlot Bool) -> [(EL'ModuSlot, Bool)] -> STM ()
+    invalidateDeps !dependants !deps = go [] deps
       where
         go :: [(EL'ModuSlot, Bool)] -> [(EL'ModuSlot, Bool)] -> STM ()
         go !upds [] = do
           unless (null upds) $
-            modifyTVar' (el'resolved'dependants resolved) $
+            modifyTVar' dependants $
               -- todo maybe should delete instead of update here?
               -- in case some module file is deleted, this'll leak?
               Map.union (Map.fromList upds)
@@ -305,7 +312,7 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
               putTMVar (el'modu'resolution dependant) resolving
               go upds rest
             Just (EL'ModuResolved !resolved') ->
-              case Map.lookup ms (el'resolved'dependencies resolved') of
+              case Map.lookup ms (el'modu'dependencies resolved') of
                 Just True ->
                   runEdhTx ets $
                     el'InvalidateModule False dependant $ \_ _ets ->
@@ -319,13 +326,6 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
                     else go upds rest
 
 -- | obtain the result as the specified module is parsed
---
--- return from this procedure can be delayed, if the calling thread has no
--- subsequent transaction to process, it'll terminate without receiving the
--- result in such cases. it is assumed this called by a LSP serving thread,
--- thus ever waiting for new LSP client requests, so never be the case. while
--- it can still execute OoO (out of order) wrt processing of subsequent LSP
--- client requests.
 asModuleParsed :: EL'ModuSlot -> EdhProc EL'ParsedModule
 asModuleParsed !ms !exit !ets =
   tryReadTMVar parsingVar >>= \case
@@ -334,6 +334,10 @@ asModuleParsed !ms !exit !ets =
       -- the put will retry if parsingVar has been changed by others
       -- concurrently, so no duplicate effort would incur here
       putTMVar parsingVar (EL'ModuParsing acts)
+      -- todo maybe try harder to guarantee 'acts' will always be triggered.
+      -- bracket with STM monad is not correct as multiple txs it will span;
+      -- using Edh finally block may be the way, but we're already doing that
+      -- in 'doParseModule', not sure anything to be done here so.
       doParseModule $ \ !parsed -> do
         -- installed the parsed record
         tryTakeTMVar parsingVar >>= \case
@@ -348,17 +352,21 @@ asModuleParsed !ms !exit !ets =
             return ()
 
         -- trigger post actions
-        -- note they should just enque a proper Edh task to
-        -- their respective initiating thread's task queue, so
-        -- here we care neither about exceptions nor orders
+        -- note they should be really simple so here we care neither about
+        -- exceptions nor orders of them
         readTVar acts >>= sequence_ . (<*> pure parsed)
 
         -- return from this procedure
         exitEdh ets exit parsed
-    Just (EL'ModuParsing !acts) -> modifyTVar' acts $
-      -- note the action installed may be executed on another thread
-      -- so make sure to schedule the CPS return on this origin Edh thread
-      (:) $ \ !parsed -> exitEdh ets exit parsed
+    Just (EL'ModuParsing !acts) -> do
+      -- parsing by some other thread, blocking wait its result here
+      !parsedVar <- newEmptyTMVar
+      modifyTVar'
+        acts
+        -- note this action installed will be executed on another thread
+        (putTMVar parsedVar :)
+      -- blocking wait a result in next tx
+      runEdhTx ets $ edhContSTM $ readTMVar parsedVar >>= exitEdh ets exit
     Just (EL'ModuParsed !parsed) -> exitEdh ets exit parsed
   where
     !parsingVar = el'modu'parsing ms
@@ -470,25 +478,48 @@ parseModuleSource !moduSource (SrcDoc !moduFile) !exit !ets =
     !world = edh'prog'world $ edh'thread'prog ets
 
 -- | obtain the result as the specified module is resolved
---
--- return from this procedure can be delayed, if the calling thread has no
--- subsequent transaction to process, it'll terminate without receiving the
--- result in such cases. it is assumed this called by a LSP serving thread,
--- thus ever waiting for new LSP client requests, so never be the case. while
--- it can still execute OoO (out of order) wrt processing of subsequent LSP
--- client requests.
 asModuleResolved :: EL'World -> EL'ModuSlot -> EdhProc EL'ResolvedModule
-asModuleResolved !world !ms !exit !ets =
+asModuleResolved !world !ms !exit =
+  asModuleResolving world ms $ \case
+    EL'ModuResolving _resolving !acts -> \ !ets -> do
+      -- resolving by some other thread, blocking wait its result here
+      !resolvedVar <- newEmptyTMVar
+      modifyTVar'
+        acts
+        -- note this action installed will be executed on another thread
+        (putTMVar resolvedVar :)
+      -- blocking wait a result in next tx
+      runEdhTx ets $ edhContSTM $ readTMVar resolvedVar >>= exitEdh ets exit
+    EL'ModuResolved !resolved -> exitEdhTx exit resolved
+
+asModuleResolving :: EL'World -> EL'ModuSlot -> EdhProc EL'ModuResolution
+asModuleResolving !world !ms !exit !ets =
   tryReadTMVar resoVar >>= \case
     Nothing -> do
       !acts <- newTVar []
+      !exts <- newTVar []
+      !exps <- iopdEmpty
+      !dependencies <- newTVar Map.empty
+      !diags <- newTVar []
+      !dependants <- newTVar Map.empty
+      let !resolving =
+            EL'ResolvingModu
+              exts
+              exps
+              dependencies
+              diags
+              dependants
       -- the put will retry if parsingVar has been changed by others
       -- concurrently, so no duplicate effort would incur here
-      putTMVar resoVar (EL'ModuResolving acts)
-      doResolveModule $ \ !resolved -> do
+      putTMVar resoVar (EL'ModuResolving resolving acts)
+      -- todo maybe try harder to guarantee 'acts' will always be triggered.
+      -- bracket with STM monad is not correct as multiple txs it will span;
+      -- using Edh finally block may be the way, but we're already doing that
+      -- in 'doResolveModule', not sure anything to be done here so.
+      doResolveModule resolving $ \ !resolved -> do
         -- installed the resolved record
         tryTakeTMVar resoVar >>= \case
-          Just (EL'ModuResolving acts')
+          Just (EL'ModuResolving _resolving acts')
             | acts' == acts -> -- the most expected scenario
               putTMVar resoVar $ EL'ModuResolved resolved
           Just !other ->
@@ -505,27 +536,20 @@ asModuleResolved !world !ms !exit !ets =
         readTVar acts >>= sequence_ . (<*> pure resolved)
 
         -- return from this procedure
-        exitEdh ets exit resolved
-    Just (EL'ModuResolving !acts) -> modifyTVar' acts $
-      -- note the action installed may be executed on another thread
-      -- so make sure to schedule the CPS return on this origin Edh thread
-      (:) $ \ !resolved -> exitEdh ets exit resolved
-    Just (EL'ModuResolved !resolved) -> exitEdh ets exit resolved
+        exitEdh ets exit $ EL'ModuResolved resolved
+    Just !reso -> exitEdh ets exit reso
   where
     !resoVar = el'modu'resolution ms
 
-    doResolveModule :: (EL'ResolvedModule -> STM ()) -> STM ()
-    doResolveModule !exit' = runEdhTx ets $
+    doResolveModule :: EL'ResolvingModu -> (EL'ResolvedModule -> STM ()) -> STM ()
+    doResolveModule !resolving !exit' = runEdhTx ets $
       asModuleParsed ms $ \ !parsed _ets -> edhCatch
         ets
-        (resolveParsedModule world ms $ el'modu'stmts parsed)
+        (resolveParsedModule world ms resolving $ el'modu'stmts parsed)
         exit'
         $ \ !etsCatching !exv !recover !rethrow -> case exv of
           EdhNil -> rethrow nil
-          _ -> edhValueDesc etsCatching exv $ \ !exDesc -> do
-            !expsVar <- iopdEmpty
-            !pendImpsVar <- newTVar Map.empty
-            !dependantsVar <- newTVar Map.empty
+          _ -> edhValueDesc etsCatching exv $ \ !exDesc ->
             recover $
               EL'ResolvedModule
                 ( EL'Scope
@@ -536,8 +560,7 @@ asModuleResolved !world !ms !exit !ets =
                     odEmpty
                     V.empty
                 )
-                expsVar
-                pendImpsVar
+                odEmpty
                 Map.empty
                 [ el'Diag
                     el'Error
@@ -545,20 +568,15 @@ asModuleResolved !world !ms !exit !ets =
                     "resolve-err"
                     exDesc
                 ]
-                dependantsVar
+                (el'resolving'dependants resolving)
 
 resolveParsedModule ::
   EL'World ->
   EL'ModuSlot ->
+  EL'ResolvingModu ->
   [StmtSrc] ->
   EdhProc EL'ResolvedModule
-resolveParsedModule !world !ms !body !exit !ets = do
-  !diagsVar <- newTVar []
-  !moduExts <- newTVar []
-  !moduExps <- iopdEmpty
-  !pendImpsVar <- newTVar Map.empty
-  !moduDependants <- newTVar Map.empty
-  !moduDepencencies <- newTVar Map.empty
+resolveParsedModule !world !ms !resolving !body !exit !ets = do
   !moduAttrs <- iopdEmpty
   !moduEffs <- iopdEmpty
   !moduAnnos <- iopdEmpty
@@ -567,8 +585,8 @@ resolveParsedModule !world !ms !body !exit !ets = do
   !moduSyms <- newTVar []
   let !pwip =
         EL'AnaProc
-          moduExts
-          moduExps
+          (el'modu'exts'wip resolving)
+          (el'modu'exps'wip resolving)
           moduAttrs
           moduEffs
           moduAnnos
@@ -578,20 +596,12 @@ resolveParsedModule !world !ms !body !exit !ets = do
       !eac =
         EL'Context
           { el'ctx'scope =
-              EL'ModuWIP
-                ms
-                ( EL'InitModu
-                    moduExts
-                    moduExps
-                    pendImpsVar
-                    moduDepencencies
-                )
-                pwip,
+              EL'ModuWIP ms resolving pwip,
             el'ctx'outers = [],
             el'ctx'pure = False,
             el'ctx'exporting = False,
             el'ctx'eff'defining = False,
-            el'ctx'diags = diagsVar
+            el'ctx'diags = el'resolving'diags resolving
           }
       !eas =
         EL'AnalysisState
@@ -602,8 +612,9 @@ resolveParsedModule !world !ms !body !exit !ets = do
 
   el'RunTx eas $
     el'AnalyzeStmts body $ \_ _eas -> do
-      !diags <- readTVar diagsVar
-      !dependencies <- readTVar moduDepencencies
+      !diags <- readTVar $ el'resolving'diags resolving
+      !moduExps <- iopdSnapshot $ el'modu'exps'wip resolving
+      !dependencies <- readTVar $ el'modu'dependencies'wip resolving
       !scope'attrs <- iopdSnapshot moduAttrs
       !scope'effs <- iopdSnapshot moduEffs
       !innerScopes <- readTVar moduScopes
@@ -622,10 +633,9 @@ resolveParsedModule !world !ms !body !exit !ets = do
         EL'ResolvedModule
           el'scope
           moduExps
-          pendImpsVar
           dependencies
           (reverse diags)
-          moduDependants
+          (el'resolving'dependants resolving)
   where
     moduEnd :: SrcPos
     moduEnd = go body
@@ -1387,7 +1397,7 @@ el'AnalyzeExpr
               "moduleless-import"
               "import from non-module context"
             el'Exit eas exit $ EL'Const nil
-          Just (!msImporter, !miImporter) -> el'RunTx eas $
+          Just (!msImporter, !resolvingImporter) -> el'RunTx eas $
             el'LocateImportee msImporter litSpec $ \ !impResult _eas ->
               case impResult of
                 Left !err -> do
@@ -1395,7 +1405,6 @@ el'AnalyzeExpr
                   el'Exit eas exit $ EL'Const nil
                 Right !msImportee -> do
                   -- record as an attribute defined to reference the module
-                  !impAnno <- newTVar Nothing
                   let !importeeDef =
                         EL'AttrDef
                           (AttrByName "this")
@@ -1404,7 +1413,7 @@ el'AnalyzeExpr
                           zeroSrcRange
                           (ExprSrc (AttrExpr ThisRef) noSrcRange)
                           (EL'ObjVal (EL'Object el'ModuleClass [] odEmpty odEmpty))
-                          impAnno
+                          maoAnnotation
                           Nothing
                       !impDef =
                         EL'AttrDef
@@ -1414,15 +1423,12 @@ el'AnalyzeExpr
                           spec'span
                           xsrc
                           (EL'External msImportee importeeDef)
-                          impAnno
+                          maoAnnotation
                           Nothing
                   modifyTVar' (el'scope'symbols'wip pwip) (EL'DefSym impDef :)
 
                   -- record as a dependency
-                  modifyTVar' (el'modu'dependencies miImporter) $
-                    Map.insert msImportee True
-                  -- record as modu pending imported
-                  modifyTVar' (el'modu'imps'wip miImporter) $
+                  modifyTVar' (el'modu'dependencies'wip resolvingImporter) $
                     Map.insert msImportee True
                   -- schedule importing after importee resolved
                   !chkExp <- chkExport
@@ -1431,9 +1437,6 @@ el'AnalyzeExpr
                       -- TODO find mechanism in LSP to report diags discovered
                       -- here asynchronously, to not missing them
                       impIntoScope chkExp msImportee resolved argsRcvr
-                      -- mark module finished importing
-                      modifyTVar' (el'modu'imps'wip miImporter) $
-                        Map.delete msImportee
                   -- above can finish synchronously or asynchronously, return
                   -- the importee module now anyway, as waiting for the
                   -- resolved record is deadlock prone here, in case of cyclic
@@ -1481,23 +1484,19 @@ el'AnalyzeExpr
         case el'ContextModule eac of
           Nothing -> pure ()
           Just (!localModu, _localInit) -> do
-            modifyTVar' (el'resolved'dependants srcResolved) $
+            modifyTVar' (el'modu'dependants srcResolved) $
               Map.insert localModu True
-        odMap (EL'External srcModu)
-          <$> iopdSnapshot {- HLINT ignore "Redundant <$>" -}
-            (el'resolved'exports srcResolved)
-            >>= \ !srcArts -> do
-              case asr of
-                WildReceiver -> forM_ (odToList srcArts) wildImp
-                PackReceiver !ars -> go srcArts ars
-                SingleReceiver !ar -> go srcArts [ar]
-
-              -- record a region after this import, for current scope
-              -- TODO delay loaded importee will cause the regions out of order
-              --      search and insert to correct location here
-              iopdSnapshot (el'scope'attrs'wip pwip)
-                >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-                  . EL'Region (src'end expr'span)
+        let !srcArts = odMap (EL'External srcModu) $ el'modu'exports srcResolved
+        case asr of
+          WildReceiver -> forM_ (odToList srcArts) wildImp
+          PackReceiver !ars -> go srcArts ars
+          SingleReceiver !ar -> go srcArts [ar]
+        -- record a region after this import, for current scope
+        -- TODO delay loaded importee will cause the regions out of order
+        --      search and insert to correct location here
+        iopdSnapshot (el'scope'attrs'wip pwip)
+          >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
+            . EL'Region (src'end expr'span)
         where
           !localTgt =
             if el'ctx'eff'defining eac

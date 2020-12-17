@@ -171,41 +171,48 @@ data EL'ParsedModule = EL'ParsedModule
     el'parsing'diags :: ![EL'Diagnostic]
   }
 
+data EL'ResolvingModu = EL'ResolvingModu
+  { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
+    -- super modules), up to time of analysis
+    el'modu'exts'wip :: !(TVar [EL'Object]),
+    -- | exports from this module up-to-time of analysis
+    el'modu'exps'wip :: !EL'ArtsWIP,
+    -- | other modules this module depends on
+    el'modu'dependencies'wip :: !(TVar (HashMap EL'ModuSlot Bool)),
+    -- | diagnostics generated
+    el'resolving'diags :: !(TVar [EL'Diagnostic]),
+    -- | the same 'TVar' as el'modu'dependants
+    el'resolving'dependants :: !(TVar (HashMap EL'ModuSlot Bool))
+  }
+
 data EL'ModuResolution
-  = EL'ModuResolving !(TVar [EL'ResolvedModule -> STM ()])
+  = EL'ModuResolving !EL'ResolvingModu !(TVar [EL'ResolvedModule -> STM ()])
   | EL'ModuResolved !EL'ResolvedModule
 
 data EL'ResolvedModule = EL'ResolvedModule
   { -- | there will be nested scopes appearing in natural source order, within
     -- this root scope of the module
-    el'resolved'scope :: !EL'Scope,
-    -- | exports from this module, mutated upon any origin module of re-exports
-    -- get resolved
-    el'resolved'exports :: !EL'ArtsWIP,
-    -- | dependencies modules pending to be imported, there may be re-exports
-    -- not yet appeared in `el'resolved'exports`, before this map returns empty
-    el'pending'imps :: !(TVar (HashMap EL'ModuSlot Bool)),
+    el'modu'scope :: !EL'Scope,
+    -- | finalized exports from this module
+    el'modu'exports :: !EL'Artifacts,
     -- | other modules this module depends on
-    --
-    -- a dependency module's `el'resolved'dependants` should be updated marking
-    -- this module as a dependant as well
-    el'resolved'dependencies :: !(HashMap EL'ModuSlot Bool),
-    -- | diagnostics generated from this stage of analysis
+    el'modu'dependencies :: !(HashMap EL'ModuSlot Bool),
+    -- | diagnostics generated during resolution
     el'resolution'diags :: ![EL'Diagnostic],
-    -- | other modules depending on this module, and resolved with this revision
+    -- | other modules depending on this module, and defined with this revision
     -- of resolution for this module
     --
     -- the depdneant modules listed in this field should be invalidated alone
     -- with this module upon invalidation
     --
     -- note a dependant may stop depending on this module due to src changes,
-    -- so cross checking of its `el'resolved'dependencies` should be performed
+    -- so cross checking of its `el'modu'dependencies` should be performed
     -- and honored, to avoid incorrect result due to race condition
     --
     -- TODO invalidaton of a dependency module tends to be a one-shot action,
     --      if a dependant is added after the invalidation is done, need some
     --      way to warrant proper invalidation of that dependant module.
-    el'resolved'dependants :: !(TVar (HashMap EL'ModuSlot Bool))
+    el'modu'dependants :: !(TVar (HashMap EL'ModuSlot Bool))
   }
 
 -- All attributes are local to a context module, with respects to both defining
