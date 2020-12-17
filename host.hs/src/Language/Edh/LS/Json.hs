@@ -77,14 +77,11 @@ instance ToLSP (EL'ModuSlot, EL'AttrDef) where
   toLSP (!originModu, !def) =
     case el'attr'def'value def of
       EL'External !fromModu !fromDef ->
-        jsonArray
-          [ jsonObject
-              [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
-                ("targetUri", toLSP $ el'modu'doc fromModu),
-                ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
-                ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
-              ],
-            link0
+        jsonObject
+          [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
+            ("targetUri", toLSP $ el'modu'doc fromModu),
+            ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
+            ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
           ]
       _ -> link0
     where

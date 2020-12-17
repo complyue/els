@@ -1001,9 +1001,8 @@ el'AnalyzeExpr
               "possible misspelled reference"
             returnAsExpr
           Just !attrDef -> do
-            let !attrRef = EL'AttrRef addr attrDef
-
             -- record as referencing symbol of outer scope
+            let !attrRef = EL'AttrRef addr attrDef
             modifyTVar' (el'scope'symbols'wip pwip) (EL'RefSym attrRef :)
 
             el'Exit eas exit $ el'attr'def'value attrDef
@@ -1395,6 +1394,30 @@ el'AnalyzeExpr
                   el'LogDiag diags el'Error spec'span "err-import" err
                   el'Exit eas exit $ EL'Const nil
                 Right !msImportee -> do
+                  -- record as an attribute defined to reference the module
+                  !impAnno <- newTVar Nothing
+                  let !importeeDef =
+                        EL'AttrDef
+                          (AttrByName "this")
+                          Nothing
+                          "<module>"
+                          zeroSrcRange
+                          (ExprSrc (AttrExpr ThisRef) noSrcRange)
+                          (EL'ObjVal (EL'Object el'ModuleClass [] odEmpty odEmpty))
+                          impAnno
+                          Nothing
+                      !impDef =
+                        EL'AttrDef
+                          (AttrByName litSpec)
+                          docCmt
+                          "<import>"
+                          spec'span
+                          xsrc
+                          (EL'External msImportee importeeDef)
+                          impAnno
+                          Nothing
+                  modifyTVar' (el'scope'symbols'wip pwip) (EL'DefSym impDef :)
+
                   -- record as a dependency
                   modifyTVar' (el'modu'dependencies miImporter) $
                     Map.insert msImportee True
@@ -1417,7 +1440,8 @@ el'AnalyzeExpr
                   -- imports
                   el'Exit eas exit $ EL'ModuVal msImportee
         AttrExpr {} ->
-          el'RunTx eas $ -- obj import
+          el'RunTx eas $ -- dynamic string or obj import
+          -- TODO analyzetime string/object eval?
             el'AnalyzeExpr Nothing impSpec $ \ !impFromVal -> do
               -- TODO validate it is object type, import from it
               el'ExitTx exit impFromVal
