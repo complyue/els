@@ -13,7 +13,9 @@ export method @'textDocument/definition' (
   case position of { Position( line, character ) } ->
   { return { go {
         modu = world.locateByFile( absFilePath )
-        perform lspRespond( world.defi( modu, line, character ) )
+        defiLinks = world.defi( modu, line, character )
+        # debug and null( defiLinks ) and elsDebug.replHere()
+        perform lspRespond( defiLinks )
   } } }
   error( 'unexpected lsp params' )
 }

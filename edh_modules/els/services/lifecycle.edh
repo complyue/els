@@ -62,3 +62,6 @@ export method shutdown(*** _ ) {
 }
 
 export exit = console.exit
+
+# todo do really cancel those heavily demanding requests wip
+export method @'$/cancelRequest'( id ) pass

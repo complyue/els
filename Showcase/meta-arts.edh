@@ -1,0 +1,4 @@
+
+# console is a namespace from the root scope by default batteries at runtime,
+# it is from the meta scope by batteries at analyzetime.
+console.info<| 'log this at info level'

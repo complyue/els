@@ -115,7 +115,16 @@ createMetaWorldClass !msClass !clsOuterScope =
                           logDiagsAsErr "Đ semantics"
                         -- return the world
                         let !metaRootScope = el'resolved'scope resolvedMeta
-                            !ambient = el'scope'attrs metaRootScope
+                            !ambient = flip
+                              odMap
+                              (el'scope'attrs metaRootScope)
+                              $ \ !def ->
+                                def
+                                  { el'attr'def'focus = noSrcRange,
+                                    el'attr'def'value =
+                                      EL'External msMeta def,
+                                    el'attr'prev'def = Nothing
+                                  }
                             !elw = EL'World homes ambient
                         ctorExit $ HostStore (toDyn elw)
                in untilMetaFullyLoaded

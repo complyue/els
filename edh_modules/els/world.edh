@@ -7,7 +7,7 @@ export world = MetaWorld()
 
 if debug then {
   {
-    go elsDebug.replHere()
+    # go elsDebug.replHere()
 
     # thisModule = world.locateByFile( __file__ )
   } $=> { exc } -> {

@@ -974,7 +974,14 @@ el'AnalyzeExpr
   !exit
   !eas =
     el'ResolveAttrAddr eas addr >>= \case
-      Nothing -> returnAsExpr
+      Nothing -> do
+        el'LogDiag
+          diags
+          el'Error
+          addr'span
+          "bad-ref"
+          "bad attribute addressor"
+        returnAsExpr
       Just (AttrByName "_") -> do
         el'LogDiag
           diags
@@ -985,7 +992,14 @@ el'AnalyzeExpr
         el'Exit eas exit $ EL'Const nil
       Just !refKey ->
         el'ResolveContextAttr eas refKey >>= \case
-          Nothing -> returnAsExpr
+          Nothing -> do
+            el'LogDiag
+              diags
+              el'Warning
+              addr'span
+              "unknown-ref"
+              "possible misspelled reference"
+            returnAsExpr
           Just !attrDef -> do
             let !attrRef = EL'AttrRef addr attrDef
 
