@@ -1,0 +1,6 @@
+
+import ( f, x ) './lib'
+
+y = f( x )
+
+z = x + y

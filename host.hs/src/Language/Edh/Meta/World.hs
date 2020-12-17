@@ -108,24 +108,21 @@ createMetaWorldClass !msClass !clsOuterScope =
                         -- not fully loaded yet
                         runEdhTx etsCtor $ edhContSTM untilMetaFullyLoaded
                       True -> do
-                        -- log all parsing/resolution diags as error
-                        el'WalkParsingDiags msMeta $
-                          logDiagsAsErr "Đ syntax"
-                        el'WalkResolutionDiags msMeta $
-                          logDiagsAsErr "Đ semantics"
-                        -- return the world
+                        -- log all parsing/resolution diags
+                        el'WalkParsingDiags msMeta $ logDiags "Đ syntax"
+                        el'WalkResolutionDiags msMeta $ logDiags "Đ semantics"
+                        -- make the meta scope for ambient of all modules
                         let !metaRootScope = el'resolved'scope resolvedMeta
-                            !ambient = flip
-                              odMap
-                              (el'scope'attrs metaRootScope)
-                              $ \ !def ->
-                                def
-                                  { el'attr'def'focus = noSrcRange,
-                                    el'attr'def'value =
-                                      EL'External msMeta def,
-                                    el'attr'prev'def = Nothing
-                                  }
+                            !ambient = odMap ext (el'scope'attrs metaRootScope)
+                            ext !def =
+                              def
+                                { el'attr'def'focus = noSrcRange,
+                                  el'attr'def'value =
+                                    EL'External msMeta def,
+                                  el'attr'prev'def = Nothing
+                                }
                             !elw = EL'World homes ambient
+                        -- return the world
                         ctorExit $ HostStore (toDyn elw)
                in untilMetaFullyLoaded
       where
@@ -133,7 +130,7 @@ createMetaWorldClass !msClass !clsOuterScope =
         console = edh'world'console world
         logger = consoleLogger console
 
-        logDiagsAsErr !cate !ms !diags = forM_ diags $ \ !diag ->
+        logDiags !cate !ms !diags = forM_ diags $ \ !diag ->
           let !severity = case el'diag'severity diag of
                 -- TODO does PatternSynonyms worth its weight for here?
                 --      EL'DiagSeverity will need to be a newtype then

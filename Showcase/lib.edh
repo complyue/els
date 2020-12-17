@@ -1,0 +1,4 @@
+
+export x = 5
+
+export method f( x ) x + 1

@@ -1250,10 +1250,11 @@ el'AnalyzeExpr
 
     -- other operations without special treatment
     _ -> el'RunTx easPure $
-      el'AnalyzeExpr Nothing lhExpr $ \_lhVal _eas -> returnAsExpr
-      --
+      el'AnalyzeExpr Nothing lhExpr $ \_lhVal ->
+        el'AnalyzeExpr Nothing rhExpr $ \_rhVal _eas -> returnAsExpr
+        --
 
-      --
+        --
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
