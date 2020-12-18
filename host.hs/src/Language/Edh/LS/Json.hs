@@ -86,15 +86,7 @@ attrUpLinkChain !def = case el'attr'def'value def of
   _ -> []
 
 instance ToLSP (EL'ModuSlot, EL'AttrDef) where
-  toLSP (!originModu, !def) =
-    jsonArray $
-      jsonObject
-        [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
-          ("targetUri", toLSP $ el'modu'doc originModu),
-          ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
-          ("targetSelectionRange", toLSP $ el'attr'def'focus def)
-        ] :
-      attrUpLinkChain def
+  toLSP (_originModu, !def) = jsonArray $ attrUpLinkChain def
 
 instance ToLSP (EL'ModuSlot, EL'AttrRef) where
   toLSP (!originModu, EL'AttrRef (AttrAddrSrc _ !addr'span) !def) =

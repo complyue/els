@@ -1384,28 +1384,40 @@ el'AnalyzeExpr
                   el'LogDiag diags el'Error spec'span "err-import" err
                   el'Exit eas exit $ EL'Const nil
                 Right !msImportee -> do
-                  -- record as an attribute defined to reference the module
-                  let !importeeDef =
-                        EL'AttrDef
-                          (AttrByName "this")
-                          Nothing
-                          "<module>"
-                          zeroSrcRange
-                          (ExprSrc (AttrExpr ThisRef) noSrcRange)
-                          (EL'ObjVal (EL'Object el'ModuleClass [] odEmpty odEmpty))
-                          maoAnnotation
-                          Nothing
-                      !impDef =
-                        EL'AttrDef
-                          (AttrByName litSpec)
-                          docCmt
-                          "<import>"
-                          spec'span
-                          xsrc
-                          (EL'External msImportee importeeDef)
-                          maoAnnotation
-                          Nothing
-                  modifyTVar' (el'scope'symbols'wip pwip) (EL'DefSym impDef :)
+                  -- record as an attribute defined to reference the module,
+                  -- this have to be performed later than the importing of
+                  -- artifacts, to preserve symbol order in the source
+                  let defImpSym =
+                        let !importeeDef =
+                              EL'AttrDef
+                                (AttrByName "this")
+                                Nothing
+                                "<module>"
+                                zeroSrcRange
+                                (ExprSrc (AttrExpr ThisRef) noSrcRange)
+                                ( EL'ObjVal
+                                    ( EL'Object
+                                        el'ModuleClass
+                                        []
+                                        odEmpty
+                                        odEmpty
+                                    )
+                                )
+                                maoAnnotation
+                                Nothing
+                            !impDef =
+                              EL'AttrDef
+                                (AttrByName litSpec)
+                                docCmt
+                                "<import>"
+                                spec'span
+                                xsrc
+                                (EL'External msImportee importeeDef)
+                                maoAnnotation
+                                Nothing
+                         in modifyTVar'
+                              (el'scope'symbols'wip pwip)
+                              (EL'DefSym impDef :)
                   -- record as a dependency
                   modifyTVar' (el'modu'dependencies'wip resolvImporter) $
                     Map.insert msImportee True
@@ -1420,6 +1432,7 @@ el'AnalyzeExpr
                         -- do import
                         let !exps = el'modu'exports resolved
                         impIntoScope chkExp msImportee exps argsRcvr
+                        defImpSym
                         el'Exit eas exit $ EL'ModuVal msImportee
                       EL'ModuResolving !resolving _acts -> \_ets -> do
                         -- record importer as a dependant
@@ -1428,6 +1441,7 @@ el'AnalyzeExpr
                         -- do import
                         !exps <- iopdSnapshot $ el'modu'exps'wip resolving
                         impIntoScope chkExp msImportee exps argsRcvr
+                        defImpSym
                         el'Exit eas exit $ EL'ModuVal msImportee
         AttrExpr {} ->
           el'RunTx eas $ -- dynamic string or obj import
