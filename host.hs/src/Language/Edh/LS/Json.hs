@@ -73,45 +73,36 @@ instance ToLSP EL'Diagnostic where
           )
         ]
 
+attrUpLinkChain :: EL'AttrDef -> [EdhValue]
+attrUpLinkChain !def = case el'attr'def'value def of
+  EL'External !fromModu !fromDef ->
+    jsonObject
+      [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
+        ("targetUri", toLSP $ el'modu'doc fromModu),
+        ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
+        ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
+      ] :
+    attrUpLinkChain fromDef
+  _ -> []
+
 instance ToLSP (EL'ModuSlot, EL'AttrDef) where
   toLSP (!originModu, !def) =
-    case el'attr'def'value def of
-      EL'External !fromModu !fromDef ->
-        jsonObject
-          [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
-            ("targetUri", toLSP $ el'modu'doc fromModu),
-            ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
-            ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
-          ]
-      _ -> link0
-    where
-      !link0 =
-        jsonObject
-          [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
-            ("targetUri", toLSP $ el'modu'doc originModu),
-            ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
-            ("targetSelectionRange", toLSP $ el'attr'def'focus def)
-          ]
+    jsonArray $
+      jsonObject
+        [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
+          ("targetUri", toLSP $ el'modu'doc originModu),
+          ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
+          ("targetSelectionRange", toLSP $ el'attr'def'focus def)
+        ] :
+      attrUpLinkChain def
 
 instance ToLSP (EL'ModuSlot, EL'AttrRef) where
   toLSP (!originModu, EL'AttrRef (AttrAddrSrc _ !addr'span) !def) =
-    case el'attr'def'value def of
-      EL'External !fromModu !fromDef ->
-        jsonArray
-          [ jsonObject
-              [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
-                ("targetUri", toLSP $ el'modu'doc fromModu),
-                ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
-                ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
-              ],
-            link0
-          ]
-      _ -> link0
-    where
-      !link0 =
-        jsonObject
-          [ ("originSelectionRange", toLSP addr'span),
-            ("targetUri", toLSP $ el'modu'doc originModu),
-            ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
-            ("targetSelectionRange", toLSP $ el'attr'def'focus def)
-          ]
+    jsonArray $
+      jsonObject
+        [ ("originSelectionRange", toLSP addr'span),
+          ("targetUri", toLSP $ el'modu'doc originModu),
+          ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
+          ("targetSelectionRange", toLSP $ el'attr'def'focus def)
+        ] :
+      attrUpLinkChain def

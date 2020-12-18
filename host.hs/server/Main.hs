@@ -3,7 +3,6 @@ module Main where
 -- import           Debug.Trace
 
 import Control.Concurrent
-import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
 import qualified Data.Text as T
@@ -15,7 +14,7 @@ import Prelude
 main :: IO ()
 main = do
   !console <- defaultEdhConsole defaultEdhConsoleSettings
-  let !consoleOut = writeTBQueue (consoleIO console) . ConsoleOut
+  let !consoleOut = consoleIO console . ConsoleOut
       runIt = do
         world <- createEdhWorld console
         installEdhBatteries world
@@ -27,7 +26,7 @@ main = do
         installLanguageServerBatteries world
 
         runEdhModule world "els" edhModuleAsIs >>= \case
-          Left !err -> atomically $ do
+          Left !err -> do
             -- program crash on error
             consoleOut "Đ (Edh) language server crashed with an error:\n"
             consoleOut $ T.pack $ show err <> "\n"
@@ -35,7 +34,7 @@ main = do
             -- clean program halt, all done
             EdhNil -> return ()
             -- unclean program exit
-            _ -> atomically $ do
+            _ -> do
               consoleOut "Đ (Edh) language server halted with a result:\n"
               consoleOut $
                 (<> "\n") $ case phv of
@@ -46,11 +45,11 @@ main = do
     forkFinally runIt $ \ !result -> do
       case result of
         Left (e :: SomeException) ->
-          atomically $ consoleOut $ "💥 " <> T.pack (show e)
+          consoleOut $ "💥 " <> T.pack (show e)
         Right _ -> pure ()
       -- shutdown console IO anyway
-      atomically $ writeTBQueue (consoleIO console) ConsoleShutdown
+      consoleIO console ConsoleShutdown
 
-  atomically $ consoleOut ">> Đ (Edh) Language Server <<\n"
+  consoleOut ">> Đ (Edh) Language Server <<\n"
 
   consoleIOLoop console

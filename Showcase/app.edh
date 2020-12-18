@@ -1,6 +1,14 @@
 
-import ( f, x ) './lib'
+i = 3
+
+import ( f, x, g, ) './lib'
+
+j = 2
+
+import * './lib'
+
+k = 5
 
 y = f( x )
 
-z = x + y
+z = x + y * j - i / k

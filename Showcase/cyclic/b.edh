@@ -1,0 +1,4 @@
+
+export import * './c'
+
+export y = 3

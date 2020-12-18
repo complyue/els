@@ -186,7 +186,7 @@ data EL'ResolvingModu = EL'ResolvingModu
   }
 
 data EL'ModuResolution
-  = EL'ModuResolving !EL'ResolvingModu !(TVar [EL'ResolvedModule -> STM ()])
+  = EL'ModuResolving !EL'ResolvingModu !(TMVar EL'ResolvedModule)
   | EL'ModuResolved !EL'ResolvedModule
 
 data EL'ResolvedModule = EL'ResolvedModule
