@@ -7,13 +7,13 @@ import qualified Data.ByteString as B
 import Data.Dynamic
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
+import qualified Data.Map.Strict as TreeMap
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (Decoding (Some), streamDecodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Vector as V
--- import Debug.Trace
 import GHC.Conc (unsafeIOToSTM)
 import Language.Edh.EHI
 import Language.Edh.Meta.AtTypes
@@ -562,7 +562,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
   !moduAnnos <- iopdEmpty
   !moduScopes <- newTVar []
   !moduRegions <- newTVar []
-  !moduSyms <- newTVar []
+  !moduSyms <- newTVar TreeMap.empty
   let !pwip =
         EL'AnaProc
           (el'modu'exts'wip resolving)
@@ -607,7 +607,8 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
                 el'scope'regions = V.fromList $! reverse regions,
                 el'scope'attrs = scope'attrs,
                 el'scope'effs = scope'effs,
-                el'scope'symbols = V.fromList $! reverse scope'symbols
+                el'scope'symbols =
+                  V.fromList $ snd <$> TreeMap.toAscList scope'symbols
               }
       exitEdh ets exit $
         EL'ResolvedModule
@@ -834,9 +835,7 @@ el'AnalyzeStmt
               _ -> do
                 iopdInsert attrKey attrDef attrs
                 -- record as definition symbol of current scope
-                modifyTVar'
-                  (el'scope'symbols'wip pwip)
-                  (EL'DefSym attrDef :)
+                recordScopeSymbol pwip $ EL'DefSym attrDef
         when (el'ctx'exporting eac) $
           iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
 --
@@ -993,7 +992,7 @@ el'AnalyzeExpr
           Just !attrDef -> do
             -- record as referencing symbol of outer scope
             let !attrRef = EL'AttrRef addr attrDef
-            modifyTVar' (el'scope'symbols'wip pwip) (EL'RefSym attrRef :)
+            recordScopeSymbol pwip $ EL'RefSym attrRef
 
             el'Exit eas exit $ el'attr'def'value attrDef
     where
@@ -1027,10 +1026,9 @@ el'AnalyzeExpr
                 "no such attribute"
               returnAsExpr
             Just !attrDef -> do
-              let !attrRef = EL'AttrRef addr attrDef
-
               -- record as referencing symbol of outer scope
-              modifyTVar' (el'scope'symbols'wip pwip) (EL'RefSym attrRef :)
+              let !attrRef = EL'AttrRef addr attrDef
+              recordScopeSymbol pwip $ EL'RefSym attrRef
 
               el'Exit eas exit $ el'attr'def'value attrDef
       EL'ClsVal !cls ->
@@ -1048,10 +1046,9 @@ el'AnalyzeExpr
                 "no such attribute"
               returnAsExpr
             Just !attrDef -> do
-              let !attrRef = EL'AttrRef addr attrDef
-
               -- record as referencing symbol of outer scope
-              modifyTVar' (el'scope'symbols'wip pwip) (EL'RefSym attrRef :)
+              let !attrRef = EL'AttrRef addr attrDef
+              recordScopeSymbol pwip $ EL'RefSym attrRef
 
               el'Exit eas exit $ el'attr'def'value attrDef
       -- EL'Const (EdhObject _obj) -> undefined -- TODO this possible ?
@@ -1228,9 +1225,7 @@ el'AnalyzeExpr
                           _ -> do
                             iopdInsert attrKey attrDef attrs
                             -- record as definition symbol of current scope
-                            modifyTVar'
-                              (el'scope'symbols'wip pwip)
-                              (EL'DefSym attrDef :)
+                            recordScopeSymbol pwip $ EL'DefSym attrDef
                             case prevDef of
                               -- assignment created a new attr, record a region
                               -- after this assignment expr for current scope
@@ -1414,9 +1409,7 @@ el'AnalyzeExpr
                                 (EL'External msImportee importeeDef)
                                 maoAnnotation
                                 Nothing
-                         in modifyTVar'
-                              (el'scope'symbols'wip pwip)
-                              (EL'DefSym impDef :)
+                         in recordScopeSymbol pwip $ EL'DefSym impDef
                   -- record as a dependency
                   modifyTVar' (el'modu'dependencies'wip resolvImporter) $
                     Map.insert msImportee True
@@ -1616,6 +1609,7 @@ el'AnalyzeExpr
                               Just !srcVal -> do
                                 !artAnno <-
                                   newTVar =<< el'ResolveAnnotation swip localKey
+                                -- record as definition symbol of current scope
                                 let !attrDef =
                                       EL'AttrDef
                                         localKey
@@ -1626,10 +1620,7 @@ el'AnalyzeExpr
                                         srcVal
                                         artAnno
                                         Nothing
-                                -- record as definition symbol of current scope
-                                modifyTVar'
-                                  (el'scope'symbols'wip pwip)
-                                  (EL'DefSym attrDef :)
+                                recordScopeSymbol pwip $ EL'DefSym attrDef
                                 -- register as local attribute
                                 iopdInsert localKey attrDef localTgt
                                 -- export it if specified so
@@ -1669,7 +1660,7 @@ el'AnalyzeExpr
         !clsAnnos <- iopdEmpty
         !clsScopes <- newTVar []
         !clsRegions <- newTVar []
-        !clsSyms <- newTVar []
+        !clsSyms <- newTVar TreeMap.empty
         let !pwip =
               EL'AnaProc
                 clsExts
@@ -1811,7 +1802,8 @@ el'AnalyzeExpr
                       el'scope'regions = V.fromList $! reverse regions,
                       el'scope'attrs = scope'attrs,
                       el'scope'effs = scope'effs,
-                      el'scope'symbols = V.fromList $! reverse scope'symbols
+                      el'scope'symbols =
+                        V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                     }
                 !mro = [] -- TODO C3 linearize cls'exts to get this
                 !cls = EL'Class clsName cls'exts mro cls'scope cls'exps
@@ -1838,9 +1830,7 @@ el'AnalyzeExpr
                   let !attrs = el'scope'attrs'wip outerProc
                   iopdInsert clsName clsDef attrs
                   -- record as definition symbol of outer scope
-                  modifyTVar'
-                    (el'scope'symbols'wip outerProc)
-                    (EL'DefSym clsDef :)
+                  recordScopeSymbol outerProc $ EL'DefSym clsDef
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
                     >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
@@ -1918,7 +1908,7 @@ el'AnalyzeExpr
         !nsAnnos <- iopdEmpty
         !nsScopes <- newTVar []
         !nsRegions <- newTVar []
-        !nsSyms <- newTVar []
+        !nsSyms <- newTVar TreeMap.empty
         let !pwip =
               EL'AnaProc
                 nsExts
@@ -2029,7 +2019,8 @@ el'AnalyzeExpr
                           el'scope'regions = V.fromList $! reverse regions,
                           el'scope'attrs = scope'attrs,
                           el'scope'effs = scope'effs,
-                          el'scope'symbols = V.fromList $! reverse scope'symbols
+                          el'scope'symbols =
+                            V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                         }
                     !ns =
                       EL'Object
@@ -2060,9 +2051,7 @@ el'AnalyzeExpr
                       let !attrs = el'scope'attrs'wip outerProc
                       iopdInsert nsName nsDef attrs
                       -- record as definition symbol of outer scope
-                      modifyTVar'
-                        (el'scope'symbols'wip outerProc)
-                        (EL'DefSym nsDef :)
+                      recordScopeSymbol outerProc $ EL'DefSym nsDef
                       -- record a region after this definition for current scope
                       iopdSnapshot attrs
                         >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
@@ -2085,7 +2074,7 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
     !blkAnnos <- iopdEmpty
     !blkScopes <- newTVar []
     !blkRegions <- newTVar []
-    !blkSyms <- newTVar []
+    !blkSyms <- newTVar TreeMap.empty
     let !pwip =
           outerProc -- inherit exts/exps from outer scope
             { el'scope'attrs'wip = blkAttrs,
@@ -2116,7 +2105,8 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
                   el'scope'regions = V.fromList $! reverse regions,
                   el'scope'attrs = scope'attrs,
                   el'scope'effs = scope'effs,
-                  el'scope'symbols = V.fromList $! reverse scope'symbols
+                  el'scope'symbols =
+                    V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                 }
         --
 
@@ -2319,9 +2309,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
               Nothing
       iopdInsert symName symDef attrs
       -- record as definition symbol of current scope
-      modifyTVar'
-        (el'scope'symbols'wip pwip)
-        (EL'DefSym symDef :)
+      recordScopeSymbol pwip $ EL'DefSym symDef
       -- record a region after this definition for current scope
       iopdSnapshot attrs
         >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
@@ -2371,7 +2359,7 @@ el'DefineMethod
         !mthAnnos <- iopdEmpty
         !mthScopes <- newTVar []
         !mthRegions <- newTVar []
-        !mthSyms <- newTVar []
+        !mthSyms <- newTVar TreeMap.empty
         let !pwip =
               outerProc -- inherit exts/exps from outer scope
                 { el'scope'attrs'wip = mthAttrs,
@@ -2415,7 +2403,8 @@ el'DefineMethod
                       el'scope'regions = V.fromList $! reverse regions,
                       el'scope'attrs = scope'attrs,
                       el'scope'effs = scope'effs,
-                      el'scope'symbols = V.fromList $! reverse scope'symbols
+                      el'scope'symbols =
+                        V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                     }
                 -- TODO for sake of parameter hints in IDE
                 -- - elide 1st `callerScope` for interpreter and 3-arg operator
@@ -2444,9 +2433,7 @@ el'DefineMethod
                   let !attrs = el'scope'attrs'wip outerProc
                   iopdInsert mthName mthDef attrs
                   -- record as definition symbol of outer scope
-                  modifyTVar'
-                    (el'scope'symbols'wip outerProc)
-                    (EL'DefSym mthDef :)
+                  recordScopeSymbol outerProc $ EL'DefSym mthDef
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
                     >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
@@ -2591,7 +2578,7 @@ el'DefineArrowProc
         !mthAnnos <- iopdEmpty
         !mthScopes <- newTVar []
         !mthRegions <- newTVar []
-        !mthSyms <- newTVar []
+        !mthSyms <- newTVar TreeMap.empty
         let !pwip =
               outerProc -- inherit exts/exps from outer scope
                 { el'scope'attrs'wip = mthAttrs,
@@ -2634,7 +2621,8 @@ el'DefineArrowProc
                       el'scope'regions = V.fromList $! reverse regions,
                       el'scope'attrs = scope'attrs,
                       el'scope'effs = scope'effs,
-                      el'scope'symbols = V.fromList $! reverse scope'symbols
+                      el'scope'symbols =
+                        V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                     }
                 -- TODO for sake of parameter hints in IDE
                 -- - elide 1st `callerScope` for interpreter and 3-arg operator

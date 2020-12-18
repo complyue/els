@@ -1,0 +1,5 @@
+
+
+export import ( f, **_ ) './lib'
+
+export method g( n ) f( n ) * 3

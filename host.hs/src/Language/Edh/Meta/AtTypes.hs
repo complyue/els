@@ -2,6 +2,7 @@
 module Language.Edh.Meta.AtTypes where
 
 import Control.Concurrent.STM
+import qualified Data.Map.Strict as TreeMap
 import Data.Vector (Vector)
 import Language.Edh.EHI
 import Language.Edh.Meta.Model
@@ -119,8 +120,20 @@ data EL'AnaProc = EL'AnaProc
     -- | accumulated regions lately
     el'scope'regions'wip :: !(TVar [EL'Region]),
     -- | accumulated symbols lately
-    el'scope'symbols'wip :: !(TVar [EL'AttrSym])
+    el'scope'symbols'wip :: !(TVar (TreeMap.Map SrcPos EL'AttrSym))
   }
+
+recordScopeSymbol :: EL'AnaProc -> EL'AttrSym -> STM ()
+recordScopeSymbol !pwip !sym = case sym of
+  EL'DefSym !def ->
+    let !symKeyPos = src'end $ el'attr'def'focus def
+     in modifyTVar' syms $ TreeMap.insert symKeyPos sym
+  EL'RefSym !ref ->
+    let AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
+        !symKeyPos = src'end ref'span
+     in modifyTVar' syms $ TreeMap.insert symKeyPos sym
+  where
+    !syms = el'scope'symbols'wip pwip
 
 el'ResolveLexicalAttr :: [EL'ScopeWIP] -> AttrKey -> STM (Maybe EL'AttrDef)
 el'ResolveLexicalAttr [] _ = return Nothing
