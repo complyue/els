@@ -1095,15 +1095,14 @@ el'AnalyzeExpr
     --
 
     -- branch
-    -- todo flow analysis here?
     "->" ->
       let goAnalyzeRHS :: EL'Tx
-          goAnalyzeRHS =
-            el'AnalyzeExpr Nothing rhExpr $
-              const $ el'ExitTx exit $ EL'Const nil
+          goAnalyzeRHS = el'AnalyzeExpr Nothing rhExpr $ \_ _eas -> returnAsExpr
+
           handlePattern :: Expr -> EL'Tx
           handlePattern = \case
             -- curly braces at lhs means a pattern
+            -- TODO analyze attr definitions in the patterns
             DictExpr {} -> goAnalyzeRHS
             BlockExpr {} -> goAnalyzeRHS
             -- not a pattern, value match
