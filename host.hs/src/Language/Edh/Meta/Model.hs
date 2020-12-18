@@ -161,7 +161,7 @@ instance Hashable EL'ModuSlot where
      in hashWithSalt s absPath
 
 data EL'ModuParsing
-  = EL'ModuParsing !(TVar [EL'ParsedModule -> STM ()])
+  = EL'ModuParsing !(TMVar EL'ParsedModule)
   | EL'ModuParsed !EL'ParsedModule
 
 data EL'ParsedModule = EL'ParsedModule

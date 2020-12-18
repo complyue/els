@@ -328,19 +328,21 @@ asModuleParsed :: EL'ModuSlot -> EdhProc EL'ParsedModule
 asModuleParsed !ms !exit !ets =
   tryReadTMVar parsingVar >>= \case
     Nothing -> do
-      !acts <- newTVar []
+      !parsedVar <- newEmptyTMVar
       -- the put will retry if parsingVar has been changed by others
       -- concurrently, so no duplicate effort would incur here
-      putTMVar parsingVar (EL'ModuParsing acts)
-      -- todo maybe try harder to guarantee 'acts' will always be triggered.
+      putTMVar parsingVar (EL'ModuParsing parsedVar)
+      -- todo maybe try harder to guarantee 'parsedVar' will always be filled.
       -- bracket with STM monad is not correct as multiple txs it will span;
       -- using Edh finally block may be the way, but we're already doing that
       -- in 'doParseModule', not sure anything to be done here so.
       doParseModule $ \ !parsed -> do
-        -- installed the parsed record
+        -- install the parsed record
+        putTMVar parsedVar parsed
         tryTakeTMVar parsingVar >>= \case
-          Just (EL'ModuParsing acts')
-            | acts' == acts ->
+          Just (EL'ModuParsing parsedVar')
+            | parsedVar' == parsedVar ->
+              -- the most expected scenario
               putTMVar parsingVar $ EL'ModuParsed parsed
           Just !other ->
             -- invalidated & new analysation wip
@@ -349,20 +351,10 @@ asModuleParsed !ms !exit !ets =
             -- invalidated meanwhile
             return ()
 
-        -- trigger post actions
-        -- note they should be really simple so here we care neither about
-        -- exceptions nor orders of them
-        readTVar acts >>= sequence_ . (<*> pure parsed)
-
         -- return from this procedure
         exitEdh ets exit parsed
-    Just (EL'ModuParsing !acts) -> do
-      -- parsing by some other thread, blocking wait its result here
-      !parsedVar <- newEmptyTMVar
-      modifyTVar'
-        acts
-        -- note this action installed will be executed on another thread
-        (putTMVar parsedVar :)
+    Just (EL'ModuParsing !parsedVar) -> do
+      -- parsing by some other thread,
       -- blocking wait a result in next tx
       runEdhTx ets $ edhContSTM $ readTMVar parsedVar >>= exitEdh ets exit
     Just (EL'ModuParsed !parsed) -> exitEdh ets exit parsed
@@ -410,27 +402,24 @@ el'FillModuleSource !moduSource !ms !exit !ets =
     el'InvalidateModule True ms $ \() _ets -> do
       void $ tryTakeTMVar parsingVar
       -- now parse the supplied source and get the result,
-      -- try install only if it's still up-to-date
-      !acts <- newTVar []
+      -- then try install only if it's still up-to-date
+      !parsedVar <- newEmptyTMVar
       -- the put will retry if parsingVar has been changed by others
       -- concurrently, so no duplicate effort would incur here
-      putTMVar parsingVar (EL'ModuParsing acts)
+      putTMVar parsingVar (EL'ModuParsing parsedVar)
 
       -- parse & install the result
       doParseModule $ \ !parsed -> do
+        putTMVar parsedVar parsed
         tryTakeTMVar parsingVar >>= \case
-          Just (EL'ModuParsing acts')
-            | acts' == acts -> putTMVar parsingVar $ EL'ModuParsed parsed
+          Just (EL'ModuParsing parsedVar')
+            | parsedVar' == parsedVar ->
+              -- the most expected scenario
+              putTMVar parsingVar $ EL'ModuParsed parsed
           -- invalidated & new analysation wip
           Just !other -> putTMVar parsingVar other
           -- invalidated meanwhile
           _ -> return ()
-
-        -- trigger post actions
-        -- note they should just enque a proper Edh task to
-        -- their respective initiating thread's task queue, so
-        -- here we care neither about exceptions nor orders
-        readTVar acts >>= sequence_ . (<*> pure parsed)
 
         -- return from this procedure
         exitEdh ets exit parsed
@@ -509,13 +498,13 @@ asModuleResolving !world !ms !exit !ets =
       -- using Edh finally block may be the way, but we're already doing that
       -- in 'doResolveModule', not sure anything to be done here so.
       doResolveModule resolving $ \ !resolved -> do
-        -- installed the resolved record
+        -- install the resolved record
+        putTMVar resolvedVar resolved
         tryTakeTMVar resoVar >>= \case
           Just (EL'ModuResolving _resolving resolvedVar')
-            | resolvedVar' == resolvedVar -> do
+            | resolvedVar' == resolvedVar ->
               -- the most expected scenario
               putTMVar resoVar $ EL'ModuResolved resolved
-              putTMVar resolvedVar resolved
           Just !other ->
             -- invalidated & new analysation wip
             void $ tryPutTMVar resoVar other
