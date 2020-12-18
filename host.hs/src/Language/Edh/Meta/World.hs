@@ -103,15 +103,17 @@ createMetaWorldClass !msClass !clsOuterScope =
               el'WalkResolutionDiags msMeta $ logDiags "Đ semantics"
               -- make the meta scope for ambient of all modules
               let !metaRootScope = el'modu'scope resolvedMeta
-                  !ambient = odMap ext (el'scope'attrs metaRootScope)
-                  ext !def =
+                  !ambient = odMap metaDef (el'scope'attrs metaRootScope)
+                  metaDef !def =
                     def
                       { el'attr'def'focus = noSrcRange,
-                        el'attr'def'value =
-                          EL'External msMeta def,
+                        el'attr'def'value = EL'External msMeta def,
                         el'attr'prev'def = Nothing
                       }
                   !elw = EL'World homes ambient
+
+              -- trace ("**ambient*keys:" <> show (odKeys ambient)) $ pure ()
+
               -- return the world
               ctorExit $ HostStore (toDyn elw)
       where

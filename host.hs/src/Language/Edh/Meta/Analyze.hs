@@ -2057,6 +2057,9 @@ el'AnalyzeExpr
                         >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
                           . EL'Region (src'end expr'span)
 
+                when (el'ctx'exporting eac) $
+                  iopdInsert nsName nsDef $ el'scope'exps'wip outerProc
+
                 -- return the namespace object value
                 el'Exit eas exit nsVal
     where
