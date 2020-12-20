@@ -821,6 +821,8 @@ el'AnalyzeStmt
                 attrVal
                 attrAnno
                 prevDef
+        -- record as definition symbol of current scope
+        recordScopeSymbol pwip $ EL'DefSym attrDef
         if el'ctx'eff'defining eac
           then do
             let !effs = el'scope'effs'wip pwip
@@ -833,8 +835,6 @@ el'AnalyzeStmt
               EL'Const EdhNil -> iopdDelete attrKey attrs
               _ -> do
                 iopdInsert attrKey attrDef attrs
-                -- record as definition symbol of current scope
-                recordScopeSymbol pwip $ EL'DefSym attrDef
         when (el'ctx'exporting eac) $
           iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
 --
@@ -1189,7 +1189,7 @@ el'AnalyzeExpr
                 Just !attrKey -> do
                   !attrAnno <-
                     newTVar =<< iopdLookup attrKey (el'scope'annos'wip pwip)
-                  !prevDef <-
+                  !maybePrevDef <-
                     iopdLookup attrKey $
                       if el'ctx'eff'defining eac
                         then el'scope'effs'wip pwip
@@ -1203,7 +1203,7 @@ el'AnalyzeExpr
                           xsrc
                           rhVal
                           attrAnno
-                          prevDef
+                          maybePrevDef
 
                   -- record as artifact of current scope
                   unless (el'ctx'pure eac) $ do
@@ -1223,9 +1223,7 @@ el'AnalyzeExpr
                                 . EL'Region (src'end expr'span)
                           _ -> do
                             iopdInsert attrKey attrDef attrs
-                            -- record as definition symbol of current scope
-                            recordScopeSymbol pwip $ EL'DefSym attrDef
-                            case prevDef of
+                            case maybePrevDef of
                               -- assignment created a new attr, record a region
                               -- after this assignment expr for current scope
                               Nothing ->
@@ -1239,8 +1237,20 @@ el'AnalyzeExpr
                   --
 
                   if "=" == opSym || ":=" == opSym
-                    then el'Exit eas exit rhVal
-                    else returnAsExpr
+                    then do
+                      -- record as definition symbol of current scope
+                      recordScopeSymbol pwip $ EL'DefSym attrDef
+                      el'Exit eas exit rhVal
+                    else case maybePrevDef of
+                      Just !prevDef -> do
+                        -- record as reference symbol of current scope
+                        let !attrRef = EL'AttrRef addr prevDef
+                        recordScopeSymbol pwip $ EL'RefSym attrRef
+                        returnAsExpr
+                      Nothing -> do
+                        -- record as definition symbol of current scope
+                        recordScopeSymbol pwip $ EL'DefSym attrDef
+                        returnAsExpr
             ExprSrc
               (AttrExpr (IndirectRef !tgtExpr !addr))
               _expr'span -> el'RunTx easPure $
@@ -1824,6 +1834,8 @@ el'AnalyzeExpr
                     clsVal
                     clsAnno
                     Nothing
+            -- record as definition symbol of outer scope
+            recordScopeSymbol outerProc $ EL'DefSym clsDef
             --
 
             -- record as artifact of outer scope
@@ -1833,8 +1845,6 @@ el'AnalyzeExpr
                 else do
                   let !attrs = el'scope'attrs'wip outerProc
                   iopdInsert clsName clsDef attrs
-                  -- record as definition symbol of outer scope
-                  recordScopeSymbol outerProc $ EL'DefSym clsDef
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
                     >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
@@ -2047,6 +2057,8 @@ el'AnalyzeExpr
                         nsVal
                         nsAnno
                         Nothing
+                -- record as definition symbol of outer scope
+                recordScopeSymbol outerProc $ EL'DefSym nsDef
                 --
 
                 -- record as artifact of outer scope
@@ -2056,8 +2068,6 @@ el'AnalyzeExpr
                     else do
                       let !attrs = el'scope'attrs'wip outerProc
                       iopdInsert nsName nsDef attrs
-                      -- record as definition symbol of outer scope
-                      recordScopeSymbol outerProc $ EL'DefSym nsDef
                       -- record a region after this definition for current scope
                       iopdSnapshot attrs
                         >>= modifyTVar' (el'scope'regions'wip outerProc) . (:)
@@ -2300,25 +2310,30 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (BehaveExpr _addr) _expr'span) !exit !eas =
 el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
   do
     !sym <- mkSymbol $ "@" <> attr
+    !symAnno <-
+      newTVar
+        =<< iopdLookup
+          (AttrByName attr)
+          (el'scope'annos'wip pwip)
     let !symVal = EL'Const $ EdhSymbol sym
+        !symDef =
+          EL'AttrDef
+            symName
+            docCmt
+            "<sym-def>"
+            expr'span
+            xsrc
+            symVal
+            symAnno
+            Nothing
+
+    -- record as definition symbol of current scope
+    recordScopeSymbol pwip $ EL'DefSym symDef
 
     -- record as artifact of current scope
     unless (el'ctx'pure eac) $ do
-      !symAnno <- newTVar Nothing
       let !attrs = el'scope'attrs'wip pwip
-          !symDef =
-            EL'AttrDef
-              symName
-              docCmt
-              "<sym-def>"
-              expr'span
-              xsrc
-              symVal
-              symAnno
-              Nothing
       iopdInsert symName symDef attrs
-      -- record as definition symbol of current scope
-      recordScopeSymbol pwip $ EL'DefSym symDef
       -- record a region after this definition for current scope
       iopdSnapshot attrs
         >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
@@ -2437,6 +2452,8 @@ el'DefineMethod
                     mthVal
                     mthAnno
                     Nothing
+            -- record as definition symbol of outer scope
+            recordScopeSymbol outerProc $ EL'DefSym mthDef
             --
 
             -- record as artifact of outer scope
@@ -2446,8 +2463,6 @@ el'DefineMethod
                 else do
                   let !attrs = el'scope'attrs'wip outerProc
                   iopdInsert mthName mthDef attrs
-                  -- record as definition symbol of outer scope
-                  recordScopeSymbol outerProc $ EL'DefSym mthDef
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
                     >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
