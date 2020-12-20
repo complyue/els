@@ -112,8 +112,6 @@ createMetaWorldClass !msClass !clsOuterScope =
                       }
                   !elw = EL'World homes ambient
 
-              -- trace ("**ambient*keys:" <> show (odKeys ambient)) $ pure ()
-
               -- return the world
               ctorExit $ HostStore (toDyn elw)
       where
