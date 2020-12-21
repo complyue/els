@@ -68,6 +68,14 @@ el'ProcWIP (EL'InitModule _ _ p) = p
 el'BranchWIP :: EL'ScopeWIP -> EL'BranchWIP
 el'BranchWIP = el'scope'branch'wip . el'ProcWIP
 
+el'ChangeBranch :: EL'BranchWIP -> EL'ScopeWIP -> EL'ScopeWIP
+el'ChangeBranch !bwip = \case
+  EL'ProcFlow !p -> EL'ProcFlow p {el'scope'branch'wip = bwip}
+  EL'DefineClass !c !p -> EL'DefineClass c p {el'scope'branch'wip = bwip}
+  EL'InitObject !o !p -> EL'InitObject o p {el'scope'branch'wip = bwip}
+  EL'InitModule !ms !resolving !p ->
+    EL'InitModule ms resolving p {el'scope'branch'wip = bwip}
+
 el'ContextModule :: EL'Context -> Maybe (EL'ModuSlot, EL'ResolvingModu)
 el'ContextModule !eac = go $ el'ctx'scope eac : el'ctx'outers eac
   where

@@ -668,9 +668,11 @@ el'AnalyzeStmts !stmts !exit !eas = go stmts
     go :: [StmtSrc] -> STM ()
     go [] = el'Exit eas exit $ EL'Const nil
     go (stmt : rest) = el'RunTx eas $
-      el'AnalyzeStmt stmt $ \ !val _eas' -> case rest of
-        [] -> el'Exit eas exit val
-        _ -> go rest
+      el'AnalyzeStmt stmt $ -- TODO eas' may have an updated EL'BranchWIP
+      -- deal with regions as well as handle that chg here?
+        \ !val !eas' -> case rest of
+          [] -> el'Exit eas exit val
+          _ -> go rest
 
 -- | analyze a statement in context
 el'AnalyzeStmt :: StmtSrc -> EL'Analysis EL'Value
@@ -1113,26 +1115,152 @@ el'AnalyzeExpr
     --
 
     -- branch
-    "->" ->
-      let goAnalyzeRHS :: EL'Tx
-          goAnalyzeRHS = el'AnalyzeExpr Nothing rhExpr $ \_ _eas -> returnAsExpr
+    "->" -> do
+      let analyzeBranch :: [(AttrKey, ExprSrc)] -> STM ()
+          analyzeBranch !ps = do
+            !branchAttrs <- iopdEmpty
+            !branchEffs <- iopdEmpty
+            !branchAnnos <- iopdEmpty
+            !branchRegions <- newTVar []
+            let !bwipBranch =
+                  bwip
+                    { el'branch'attrs'wip = branchAttrs,
+                      el'branch'effs'wip = branchEffs,
+                      el'branch'annos'wip = branchAnnos,
+                      el'branch'regions'wip = branchRegions
+                    }
+                !eacBranch =
+                  eac
+                    { el'ctx'scope = el'ChangeBranch bwipBranch swip
+                    }
+                !easBranch = eas {el'context = eacBranch}
 
-          handlePattern :: Expr -> EL'Tx
+                go :: [(AttrKey, ExprSrc)] -> STM ()
+                go [] = el'RunTx easBranch $
+                  el'AnalyzeExpr Nothing rhExpr $
+                    \ !rhResult _eas -> case rhResult of
+                      EL'Const EdhFallthrough ->
+                        -- TODO is it so correct here?
+                        el'Exit easBranch exit $ EL'Expr xsrc
+                      _ -> el'Exit eas exit $ EL'Expr xsrc
+                --
+
+                go ((!attrKey, !attrExpr) : rest) = do
+                  !attrAnno <- newTVar Nothing
+                  !prevDef <-
+                    iopdLookup attrKey $
+                      if el'ctx'eff'defining eac
+                        then el'branch'effs'wip bwip
+                        else el'branch'attrs'wip bwip
+                  let !attrDef =
+                        EL'AttrDef
+                          attrKey
+                          docCmt
+                          opSym
+                          (exprSrcSpan attrExpr)
+                          xsrc
+                          (EL'Expr attrExpr)
+                          attrAnno
+                          prevDef
+                  !maybePrevDef <-
+                    iopdLookup attrKey $
+                      if el'ctx'eff'defining eac
+                        then el'branch'effs'wip bwip
+                        else el'branch'attrs'wip bwip
+                  -- record as artifact of current scope
+                  unless (el'ctx'pure eac) $ do
+                    if el'ctx'eff'defining eac
+                      then do
+                        let !effs = el'branch'effs'wip bwip
+                        case el'attr'def'value attrDef of
+                          EL'Const EdhNil -> iopdDelete attrKey effs
+                          _ -> iopdInsert attrKey attrDef effs
+                      else do
+                        let !attrs = el'branch'attrs'wip bwip
+                        case el'attr'def'value attrDef of
+                          EL'Const EdhNil -> do
+                            iopdDelete attrKey attrs
+                            iopdSnapshot attrs
+                              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                                . EL'RegionWIP (src'end expr'span)
+                          _ -> do
+                            iopdInsert attrKey attrDef attrs
+                            case maybePrevDef of
+                              -- assignment created a new attr, record a region
+                              -- after this assignment expr for current scope
+                              Nothing ->
+                                iopdSnapshot attrs
+                                  >>= modifyTVar' (el'branch'regions'wip bwip)
+                                    . (:)
+                                    . EL'RegionWIP (src'end expr'span)
+                              _ -> pure ()
+
+                    when (el'ctx'exporting eac) $
+                      iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
+
+                  go rest
+
+            go ps
+
+          handlePattern :: Expr -> STM ()
           handlePattern = \case
             -- curly braces at lhs means a pattern
-            -- TODO analyze attr definitions in the patterns
-            DictExpr {} -> goAnalyzeRHS
-            BlockExpr {} -> goAnalyzeRHS
+            BlockExpr !patternExpr -> case patternExpr of
+              -- {( x )} -- single arg
+              [ StmtSrc
+                  ( ExprStmt
+                      ( ParenExpr
+                          argExpr@( ExprSrc
+                                      ( AttrExpr
+                                          ( DirectRef
+                                              ( AttrAddrSrc
+                                                  (NamedAttr !attrName)
+                                                  _
+                                                )
+                                            )
+                                        )
+                                      _
+                                    )
+                        )
+                      _docCmt
+                    )
+                  _
+                ] -> do
+                  let !attrKey = AttrByName attrName
+                  analyzeBranch [(attrKey, argExpr)]
+              --
+
+              -- TODO more patterns
+              _ -> analyzeBranch []
+            --
+
+            -- guarded condition branch
+            PrefixExpr Guard !condExpr -> el'RunTx eas $
+              el'AnalyzeExpr Nothing condExpr $
+                \_cndResult _eas -> analyzeBranch []
+            --
+
+            -- TODO pair pattern, expand matching attrs
+            DictExpr {} ->
+              analyzeBranch []
+            --
+
             -- not a pattern, value match
-            _ -> el'AnalyzeExpr Nothing lhExpr $ const goAnalyzeRHS
-       in el'RunTx eas $ case lhx of
-            -- wild match
-            AttrExpr (DirectRef (AttrAddrSrc (NamedAttr "_") _)) ->
-              goAnalyzeRHS
-            -- guarded, pattern or value match
-            InfixExpr "|" (ExprSrc !matchExpr _) !guardExpr ->
-              el'AnalyzeExpr Nothing guardExpr $ \_ -> handlePattern matchExpr
-            _ -> handlePattern lhx
+            _ -> el'RunTx eas $
+              el'AnalyzeExpr Nothing lhExpr $
+                \_lhResult _eas -> analyzeBranch []
+      --
+
+      case lhx of
+        -- wild match
+        AttrExpr (DirectRef (AttrAddrSrc (NamedAttr "_") _)) ->
+          analyzeBranch []
+        -- pattern or value match, guarded
+        InfixExpr "|" (ExprSrc !matchExpr _) !guardExpr -> el'RunTx eas $
+          el'AnalyzeExpr Nothing guardExpr $
+            \_guardResult _eas -> handlePattern matchExpr
+        -- pattern or value match
+        _ -> handlePattern lhx
     --
 
     -- method/generator arrow procedure
