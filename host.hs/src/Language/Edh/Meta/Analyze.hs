@@ -922,14 +922,29 @@ el'AnalyzeStmt (StmtSrc (WhileStmt !expr !body) _stmt'span) !exit !eas =
           const $ el'ExitTx exit $ EL'Const nil
 --
 
--- throw
-el'AnalyzeStmt (StmtSrc (ThrowStmt !expr) _stmt'span) !exit !eas =
-  el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+-- continue
+el'AnalyzeStmt (StmtSrc ContinueStmt _stmt'span) !exit !eas =
+  el'Exit eas exit $ EL'Const EdhContinue
+--
+
+-- break
+el'AnalyzeStmt (StmtSrc BreakStmt _stmt'span) !exit !eas =
+  el'Exit eas exit $ EL'Const EdhBreak
+--
+
+-- fallthrough
+el'AnalyzeStmt (StmtSrc FallthroughStmt _stmt'span) !exit !eas =
+  el'Exit eas exit $ EL'Const EdhFallthrough
 --
 
 -- return
 el'AnalyzeStmt (StmtSrc (ReturnStmt !expr) _stmt'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+--
+
+-- throw
+el'AnalyzeStmt (StmtSrc (ThrowStmt !expr) _stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
 --
