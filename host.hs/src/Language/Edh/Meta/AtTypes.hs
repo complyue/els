@@ -54,27 +54,30 @@ data EL'Context = EL'Context
   }
 
 data EL'ScopeWIP
-  = EL'ProcWIP !EL'AnaProc
-  | EL'ClassWIP !EL'DefineClass !EL'AnaProc
-  | EL'ObjectWIP !EL'InitObject !EL'AnaProc
-  | EL'ModuWIP !EL'ModuSlot !EL'ResolvingModu !EL'AnaProc
+  = EL'ProcFlow !EL'ProcWIP
+  | EL'DefineClass !EL'ClassWIP !EL'ProcWIP
+  | EL'InitObject !EL'ObjectWIP !EL'ProcWIP
+  | EL'InitModule !EL'ModuSlot !EL'ResolvingModu !EL'ProcWIP
 
-el'ProcWIP :: EL'ScopeWIP -> EL'AnaProc
-el'ProcWIP (EL'ProcWIP p) = p
-el'ProcWIP (EL'ClassWIP _ p) = p
-el'ProcWIP (EL'ObjectWIP _ p) = p
-el'ProcWIP (EL'ModuWIP _ _ p) = p
+el'ProcWIP :: EL'ScopeWIP -> EL'ProcWIP
+el'ProcWIP (EL'ProcFlow p) = p
+el'ProcWIP (EL'DefineClass _ p) = p
+el'ProcWIP (EL'InitObject _ p) = p
+el'ProcWIP (EL'InitModule _ _ p) = p
+
+el'BranchWIP :: EL'ScopeWIP -> EL'BranchWIP
+el'BranchWIP = el'scope'branch'wip . el'ProcWIP
 
 el'ContextModule :: EL'Context -> Maybe (EL'ModuSlot, EL'ResolvingModu)
 el'ContextModule !eac = go $ el'ctx'scope eac : el'ctx'outers eac
   where
     go [] = Nothing
     go (scope : outers) = case scope of
-      EL'ModuWIP !ms !mi _ -> Just (ms, mi)
+      EL'InitModule !ms !mi _ -> Just (ms, mi)
       _ -> go outers
 
 -- | an object initializing procedure, by far tends to be a namespace procedure
-data EL'InitObject = EL'InitObject
+data EL'ObjectWIP = EL'ObjectWIP
   { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
     -- super objects),  up to time of analysis
     el'obj'exts'wip :: !(TVar [EL'Object]),
@@ -84,7 +87,7 @@ data EL'InitObject = EL'InitObject
   }
 
 -- | a class defining procedure
-data EL'DefineClass = EL'DefineClass
+data EL'ClassWIP = EL'ClassWIP
   { -- | all `extends` appeared in the direct class scope (i.e. super classes),
     --  up to time of analysis
     el'class'exts'wip :: !(TVar [EL'Object]),
@@ -99,31 +102,51 @@ data EL'DefineClass = EL'DefineClass
     el'inst'exps'wip :: !EL'ArtsWIP
   }
 
--- a method procedure, including vanilla method, generator, producer, operator,
--- (vanilla/generator/producer) arrow, and maybe a bit confusing, scoped blocks
-data EL'AnaProc = EL'AnaProc
-  { -- | this points to `el'modu'exts'wip` or `el'obj'exts'wip` or
+-- flow within a procedure, the procedure can be a vanilla method, a generator,
+-- a producer, an operator, or an (vanilla/generator/producer) arrow procedure,
+-- also maybe a bit confusing, it can be a scoped block.
+--
+-- when defining a class, initializing an object (usually either a namespace
+-- object or a module object), there is a procedure undergoing as well.
+data EL'ProcWIP = EL'ProcWIP
+  { -- | current branch of control flow
+    el'scope'branch'wip :: !EL'BranchWIP,
+    -- | this points to `el'modu'exts'wip` or `el'obj'exts'wip` or
     -- `el'class'exts'wip` or `el'inst'exts'wip` whichever is appropriate
     el'scope'exts'wip :: !(TVar [EL'Object]),
     -- | this points to `el'modu'exps'wip` or `el'obj'exps'wip` or
     -- `el'class'exps'wip` or `el'inst'exps'wip` whichever is appropriate
     el'scope'exps'wip :: !EL'ArtsWIP,
-    -- | last appearances of attributes encountered, up to time of analysis
-    el'scope'attrs'wip :: !EL'ArtsWIP,
-    -- | 1st appearances of effectful artifacts, up to time of analysis
-    el'scope'effs'wip :: !EL'ArtsWIP,
-    -- | last appearances of annotations encountered in the direct class scope,
-    -- up to time of analysis
-    el'scope'annos'wip :: !(IOPD AttrKey EL'AttrAnno),
     -- | accumulated inner scopes lately
     el'scope'inner'scopes'wip :: !(TVar [EL'Scope]),
-    -- | accumulated regions lately
-    el'scope'regions'wip :: !(TVar [EL'Region]),
     -- | accumulated symbols lately
-    el'scope'symbols'wip :: !(TVar (TreeMap.Map SrcPos EL'AttrSym))
+    el'scope'symbols'wip :: !(TVar (TreeMap.Map SrcPos EL'AttrSym)),
+    -- | accumulated regions lately
+    el'scope'regions'wip :: !(TVar [EL'Region])
   }
 
-recordScopeSymbol :: EL'AnaProc -> EL'AttrSym -> STM ()
+-- | the flow of an execution branch, with artifacts installed to the respective
+-- scope incrementally
+data EL'BranchWIP = EL'BranchWIP
+  { -- | last appearances of attributes encountered, up to time of analysis
+    el'branch'attrs'wip :: !EL'ArtsWIP,
+    -- | 1st appearances of effectful artifacts, up to time of analysis
+    el'branch'effs'wip :: !EL'ArtsWIP,
+    -- | last appearances of annotations encountered in the direct class scope,
+    -- up to time of analysis
+    el'branch'annos'wip :: !(IOPD AttrKey EL'AttrAnno),
+    -- | open regions lately
+    el'branch'regions'wip :: !(TVar [EL'RegionWIP])
+  }
+
+data EL'RegionWIP = EL'RegionWIP
+  { -- | beginning of the region
+    el'region'wip'begin :: !SrcPos,
+    -- | artifacts available in the region
+    el'region'attrs'wip :: !EL'Artifacts
+  }
+
+recordScopeSymbol :: EL'ProcWIP -> EL'AttrSym -> STM ()
 recordScopeSymbol !pwip !sym = case sym of
   EL'DefSym !def ->
     let !symKeyPos = src'end $ el'attr'def'focus def
@@ -138,7 +161,7 @@ recordScopeSymbol !pwip !sym = case sym of
 el'ResolveLexicalAttr :: [EL'ScopeWIP] -> AttrKey -> STM (Maybe EL'AttrDef)
 el'ResolveLexicalAttr [] _ = return Nothing
 el'ResolveLexicalAttr (swip : outers) !key =
-  iopdLookup key (el'scope'attrs'wip $ el'ProcWIP swip) >>= \case
+  iopdLookup key (el'branch'attrs'wip $ el'BranchWIP swip) >>= \case
     Nothing -> el'ResolveLexicalAttr outers key
     Just !def -> return $ Just def
 
@@ -184,7 +207,7 @@ el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
 
 el'ResolveAnnotation :: EL'ScopeWIP -> AttrKey -> STM (Maybe EL'AttrAnno)
 el'ResolveAnnotation !swip !key =
-  iopdLookup key $ el'scope'annos'wip $ el'ProcWIP swip
+  iopdLookup key $ el'branch'annos'wip $ el'BranchWIP swip
 
 el'RunTx :: EL'AnalysisState -> EL'Tx -> STM ()
 el'RunTx !eas !act = act eas

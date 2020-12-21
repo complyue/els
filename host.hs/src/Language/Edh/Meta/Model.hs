@@ -473,7 +473,7 @@ maoScope = EL'Scope noSrcRange V.empty V.empty odEmpty odEmpty V.empty
 --
 -- note a re-definition or a change of annotation doesn't create a new region
 data EL'Region = EL'Region
-  { el'region'begin :: !SrcPos,
+  { el'region'span :: !SrcRange,
     -- | available attributes defined in this region
     el'region'attrs :: !EL'Artifacts
   }

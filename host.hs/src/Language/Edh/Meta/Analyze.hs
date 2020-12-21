@@ -560,22 +560,27 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
   !moduAttrs <- iopdEmpty
   !moduEffs <- iopdEmpty
   !moduAnnos <- iopdEmpty
+  !branchRegions <- newTVar []
   !moduScopes <- newTVar []
-  !moduRegions <- newTVar []
   !moduSyms <- newTVar TreeMap.empty
-  let !pwip =
-        EL'AnaProc
-          (el'modu'exts'wip resolving)
-          (el'modu'exps'wip resolving)
+  !moduRegions <- newTVar []
+  let !bwip =
+        EL'BranchWIP
           moduAttrs
           moduEffs
           moduAnnos
+          branchRegions
+      !pwip =
+        EL'ProcWIP
+          bwip
+          (el'modu'exts'wip resolving)
+          (el'modu'exps'wip resolving)
           moduScopes
-          moduRegions
           moduSyms
+          moduRegions
       !eac =
         EL'Context
-          { el'ctx'scope = EL'ModuWIP ms resolving pwip,
+          { el'ctx'scope = EL'InitModule ms resolving pwip,
             el'ctx'outers = [],
             el'ctx'pure = False,
             el'ctx'exporting = False,
@@ -698,10 +703,10 @@ el'AnalyzeStmt
             -- receive each kwargs
             forM_ (odToList kwargs) $ \(!k, !v) -> recvOne' stmt'span k v
 
-            -- record a region after this let statement, for current scope
-            iopdSnapshot (el'scope'attrs'wip pwip)
-              >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-                . EL'Region (src'end stmt'span)
+            -- record a region after this let statement, for current branch
+            iopdSnapshot (el'branch'attrs'wip bwip)
+              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                . EL'RegionWIP (src'end stmt'span)
 
             el'Exit eas exit $ EL'Const nil
     where
@@ -710,6 +715,7 @@ el'AnalyzeStmt
       diags = el'ctx'diags eac
       !swip = el'ctx'scope eac
       !pwip = el'ProcWIP swip
+      !bwip = el'scope'branch'wip pwip
 
       doRecv :: EL'ArgsPack -> [ArgReceiver] -> STM ()
       doRecv (EL'ArgsPack !args !kwargs) !rcvrs =
@@ -723,9 +729,9 @@ el'AnalyzeStmt
               "extraneous arguments not consumed"
 
           -- record a region after this let statement, for current scope
-          iopdSnapshot (el'scope'attrs'wip pwip)
-            >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-              . EL'Region (src'end stmt'span)
+          iopdSnapshot (el'branch'attrs'wip bwip)
+            >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+              . EL'RegionWIP (src'end stmt'span)
 
           el'Exit eas exit $ EL'Const nil
 
@@ -780,9 +786,10 @@ el'AnalyzeStmt
                           done args kwargs
                         Just !defExpr -> el'RunTx
                           eas {el'context = eac {el'ctx'pure = True}}
-                          $ el'AnalyzeExpr Nothing defExpr $ \ !defVal _eas -> do
-                            received recvKey defVal
-                            done args kwargs
+                          $ el'AnalyzeExpr Nothing defExpr $
+                            \ !defVal _eas -> do
+                              received recvKey defVal
+                              done args kwargs
            in case maybeRename of
                 Nothing -> goRecv addr $ recvOne' arg'span
                 Just (DirectRef !addr') ->
@@ -805,12 +812,12 @@ el'AnalyzeStmt
 
       recvOne' :: SrcRange -> AttrKey -> EL'Value -> STM ()
       recvOne' !focus'span !attrKey !attrVal = do
-        !attrAnno <- newTVar =<< iopdLookup attrKey (el'scope'annos'wip pwip)
+        !attrAnno <- newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
         !prevDef <-
           iopdLookup attrKey $
             if el'ctx'eff'defining eac
-              then el'scope'effs'wip pwip
-              else el'scope'attrs'wip pwip
+              then el'branch'effs'wip bwip
+              else el'branch'attrs'wip bwip
         let !attrDef =
               EL'AttrDef
                 attrKey
@@ -825,16 +832,15 @@ el'AnalyzeStmt
         recordScopeSymbol pwip $ EL'DefSym attrDef
         if el'ctx'eff'defining eac
           then do
-            let !effs = el'scope'effs'wip pwip
+            let !effs = el'branch'effs'wip bwip
             case attrVal of
               EL'Const EdhNil -> iopdDelete attrKey effs
               _ -> iopdInsert attrKey attrDef effs
           else do
-            let !attrs = el'scope'attrs'wip pwip
+            let !attrs = el'branch'attrs'wip bwip
             case attrVal of
               EL'Const EdhNil -> iopdDelete attrKey attrs
-              _ -> do
-                iopdInsert attrKey attrDef attrs
+              _ -> iopdInsert attrKey attrDef attrs
         when (el'ctx'exporting eac) $
           iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
 --
@@ -881,8 +887,9 @@ el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
     !eac = el'context eas
     diags = el'ctx'diags eac
 
-    scope = el'ctx'scope eac
-    pwip = el'ProcWIP scope
+    !swip = el'ctx'scope eac
+    !pwip = el'ProcWIP swip
+-- !bwip = el'scope'branch'wip pwip
 --
 
 -- go
@@ -1141,7 +1148,7 @@ el'AnalyzeExpr
           Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
           Just !attrKey -> do
             let !attrAnno = EL'AttrAnno rhExpr docCmt
-            iopdInsert attrKey attrAnno (el'scope'annos'wip pwip)
+            iopdInsert attrKey attrAnno (el'branch'annos'wip bwip)
             el'Exit eas exit $ EL'Const nil
       ExprSrc _ !bad'anno'span -> do
         el'LogDiag
@@ -1171,6 +1178,7 @@ el'AnalyzeExpr
       diags = el'ctx'diags eac
       !swip = el'ctx'scope eac
       !pwip = el'ProcWIP swip
+      !bwip = el'scope'branch'wip pwip
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 
       easPure = eas {el'context = eac {el'ctx'pure = True}}
@@ -1188,12 +1196,12 @@ el'AnalyzeExpr
                 Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
                 Just !attrKey -> do
                   !attrAnno <-
-                    newTVar =<< iopdLookup attrKey (el'scope'annos'wip pwip)
+                    newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
                   !maybePrevDef <-
                     iopdLookup attrKey $
                       if el'ctx'eff'defining eac
-                        then el'scope'effs'wip pwip
-                        else el'scope'attrs'wip pwip
+                        then el'branch'effs'wip bwip
+                        else el'branch'attrs'wip bwip
                   let !attrDef =
                         EL'AttrDef
                           attrKey
@@ -1209,18 +1217,18 @@ el'AnalyzeExpr
                   unless (el'ctx'pure eac) $ do
                     if el'ctx'eff'defining eac
                       then do
-                        let !effs = el'scope'effs'wip pwip
+                        let !effs = el'branch'effs'wip bwip
                         case rhVal of
                           EL'Const EdhNil -> iopdDelete attrKey effs
                           _ -> iopdInsert attrKey attrDef effs
                       else do
-                        let !attrs = el'scope'attrs'wip pwip
+                        let !attrs = el'branch'attrs'wip bwip
                         case rhVal of
                           EL'Const EdhNil -> do
                             iopdDelete attrKey attrs
                             iopdSnapshot attrs
-                              >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-                                . EL'Region (src'end expr'span)
+                              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                                . EL'RegionWIP (src'end expr'span)
                           _ -> do
                             iopdInsert attrKey attrDef attrs
                             case maybePrevDef of
@@ -1228,9 +1236,9 @@ el'AnalyzeExpr
                               -- after this assignment expr for current scope
                               Nothing ->
                                 iopdSnapshot attrs
-                                  >>= modifyTVar' (el'scope'regions'wip pwip)
+                                  >>= modifyTVar' (el'branch'regions'wip bwip)
                                     . (:)
-                                    . EL'Region (src'end expr'span)
+                                    . EL'RegionWIP (src'end expr'span)
                               _ -> pure ()
                     when (el'ctx'exporting eac) $
                       iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
@@ -1462,8 +1470,9 @@ el'AnalyzeExpr
       !world = el'world eas
       !ets = el'ets eas
       !eac = el'context eas
-      swip = el'ctx'scope eac
-      pwip = el'ProcWIP swip
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      !bwip = el'scope'branch'wip pwip
       diags = el'ctx'diags eac
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 
@@ -1489,14 +1498,14 @@ el'AnalyzeExpr
           PackReceiver !ars -> go srcArts ars
           SingleReceiver !ar -> go srcArts [ar]
         -- record a region after this import, for current scope
-        iopdSnapshot (el'scope'attrs'wip pwip)
-          >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-            . EL'Region (src'end expr'span)
+        iopdSnapshot (el'branch'attrs'wip bwip)
+          >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+            . EL'RegionWIP (src'end expr'span)
         where
           !localTgt =
             if el'ctx'eff'defining eac
-              then el'scope'effs'wip pwip
-              else el'scope'attrs'wip pwip
+              then el'branch'effs'wip bwip
+              else el'branch'attrs'wip bwip
 
           wildImp :: (AttrKey, EL'Value) -> STM ()
           wildImp (!k, !v) = do
@@ -1663,24 +1672,29 @@ el'AnalyzeExpr
     !clsAttrs <- iopdEmpty
     !clsEffs <- iopdEmpty
     !clsAnnos <- iopdEmpty
+    !branchRegions <- newTVar []
     !clsScopes <- newTVar []
-    !clsRegions <- newTVar []
     !clsSyms <- newTVar TreeMap.empty
-    let !pwip =
-          EL'AnaProc
-            clsExts
-            clsExps
+    !clsRegions <- newTVar []
+    let !bwip =
+          EL'BranchWIP
             clsAttrs
             clsEffs
             clsAnnos
+            branchRegions
+        !pwip =
+          EL'ProcWIP
+            bwip
+            clsExts
+            clsExps
             clsScopes
-            clsRegions
             clsSyms
+            clsRegions
         !eacCls =
           EL'Context
             { el'ctx'scope =
-                EL'ClassWIP
-                  ( EL'DefineClass
+                EL'DefineClass
+                  ( EL'ClassWIP
                       clsExts
                       instExts
                       clsExps
@@ -1841,14 +1855,14 @@ el'AnalyzeExpr
             -- record as artifact of outer scope
             unless (el'ctx'pure eac) $ do
               if el'ctx'eff'defining eac
-                then iopdInsert clsName clsDef $ el'scope'effs'wip outerProc
+                then iopdInsert clsName clsDef $ el'branch'effs'wip outerBranch
                 else do
-                  let !attrs = el'scope'attrs'wip outerProc
+                  let !attrs = el'branch'attrs'wip outerBranch
                   iopdInsert clsName clsDef attrs
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
-                    >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-                      . EL'Region (src'end expr'span)
+                    >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                      . EL'RegionWIP (src'end expr'span)
 
               when (el'ctx'exporting eac) $
                 iopdInsert clsName clsDef $ el'scope'exps'wip outerProc
@@ -1859,6 +1873,7 @@ el'AnalyzeExpr
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
+      !outerBranch = el'scope'branch'wip outerProc
       diags = el'ctx'diags eac
 --
 
@@ -1916,22 +1931,27 @@ el'AnalyzeExpr
     !nsAttrs <- iopdEmpty
     !nsEffs <- iopdEmpty
     !nsAnnos <- iopdEmpty
+    !branchRegions <- newTVar []
     !nsScopes <- newTVar []
-    !nsRegions <- newTVar []
     !nsSyms <- newTVar TreeMap.empty
-    let !pwip =
-          EL'AnaProc
-            nsExts
-            nsExps
+    !nsRegions <- newTVar []
+    let !bwip =
+          EL'BranchWIP
             nsAttrs
             nsEffs
             nsAnnos
+            branchRegions
+        !pwip =
+          EL'ProcWIP
+            bwip
+            nsExts
+            nsExps
             nsScopes
-            nsRegions
             nsSyms
+            nsRegions
         !eacNs =
           EL'Context
-            { el'ctx'scope = EL'ObjectWIP (EL'InitObject nsExts nsExps) pwip,
+            { el'ctx'scope = EL'InitObject (EL'ObjectWIP nsExts nsExps) pwip,
               el'ctx'outers = outerScope : el'ctx'outers eac,
               el'ctx'pure = False,
               el'ctx'exporting = False,
@@ -2064,14 +2084,15 @@ el'AnalyzeExpr
                 -- record as artifact of outer scope
                 unless (el'ctx'pure eac) $ do
                   if el'ctx'eff'defining eac
-                    then iopdInsert nsName nsDef $ el'scope'effs'wip outerProc
+                    then iopdInsert nsName nsDef $ el'branch'effs'wip outerBranch
                     else do
-                      let !attrs = el'scope'attrs'wip outerProc
+                      let !attrs = el'branch'attrs'wip outerBranch
                       iopdInsert nsName nsDef attrs
                       -- record a region after this definition for current scope
                       iopdSnapshot attrs
-                        >>= modifyTVar' (el'scope'regions'wip outerProc) . (:)
-                          . EL'Region (src'end expr'span)
+                        >>= modifyTVar' (el'branch'regions'wip outerBranch)
+                          . (:)
+                          . EL'RegionWIP (src'end expr'span)
 
                   when (el'ctx'exporting eac) $
                     iopdInsert nsName nsDef $ el'scope'exps'wip outerProc
@@ -2082,6 +2103,7 @@ el'AnalyzeExpr
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
+      !outerBranch = el'scope'branch'wip outerProc
       diags = el'ctx'diags eac
 --
 
@@ -2091,21 +2113,27 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
     !blkAttrs <- iopdEmpty
     !blkEffs <- iopdEmpty
     !blkAnnos <- iopdEmpty
+    !branchRegions <- newTVar []
     !blkScopes <- newTVar []
-    !blkRegions <- newTVar []
     !blkSyms <- newTVar TreeMap.empty
-    let !pwip =
-          outerProc -- inherit exts/exps from outer scope
-            { el'scope'attrs'wip = blkAttrs,
-              el'scope'effs'wip = blkEffs,
-              el'scope'annos'wip = blkAnnos,
+    !blkRegions <- newTVar []
+    let !bwip =
+          outerBranch -- inherit exts/exps from outer scope
+            { el'branch'attrs'wip = blkAttrs,
+              el'branch'effs'wip = blkEffs,
+              el'branch'annos'wip = blkAnnos,
+              el'branch'regions'wip = branchRegions
+            }
+        !pwip =
+          outerProc
+            { el'scope'branch'wip = bwip,
               el'scope'inner'scopes'wip = blkScopes,
-              el'scope'regions'wip = blkRegions,
-              el'scope'symbols'wip = blkSyms
+              el'scope'symbols'wip = blkSyms,
+              el'scope'regions'wip = blkRegions
             }
         !eacBlk =
           eac
-            { el'ctx'scope = EL'ProcWIP pwip,
+            { el'ctx'scope = EL'ProcFlow pwip,
               el'ctx'outers = outerScope : el'ctx'outers eac
             }
         !easBlk = eas {el'context = eacBlk}
@@ -2138,6 +2166,7 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
     !eac = el'context eas
     !outerScope = el'ctx'scope eac
     !outerProc = el'ProcWIP outerScope
+    !outerBranch = el'scope'branch'wip outerProc
 --
 
 -- void operator
@@ -2194,8 +2223,8 @@ el'AnalyzeExpr
       iopdUpdate loopArts attrs
       -- record a region before the loop body for current scope
       iopdSnapshot attrs
-        >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-          . EL'Region (src'start body'span)
+        >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+          . EL'RegionWIP (src'start body'span)
 
     el'RunTx eas $
       el'AnalyzeExpr Nothing it $
@@ -2204,8 +2233,9 @@ el'AnalyzeExpr
       !eac = el'context eas
       !swip = el'ctx'scope eac
       !pwip = el'ProcWIP swip
-      !attrs = el'scope'attrs'wip pwip
-      !annos = el'scope'annos'wip pwip
+      !bwip = el'scope'branch'wip pwip
+      !attrs = el'branch'attrs'wip bwip
+      !annos = el'branch'annos'wip bwip
 
       -- define artifacts from loop receivers
       defLoopArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
@@ -2314,7 +2344,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
       newTVar
         =<< iopdLookup
           (AttrByName attr)
-          (el'scope'annos'wip pwip)
+          (el'branch'annos'wip bwip)
     let !symVal = EL'Const $ EdhSymbol sym
         !symDef =
           EL'AttrDef
@@ -2332,12 +2362,12 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
 
     -- record as artifact of current scope
     unless (el'ctx'pure eac) $ do
-      let !attrs = el'scope'attrs'wip pwip
+      let !attrs = el'branch'attrs'wip bwip
       iopdInsert symName symDef attrs
       -- record a region after this definition for current scope
       iopdSnapshot attrs
-        >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-          . EL'Region (src'end expr'span)
+        >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+          . EL'RegionWIP (src'end expr'span)
 
       when (el'ctx'exporting eac) $
         iopdInsert symName symDef $ el'scope'exps'wip pwip
@@ -2348,6 +2378,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
     !eac = el'context eas
     !swip = el'ctx'scope eac
     !pwip = el'ProcWIP swip
+    !bwip = el'scope'branch'wip pwip
 
     !symName = AttrByName attr
 --
@@ -2377,21 +2408,27 @@ el'DefineMethod
     !mthAttrs <- iopdEmpty
     !mthEffs <- iopdEmpty
     !mthAnnos <- iopdEmpty
+    !branchRegions <- newTVar []
     !mthScopes <- newTVar []
-    !mthRegions <- newTVar []
     !mthSyms <- newTVar TreeMap.empty
-    let !pwip =
-          outerProc -- inherit exts/exps from outer scope
-            { el'scope'attrs'wip = mthAttrs,
-              el'scope'effs'wip = mthEffs,
-              el'scope'annos'wip = mthAnnos,
+    !mthRegions <- newTVar []
+    let !bwip =
+          outerBranch -- inherit exts/exps from outer scope
+            { el'branch'attrs'wip = mthAttrs,
+              el'branch'effs'wip = mthEffs,
+              el'branch'annos'wip = mthAnnos,
+              el'branch'regions'wip = branchRegions
+            }
+        !pwip =
+          outerProc
+            { el'scope'branch'wip = bwip,
               el'scope'inner'scopes'wip = mthScopes,
-              el'scope'regions'wip = mthRegions,
-              el'scope'symbols'wip = mthSyms
+              el'scope'symbols'wip = mthSyms,
+              el'scope'regions'wip = mthRegions
             }
         !eacMth =
           EL'Context
-            { el'ctx'scope = EL'ProcWIP pwip,
+            { el'ctx'scope = EL'ProcFlow pwip,
               el'ctx'outers = outerScope : el'ctx'outers eac,
               el'ctx'pure = False,
               el'ctx'exporting = False,
@@ -2459,14 +2496,14 @@ el'DefineMethod
             -- record as artifact of outer scope
             unless (el'ctx'pure eac) $ do
               if el'ctx'eff'defining eac
-                then iopdInsert mthName mthDef $ el'scope'effs'wip outerProc
+                then iopdInsert mthName mthDef $ el'branch'effs'wip outerBranch
                 else do
-                  let !attrs = el'scope'attrs'wip outerProc
+                  let !attrs = el'branch'attrs'wip outerBranch
                   iopdInsert mthName mthDef attrs
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
-                    >>= modifyTVar' (el'scope'regions'wip pwip) . (:)
-                      . EL'Region (src'end body'span)
+                    >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                      . EL'RegionWIP (src'end body'span)
 
               when (el'ctx'exporting eac) $
                 iopdInsert mthName mthDef $ el'scope'exps'wip outerProc
@@ -2477,6 +2514,7 @@ el'DefineMethod
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
+      !outerBranch = el'scope'branch'wip outerProc
       -- diags = el'ctx'diags eac
 
       -- define artifacts from arguments for a procedure
@@ -2551,6 +2589,7 @@ el'DefineArrowProc
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
+      !outerBranch = el'scope'branch'wip outerProc
       diags = el'ctx'diags eac
 
       -- define artifacts from arguments for an arrow procedure
@@ -2608,18 +2647,22 @@ el'DefineArrowProc
         !mthScopes <- newTVar []
         !mthRegions <- newTVar []
         !mthSyms <- newTVar TreeMap.empty
-        let !pwip =
-              outerProc -- inherit exts/exps from outer scope
-                { el'scope'attrs'wip = mthAttrs,
-                  el'scope'effs'wip = mthEffs,
-                  el'scope'annos'wip = mthAnnos,
+        let !bwip =
+              outerBranch -- inherit exts/exps from outer scope
+                { el'branch'attrs'wip = mthAttrs,
+                  el'branch'effs'wip = mthEffs,
+                  el'branch'annos'wip = mthAnnos
+                }
+            !pwip =
+              outerProc
+                { el'scope'branch'wip = bwip,
                   el'scope'inner'scopes'wip = mthScopes,
                   el'scope'regions'wip = mthRegions,
                   el'scope'symbols'wip = mthSyms
                 }
             !eacMth =
               EL'Context
-                { el'ctx'scope = EL'ProcWIP pwip,
+                { el'ctx'scope = EL'ProcFlow pwip,
                   el'ctx'outers = outerScope : el'ctx'outers eac,
                   el'ctx'pure = False,
                   el'ctx'exporting = False,
