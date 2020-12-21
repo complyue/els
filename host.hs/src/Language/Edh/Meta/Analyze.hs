@@ -2118,14 +2118,14 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
     !blkSyms <- newTVar TreeMap.empty
     !blkRegions <- newTVar []
     let !bwip =
-          outerBranch -- inherit exts/exps from outer scope
+          outerBranch
             { el'branch'attrs'wip = blkAttrs,
               el'branch'effs'wip = blkEffs,
               el'branch'annos'wip = blkAnnos,
               el'branch'regions'wip = branchRegions
             }
         !pwip =
-          outerProc
+          outerProc -- inherit exts/exps from outer scope
             { el'scope'branch'wip = bwip,
               el'scope'inner'scopes'wip = blkScopes,
               el'scope'symbols'wip = blkSyms,
@@ -2413,19 +2413,29 @@ el'DefineMethod
     !mthSyms <- newTVar TreeMap.empty
     !mthRegions <- newTVar []
     let !bwip =
-          outerBranch -- inherit exts/exps from outer scope
+          outerBranch
             { el'branch'attrs'wip = mthAttrs,
               el'branch'effs'wip = mthEffs,
               el'branch'annos'wip = mthAnnos,
               el'branch'regions'wip = branchRegions
             }
-        !pwip =
-          outerProc
-            { el'scope'branch'wip = bwip,
-              el'scope'inner'scopes'wip = mthScopes,
-              el'scope'symbols'wip = mthSyms,
-              el'scope'regions'wip = mthRegions
-            }
+        !pwip = case outerScope of
+          EL'DefineClass !cwip _pwip ->
+            outerProc
+              { el'scope'branch'wip = bwip,
+                el'scope'exts'wip = el'inst'exts'wip cwip,
+                el'scope'exps'wip = el'inst'exps'wip cwip,
+                el'scope'inner'scopes'wip = mthScopes,
+                el'scope'symbols'wip = mthSyms,
+                el'scope'regions'wip = mthRegions
+              }
+          _ ->
+            outerProc -- inherit exts/exps from outer scope
+              { el'scope'branch'wip = bwip,
+                el'scope'inner'scopes'wip = mthScopes,
+                el'scope'symbols'wip = mthSyms,
+                el'scope'regions'wip = mthRegions
+              }
         !eacMth =
           EL'Context
             { el'ctx'scope = EL'ProcFlow pwip,
@@ -2648,18 +2658,28 @@ el'DefineArrowProc
         !mthRegions <- newTVar []
         !mthSyms <- newTVar TreeMap.empty
         let !bwip =
-              outerBranch -- inherit exts/exps from outer scope
+              outerBranch
                 { el'branch'attrs'wip = mthAttrs,
                   el'branch'effs'wip = mthEffs,
                   el'branch'annos'wip = mthAnnos
                 }
-            !pwip =
-              outerProc
-                { el'scope'branch'wip = bwip,
-                  el'scope'inner'scopes'wip = mthScopes,
-                  el'scope'regions'wip = mthRegions,
-                  el'scope'symbols'wip = mthSyms
-                }
+            !pwip = case outerScope of
+              EL'DefineClass !cwip _pwip ->
+                outerProc
+                  { el'scope'branch'wip = bwip,
+                    el'scope'exts'wip = el'inst'exts'wip cwip,
+                    el'scope'exps'wip = el'inst'exps'wip cwip,
+                    el'scope'inner'scopes'wip = mthScopes,
+                    el'scope'symbols'wip = mthSyms,
+                    el'scope'regions'wip = mthRegions
+                  }
+              _ ->
+                outerProc -- inherit exts/exps from outer scope
+                  { el'scope'branch'wip = bwip,
+                    el'scope'inner'scopes'wip = mthScopes,
+                    el'scope'symbols'wip = mthSyms,
+                    el'scope'regions'wip = mthRegions
+                  }
             !eacMth =
               EL'Context
                 { el'ctx'scope = EL'ProcFlow pwip,
