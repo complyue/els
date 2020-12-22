@@ -345,6 +345,10 @@ instance Show EL'Value where
   show (EL'PropVal !cls !prop) = show cls <> "." <> show prop
   show (EL'Expr !x) = show x
 
+el'IsNil :: EL'Value -> Bool
+el'IsNil (EL'Const EdhNil) = True
+el'IsNil _ = False
+
 -- | a procedure
 data EL'Proc = EL'Proc
   { el'proc'name :: AttrKey,
@@ -387,6 +391,11 @@ data EL'Class = EL'Class
     el'class'mro :: ![EL'Class],
     -- | scope of the class initializing procedure
     el'class'scope :: !EL'Scope,
+    -- | all attributes of the class
+    el'class'attrs :: !EL'Artifacts,
+    -- TODO use a inst'attrs field here to track assignments in methods (esp.
+    -- __init__()) like `this.xxx =` ?
+
     -- | class attributes are exported from the class defining procedure, while
     -- it is allowed to export artifacts from an arbitrary class method whenever
     -- called, which should probably be considered unusual.
@@ -404,39 +413,25 @@ el'MetaClass =
         noSrcRange
         V.empty
         V.empty
-        ( odFromList
-            [ ( AttrByName "name",
-                EL'AttrDef
-                  (AttrByName "name")
-                  Nothing
-                  "<class-intrinsic>"
-                  noSrcRange
-                  (ExprSrc (LitExpr NilLiteral) noSrcRange)
-                  (EL'PropVal el'MetaClass (AttrByName "name"))
-                  maoAnnotation
-                  Nothing
-              )
-            ]
-        )
-        odEmpty
         V.empty
     )
+    odEmpty
     odEmpty
 {-# NOINLINE el'MetaClass #-}
 
 el'NamespaceClass :: EL'Class
 el'NamespaceClass =
-  EL'Class (AttrByName "<namespace>") [] [] maoScope odEmpty
+  EL'Class (AttrByName "<namespace>") [] [] maoScope odEmpty odEmpty
 {-# NOINLINE el'NamespaceClass #-}
 
 el'ModuleClass :: EL'Class
 el'ModuleClass =
-  EL'Class (AttrByName "<module>") [] [] maoScope odEmpty
+  EL'Class (AttrByName "<module>") [] [] maoScope odEmpty odEmpty
 {-# NOINLINE el'ModuleClass #-}
 
 el'ScopeClass :: EL'Class
 el'ScopeClass =
-  EL'Class (AttrByName "<scope>") [] [] maoScope odEmpty
+  EL'Class (AttrByName "<scope>") [] [] maoScope odEmpty odEmpty
 {-# NOINLINE el'ScopeClass #-}
 
 -- | a scope is backed by an entity with arbitrary attributes, as Edh allows
@@ -455,10 +450,6 @@ data EL'Scope = EL'Scope
     -- immutable vector here, so it can be used with binary search to locate
     -- the region for a target location within this scope
     el'scope'regions :: !(Vector EL'Region),
-    -- | the 1st appearances of each attribute defined in this scope
-    el'scope'attrs :: !EL'Artifacts,
-    -- | the 1st appearances of each effectful attribute defined in this scope
-    el'scope'effs :: !EL'Artifacts,
     -- | all symbols encountered in this scope, in order as appeared in src
     el'scope'symbols :: !(Vector EL'AttrSym)
   }
@@ -466,12 +457,15 @@ data EL'Scope = EL'Scope
 
 -- | 冇 scope
 maoScope :: EL'Scope
-maoScope = EL'Scope noSrcRange V.empty V.empty odEmpty odEmpty V.empty
+maoScope = EL'Scope noSrcRange V.empty V.empty V.empty
 
--- | a consecutive region covers the src range of its predecessor, with a single
--- addition or deletion of an attribute definition
---
--- note a re-definition or a change of annotation doesn't create a new region
+el'ScopeAttrs :: EL'Scope -> EL'Artifacts
+el'ScopeAttrs =
+  odFromList . concatMap (odToList . el'region'attrs)
+    . V.toList
+    . el'scope'regions
+
+-- | a region records attributes available within it
 data EL'Region = EL'Region
   { el'region'span :: !SrcRange,
     -- | available attributes defined in this region

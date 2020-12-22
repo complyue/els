@@ -68,8 +68,8 @@ el'ProcWIP (EL'InitModule _ _ p) = p
 el'BranchWIP :: EL'ScopeWIP -> EL'BranchWIP
 el'BranchWIP = el'scope'branch'wip . el'ProcWIP
 
-el'ChangeBranch :: EL'BranchWIP -> EL'ScopeWIP -> EL'ScopeWIP
-el'ChangeBranch !bwip = \case
+el'SwitchBranch :: EL'BranchWIP -> EL'ScopeWIP -> EL'ScopeWIP
+el'SwitchBranch !bwip = \case
   EL'ProcFlow !p -> EL'ProcFlow p {el'scope'branch'wip = bwip}
   EL'DefineClass !c !p -> EL'DefineClass c p {el'scope'branch'wip = bwip}
   EL'InitObject !o !p -> EL'InitObject o p {el'scope'branch'wip = bwip}
@@ -119,6 +119,8 @@ data EL'ClassWIP = EL'ClassWIP
 data EL'ProcWIP = EL'ProcWIP
   { -- | current branch of control flow
     el'scope'branch'wip :: !EL'BranchWIP,
+    -- | last appearances of attributes encountered, up to time of analysis
+    el'scope'attrs'wip :: !EL'ArtsWIP,
     -- | this points to `el'modu'exts'wip` or `el'obj'exts'wip` or
     -- `el'class'exts'wip` or `el'inst'exts'wip` whichever is appropriate
     el'scope'exts'wip :: !(TVar [EL'Object]),
@@ -138,7 +140,7 @@ data EL'ProcWIP = EL'ProcWIP
 data EL'BranchWIP = EL'BranchWIP
   { -- | last appearances of attributes encountered, up to time of analysis
     el'branch'attrs'wip :: !EL'ArtsWIP,
-    -- | 1st appearances of effectful artifacts, up to time of analysis
+    -- | last appearances of effectful artifacts, up to time of analysis
     el'branch'effs'wip :: !EL'ArtsWIP,
     -- | last appearances of annotations encountered in the direct class scope,
     -- up to time of analysis
@@ -148,8 +150,8 @@ data EL'BranchWIP = EL'BranchWIP
   }
 
 data EL'RegionWIP = EL'RegionWIP
-  { -- | beginning of the region
-    el'region'wip'begin :: !SrcPos,
+  { -- | start position of the region
+    el'region'wip'start :: !SrcPos,
     -- | artifacts available in the region
     el'region'attrs'wip :: !EL'Artifacts
   }

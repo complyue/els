@@ -536,8 +536,6 @@ asModuleResolving !world !ms !exit !ets =
                     noSrcRange
                     V.empty
                     V.empty
-                    odEmpty
-                    odEmpty
                     V.empty
                 )
                 odEmpty
@@ -557,6 +555,7 @@ resolveParsedModule ::
   [StmtSrc] ->
   EdhProc EL'ResolvedModule
 resolveParsedModule !world !ms !resolving !body !exit !ets = do
+  !branchAttrs <- iopdEmpty
   !moduAttrs <- iopdEmpty
   !moduEffs <- iopdEmpty
   !moduAnnos <- iopdEmpty
@@ -566,13 +565,14 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
   !moduRegions <- newTVar []
   let !bwip =
         EL'BranchWIP
-          moduAttrs
+          branchAttrs
           moduEffs
           moduAnnos
           branchRegions
       !pwip =
         EL'ProcWIP
           bwip
+          moduAttrs
           (el'modu'exts'wip resolving)
           (el'modu'exps'wip resolving)
           moduScopes
@@ -595,22 +595,33 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
           }
 
   el'RunTx eas $
-    el'AnalyzeStmts body $ \_ _eas -> do
+    el'AnalyzeStmts body $ \_ !easDone -> do
+      let !eacDone = el'context easDone
+          !swipDone = el'ctx'scope eacDone
+          !pwipDone = el'ProcWIP swipDone
+          !bwipDone = el'scope'branch'wip pwipDone
+      !regions'wip <-
+        fmap
+          ( \(EL'RegionWIP !reg'start !reg'arts) ->
+              EL'Region
+                (SrcRange reg'start moduEnd)
+                reg'arts
+          )
+          <$> readTVar (el'branch'regions'wip bwipDone)
+      !innerScopes <- readTVar moduScopes
+      !regions <-
+        (regions'wip ++)
+          <$> readTVar (el'scope'regions'wip pwipDone)
+      !scope'symbols <- readTVar moduSyms
+
       !diags <- readTVar $ el'resolving'diags resolving
       !moduExps <- iopdSnapshot $ el'modu'exps'wip resolving
       !dependencies <- readTVar $ el'modu'dependencies'wip resolving
-      !scope'attrs <- iopdSnapshot moduAttrs
-      !scope'effs <- iopdSnapshot moduEffs
-      !innerScopes <- readTVar moduScopes
-      !regions <- readTVar moduRegions
-      !scope'symbols <- readTVar moduSyms
       let !el'scope =
             EL'Scope
               { el'scope'span = SrcRange beginningSrcPos moduEnd,
                 el'scope'inner'scopes = V.fromList $! reverse innerScopes,
                 el'scope'regions = V.fromList $! reverse regions,
-                el'scope'attrs = scope'attrs,
-                el'scope'effs = scope'effs,
                 el'scope'symbols =
                   V.fromList $ snd <$> TreeMap.toAscList scope'symbols
               }
@@ -663,16 +674,14 @@ el'PackArgs !argSndrs !exit !eas =
 
 -- | a sequence of statements
 el'AnalyzeStmts :: [StmtSrc] -> EL'Analysis EL'Value
-el'AnalyzeStmts !stmts !exit !eas = go stmts
+-- note eas should be passed alone the sequence of statements, for regions to
+-- be handled properly
+el'AnalyzeStmts !stmts !exit = go stmts
   where
-    go :: [StmtSrc] -> STM ()
-    go [] = el'Exit eas exit $ EL'Const nil
-    go (stmt : rest) = el'RunTx eas $
-      el'AnalyzeStmt stmt $ -- TODO eas' may have an updated EL'BranchWIP
-      -- deal with regions as well as handle that chg here?
-        \ !val !eas' -> case rest of
-          [] -> el'Exit eas exit val
-          _ -> go rest
+    go :: [StmtSrc] -> EL'Tx
+    go [] = el'ExitTx exit $ EL'Const nil
+    go [!stmt] = el'AnalyzeStmt stmt exit
+    go (stmt : rest) = el'AnalyzeStmt stmt $ const $ go rest
 
 -- | analyze a statement in context
 el'AnalyzeStmt :: StmtSrc -> EL'Analysis EL'Value
@@ -919,9 +928,7 @@ el'AnalyzeStmt (StmtSrc (PerceiveStmt !expr !body) _stmt'span) !exit !eas =
 el'AnalyzeStmt (StmtSrc (WhileStmt !expr !body) _stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr Nothing expr $
-      const $
-        el'AnalyzeStmt body $
-          const $ el'ExitTx exit $ EL'Const nil
+      const $ el'AnalyzeStmt body $ const $ el'ExitTx exit $ EL'Const nil
 --
 
 -- continue
@@ -986,14 +993,7 @@ el'AnalyzeExpr
   !exit
   !eas =
     el'ResolveAttrAddr eas addr >>= \case
-      Nothing -> do
-        el'LogDiag
-          diags
-          el'Error
-          addr'span
-          "bad-ref"
-          "bad attribute addressor"
-        returnAsExpr
+      Nothing -> returnAsExpr -- error diag should have been logged
       Just (AttrByName "_") -> do
         el'LogDiag
           diags
@@ -1039,33 +1039,55 @@ el'AnalyzeExpr
       EL'ObjVal !obj ->
         el'ResolveAttrAddr eas addr >>= \case
           Nothing -> returnAsExpr
-          Just !refKey -> case odLookup refKey (el'obj'attrs obj) of
-            Nothing -> do
-              el'LogDiag
-                diags
-                el'Error
-                addr'span
-                "no-such-attr"
-                "no such attribute"
-              returnAsExpr
-            Just !attrDef -> do
-              -- record as referencing symbol of outer scope
-              let !attrRef = EL'AttrRef addr attrDef
-              recordScopeSymbol pwip $ EL'RefSym attrRef
+          Just !refKey -> case obj of
+            EL'ClsObj !cls -> case odLookup refKey (el'class'attrs cls) of
+              Nothing -> do
+                el'LogDiag
+                  diags
+                  el'Error
+                  addr'span
+                  "no-cls-attr"
+                  "no such attribute"
+                returnAsExpr
+              Just !attrDef -> do
+                -- record as referencing symbol of outer scope
+                let !attrRef = EL'AttrRef addr attrDef
+                recordScopeSymbol pwip $ EL'RefSym attrRef
 
-              el'Exit eas exit $ el'attr'def'value attrDef
+                el'Exit eas exit $ el'attr'def'value attrDef
+            EL'Object !cls _obj'exts !obj'attrs _obj'exps ->
+              case odLookup refKey obj'attrs of
+                Nothing -> case odLookup refKey (el'class'attrs cls) of
+                  Nothing -> do
+                    el'LogDiag
+                      diags
+                      el'Error
+                      addr'span
+                      "no-obj-attr"
+                      "no such attribute"
+                    returnAsExpr
+                  Just !attrDef -> do
+                    -- record as referencing symbol of outer scope
+                    let !attrRef = EL'AttrRef addr attrDef
+                    recordScopeSymbol pwip $ EL'RefSym attrRef
+
+                    el'Exit eas exit $ el'attr'def'value attrDef
+                Just !attrDef -> do
+                  -- record as referencing symbol of outer scope
+                  let !attrRef = EL'AttrRef addr attrDef
+                  recordScopeSymbol pwip $ EL'RefSym attrRef
+
+                  el'Exit eas exit $ el'attr'def'value attrDef
       EL'ClsVal !cls ->
         el'ResolveAttrAddr eas addr >>= \case
           Nothing -> returnAsExpr
-          Just !refKey -> case odLookup
-            refKey
-            (el'scope'attrs $ el'class'scope cls) of
+          Just !refKey -> case odLookup refKey (el'class'attrs cls) of
             Nothing -> do
               el'LogDiag
                 diags
                 el'Error
                 addr'span
-                "no-such-attr"
+                "no-cls-attr"
                 "no such attribute"
               returnAsExpr
             Just !attrDef -> do
@@ -1093,7 +1115,11 @@ el'AnalyzeExpr
 el'AnalyzeExpr
   !docCmt
   xsrc@( ExprSrc
-           (InfixExpr !opSym lhExpr@(ExprSrc !lhx _lh'span) !rhExpr)
+           ( InfixExpr
+               !opSym
+               lhExpr@(ExprSrc !lhx _lh'span)
+               rhExpr@(ExprSrc _rhx !rh'span)
+             )
            !expr'span
          )
   !exit
@@ -1115,152 +1141,7 @@ el'AnalyzeExpr
     --
 
     -- branch
-    "->" -> do
-      let analyzeBranch :: [(AttrKey, ExprSrc)] -> STM ()
-          analyzeBranch !ps = do
-            !branchAttrs <- iopdEmpty
-            !branchEffs <- iopdEmpty
-            !branchAnnos <- iopdEmpty
-            !branchRegions <- newTVar []
-            let !bwipBranch =
-                  bwip
-                    { el'branch'attrs'wip = branchAttrs,
-                      el'branch'effs'wip = branchEffs,
-                      el'branch'annos'wip = branchAnnos,
-                      el'branch'regions'wip = branchRegions
-                    }
-                !eacBranch =
-                  eac
-                    { el'ctx'scope = el'ChangeBranch bwipBranch swip
-                    }
-                !easBranch = eas {el'context = eacBranch}
-
-                go :: [(AttrKey, ExprSrc)] -> STM ()
-                go [] = el'RunTx easBranch $
-                  el'AnalyzeExpr Nothing rhExpr $
-                    \ !rhResult _eas -> case rhResult of
-                      EL'Const EdhFallthrough ->
-                        -- TODO is it so correct here?
-                        el'Exit easBranch exit $ EL'Expr xsrc
-                      _ -> el'Exit eas exit $ EL'Expr xsrc
-                --
-
-                go ((!attrKey, !attrExpr) : rest) = do
-                  !attrAnno <- newTVar Nothing
-                  !prevDef <-
-                    iopdLookup attrKey $
-                      if el'ctx'eff'defining eac
-                        then el'branch'effs'wip bwip
-                        else el'branch'attrs'wip bwip
-                  let !attrDef =
-                        EL'AttrDef
-                          attrKey
-                          docCmt
-                          opSym
-                          (exprSrcSpan attrExpr)
-                          xsrc
-                          (EL'Expr attrExpr)
-                          attrAnno
-                          prevDef
-                  !maybePrevDef <-
-                    iopdLookup attrKey $
-                      if el'ctx'eff'defining eac
-                        then el'branch'effs'wip bwip
-                        else el'branch'attrs'wip bwip
-                  -- record as artifact of current scope
-                  unless (el'ctx'pure eac) $ do
-                    if el'ctx'eff'defining eac
-                      then do
-                        let !effs = el'branch'effs'wip bwip
-                        case el'attr'def'value attrDef of
-                          EL'Const EdhNil -> iopdDelete attrKey effs
-                          _ -> iopdInsert attrKey attrDef effs
-                      else do
-                        let !attrs = el'branch'attrs'wip bwip
-                        case el'attr'def'value attrDef of
-                          EL'Const EdhNil -> do
-                            iopdDelete attrKey attrs
-                            iopdSnapshot attrs
-                              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-                                . EL'RegionWIP (src'end expr'span)
-                          _ -> do
-                            iopdInsert attrKey attrDef attrs
-                            case maybePrevDef of
-                              -- assignment created a new attr, record a region
-                              -- after this assignment expr for current scope
-                              Nothing ->
-                                iopdSnapshot attrs
-                                  >>= modifyTVar' (el'branch'regions'wip bwip)
-                                    . (:)
-                                    . EL'RegionWIP (src'end expr'span)
-                              _ -> pure ()
-
-                    when (el'ctx'exporting eac) $
-                      iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
-
-                  go rest
-
-            go ps
-
-          handlePattern :: Expr -> STM ()
-          handlePattern = \case
-            -- curly braces at lhs means a pattern
-            BlockExpr !patternExpr -> case patternExpr of
-              -- {( x )} -- single arg
-              [ StmtSrc
-                  ( ExprStmt
-                      ( ParenExpr
-                          argExpr@( ExprSrc
-                                      ( AttrExpr
-                                          ( DirectRef
-                                              ( AttrAddrSrc
-                                                  (NamedAttr !attrName)
-                                                  _
-                                                )
-                                            )
-                                        )
-                                      _
-                                    )
-                        )
-                      _docCmt
-                    )
-                  _
-                ] -> do
-                  let !attrKey = AttrByName attrName
-                  analyzeBranch [(attrKey, argExpr)]
-              --
-
-              -- TODO more patterns
-              _ -> analyzeBranch []
-            --
-
-            -- guarded condition branch
-            PrefixExpr Guard !condExpr -> el'RunTx eas $
-              el'AnalyzeExpr Nothing condExpr $
-                \_cndResult _eas -> analyzeBranch []
-            --
-
-            -- TODO pair pattern, expand matching attrs
-            DictExpr {} ->
-              analyzeBranch []
-            --
-
-            -- not a pattern, value match
-            _ -> el'RunTx eas $
-              el'AnalyzeExpr Nothing lhExpr $
-                \_lhResult _eas -> analyzeBranch []
-      --
-
-      case lhx of
-        -- wild match
-        AttrExpr (DirectRef (AttrAddrSrc (NamedAttr "_") _)) ->
-          analyzeBranch []
-        -- pattern or value match, guarded
-        InfixExpr "|" (ExprSrc !matchExpr _) !guardExpr -> el'RunTx eas $
-          el'AnalyzeExpr Nothing guardExpr $
-            \_guardResult _eas -> handlePattern matchExpr
-        -- pattern or value match
-        _ -> handlePattern lhx
+    "->" -> doBranch
     --
 
     -- method/generator arrow procedure
@@ -1326,10 +1207,12 @@ el'AnalyzeExpr
 
       easPure = eas {el'context = eac {el'ctx'pure = True}}
 
+      doCmp :: STM ()
       doCmp = el'RunTx easPure $
         el'AnalyzeExpr Nothing lhExpr $ \_lhVal ->
           el'AnalyzeExpr Nothing rhExpr $ \_rhVal _eas -> returnAsExpr
 
+      doAssign :: STM ()
       doAssign = el'RunTx easPure $
         el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> do
           case lhExpr of
@@ -1366,13 +1249,15 @@ el'AnalyzeExpr
                           _ -> iopdInsert attrKey attrDef effs
                       else do
                         let !attrs = el'branch'attrs'wip bwip
-                        case rhVal of
-                          EL'Const EdhNil -> do
+                        if el'IsNil rhVal && "=" == opSym
+                          then do
+                            iopdDelete attrKey $ el'scope'attrs'wip pwip
                             iopdDelete attrKey attrs
                             iopdSnapshot attrs
                               >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
                                 . EL'RegionWIP (src'end expr'span)
-                          _ -> do
+                          else do
+                            iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
                             iopdInsert attrKey attrDef attrs
                             case maybePrevDef of
                               -- assignment created a new attr, record a region
@@ -1402,20 +1287,17 @@ el'AnalyzeExpr
                         -- record as definition symbol of current scope
                         recordScopeSymbol pwip $ EL'DefSym attrDef
                         returnAsExpr
-            ExprSrc
-              (AttrExpr (IndirectRef !tgtExpr !addr))
-              _expr'span -> el'RunTx easPure $
+            ExprSrc (AttrExpr (IndirectRef !tgtExpr !addr)) _expr'span ->
+              el'RunTx easPure $
                 el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
                   -- TODO add to lh obj attrs for (=) ?
                   --      other cases ?
                   el'ResolveAttrAddr eas addr >> returnAsExpr
-            ExprSrc
-              (IndexExpr !idxExpr !tgtExpr)
-              _expr'span ->
-                el'RunTx easPure $
-                  el'AnalyzeExpr Nothing idxExpr $ \_idxVal ->
-                    el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
-                      returnAsExpr
+            ExprSrc (IndexExpr !idxExpr !tgtExpr) _expr'span ->
+              el'RunTx easPure $
+                el'AnalyzeExpr Nothing idxExpr $ \_idxVal ->
+                  el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
+                    returnAsExpr
             ExprSrc _ !bad'assign'tgt'span -> do
               el'LogDiag
                 diags
@@ -1424,12 +1306,168 @@ el'AnalyzeExpr
                 "bad-assign-target"
                 "bad assignment target"
               returnAsExpr
+
+      doBranch :: STM ()
+      doBranch = do
+        let analyzeBranch :: [(AttrKey, ExprSrc)] -> STM ()
+            analyzeBranch !ps = do
+              !branchAttrs <- iopdClone $ el'branch'attrs'wip bwip
+              !branchEffs <- iopdClone $ el'branch'effs'wip bwip
+              !branchAnnos <- iopdClone $ el'branch'annos'wip bwip
+              !branchRegions <- newTVar []
+              let !bwipBranch =
+                    bwip
+                      { el'branch'attrs'wip = branchAttrs,
+                        el'branch'effs'wip = branchEffs,
+                        el'branch'annos'wip = branchAnnos,
+                        el'branch'regions'wip = branchRegions
+                      }
+                  !eacBranch =
+                    eac {el'ctx'scope = el'SwitchBranch bwipBranch swip}
+                  !easBranch = eas {el'context = eacBranch}
+
+                  go :: [(AttrKey, ExprSrc)] -> STM ()
+                  go [] = el'RunTx easBranch $
+                    el'AnalyzeExpr Nothing rhExpr $
+                      \ !rhResult _eas -> do
+                        -- TODO fill annos of ps from branchAnnos now
+                        case rhResult of
+                          EL'Const EdhFallthrough -> do
+                            -- this branch leaks to its following code
+                            !prevRegions <-
+                              readTVar
+                                (el'branch'regions'wip bwip)
+                            modifyTVar' branchRegions (++ prevRegions)
+                            el'Exit easBranch exit $ EL'Expr xsrc
+                          _ -> do
+                            -- this branch closes
+                            !regions <-
+                              fmap
+                                ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                                    EL'Region
+                                      (SrcRange reg'start (src'end rh'span))
+                                      reg'arts
+                                )
+                                <$> readTVar branchRegions
+                            modifyTVar' (el'scope'regions'wip pwip) (regions ++)
+                            el'Exit eas exit $ EL'Expr xsrc
+                  --
+
+                  go ((!attrKey, !attrExpr) : rest) = do
+                    !attrAnno <- newTVar Nothing
+                    !prevDef <-
+                      iopdLookup attrKey $
+                        if el'ctx'eff'defining eac
+                          then el'branch'effs'wip bwip
+                          else el'branch'attrs'wip bwip
+                    let !attrDef =
+                          EL'AttrDef
+                            attrKey
+                            docCmt
+                            opSym
+                            (exprSrcSpan attrExpr)
+                            xsrc
+                            (EL'Expr attrExpr)
+                            attrAnno
+                            prevDef
+                    !maybePrevDef <-
+                      iopdLookup attrKey $
+                        if el'ctx'eff'defining eac
+                          then el'branch'effs'wip bwip
+                          else el'branch'attrs'wip bwip
+                    -- record as artifact of current scope
+                    unless (el'ctx'pure eac) $ do
+                      if el'ctx'eff'defining eac
+                        then do
+                          let !effs = el'branch'effs'wip bwip
+                          case el'attr'def'value attrDef of
+                            EL'Const EdhNil -> iopdDelete attrKey effs
+                            _ -> iopdInsert attrKey attrDef effs
+                        else do
+                          let !attrs = el'branch'attrs'wip bwip
+                          iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
+                          iopdInsert attrKey attrDef attrs
+                          case maybePrevDef of
+                            -- assignment created a new attr, record a region
+                            -- after this assignment expr for current scope
+                            Nothing ->
+                              iopdSnapshot attrs
+                                >>= modifyTVar' (el'branch'regions'wip bwip)
+                                  . (:)
+                                  . EL'RegionWIP (src'end expr'span)
+                            _ -> pure ()
+
+                      when (el'ctx'exporting eac) $
+                        iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
+
+                    go rest
+
+              go ps
+
+            handlePattern :: Expr -> STM ()
+            handlePattern = \case
+              -- curly braces at lhs means a pattern
+              BlockExpr !patternExpr -> case patternExpr of
+                -- {( x )} -- single arg
+                [ StmtSrc
+                    ( ExprStmt
+                        ( ParenExpr
+                            argExpr@( ExprSrc
+                                        ( AttrExpr
+                                            ( DirectRef
+                                                ( AttrAddrSrc
+                                                    (NamedAttr !attrName)
+                                                    _
+                                                  )
+                                              )
+                                          )
+                                        _
+                                      )
+                          )
+                        _docCmt
+                      )
+                    _
+                  ] -> do
+                    let !attrKey = AttrByName attrName
+                    analyzeBranch [(attrKey, argExpr)]
+                --
+
+                -- TODO more patterns
+                _ -> analyzeBranch []
+              --
+
+              -- guarded condition branch
+              PrefixExpr Guard !condExpr -> el'RunTx eas $
+                el'AnalyzeExpr Nothing condExpr $
+                  \_cndResult _eas -> analyzeBranch []
+              --
+
+              -- TODO pair pattern, expand matching attrs
+              DictExpr {} ->
+                analyzeBranch []
+              --
+
+              -- not a pattern, value match
+              _ -> el'RunTx eas $
+                el'AnalyzeExpr Nothing lhExpr $
+                  \_lhResult _eas -> analyzeBranch []
+        --
+
+        case lhx of
+          -- wild match
+          AttrExpr (DirectRef (AttrAddrSrc (NamedAttr "_") _)) ->
+            analyzeBranch []
+          -- pattern or value match, guarded
+          InfixExpr "|" (ExprSrc !matchExpr _) !guardExpr -> el'RunTx eas $
+            el'AnalyzeExpr Nothing guardExpr $
+              \_guardResult _eas -> handlePattern matchExpr
+          -- pattern or value match
+          _ -> handlePattern lhx
 --
 
 -- apk ctor
 el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
-  el'RunTx eas $
-    el'PackArgs argSndrs $ \ !apk -> el'ExitTx exit $ EL'Apk apk
+  el'RunTx eas $ el'PackArgs argSndrs $ \ !apk -> el'ExitTx exit $ EL'Apk apk
 --
 
 -- list ctor
@@ -1812,6 +1850,7 @@ el'AnalyzeExpr
     !instExts <- newTVar []
     !clsExps <- iopdEmpty
     !instExps <- iopdEmpty
+    !branchAttrs <- iopdEmpty
     !clsAttrs <- iopdEmpty
     !clsEffs <- iopdEmpty
     !clsAnnos <- iopdEmpty
@@ -1821,13 +1860,14 @@ el'AnalyzeExpr
     !clsRegions <- newTVar []
     let !bwip =
           EL'BranchWIP
-            clsAttrs
+            branchAttrs
             clsEffs
             clsAnnos
             branchRegions
         !pwip =
           EL'ProcWIP
             bwip
+            clsAttrs
             clsExts
             clsExps
             clsScopes
@@ -1935,8 +1975,6 @@ el'AnalyzeExpr
                             cls'name'span
                             V.empty
                             V.empty
-                            odEmpty
-                            odEmpty
                             V.empty
                         )
                     )
@@ -1945,28 +1983,42 @@ el'AnalyzeExpr
                 Nothing
             )
 
+    -- define data fields as class attributes
+    -- TODO this correct?
+    case argsRcvr of
+      -- a normal class
+      WildReceiver -> pure ()
+      -- a data class (ADT)
+      SingleReceiver !ar -> defDataArts [ar]
+      PackReceiver !ars -> defDataArts ars
+
     el'RunTx easCls $
-      el'AnalyzeStmts [cls'body] $ \_ _eas -> do
-        case argsRcvr of
-          -- a normal class
-          WildReceiver -> pure ()
-          -- a data class (ADT)
-          SingleReceiver !ar -> defDataArts [ar]
-          PackReceiver !ars -> defDataArts ars
+      el'AnalyzeStmts [cls'body] $ \_ !easDone -> do
+        let !eacDone = el'context easDone
+            !swipDone = el'ctx'scope eacDone
+            !pwipDone = el'ProcWIP swipDone
+            !bwipDone = el'scope'branch'wip pwipDone
+        !regions'wip <-
+          fmap
+            ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                EL'Region
+                  (SrcRange reg'start (src'end body'span))
+                  reg'arts
+            )
+            <$> readTVar (el'branch'regions'wip bwipDone)
+        !innerScopes <- readTVar clsScopes
+        !regions <-
+          (regions'wip ++)
+            <$> readTVar (el'scope'regions'wip pwipDone)
+        !scope'symbols <- readTVar clsSyms
+
         !cls'exts <- readTVar clsExts
         !cls'exps <- iopdSnapshot clsExps
-        !scope'attrs <- iopdSnapshot clsAttrs
-        !scope'effs <- iopdSnapshot clsEffs
-        !innerScopes <- readTVar clsScopes
-        !regions <- readTVar clsRegions
-        !scope'symbols <- readTVar clsSyms
         let !cls'scope =
               EL'Scope
                 { el'scope'span = body'span,
                   el'scope'inner'scopes = V.fromList $! reverse innerScopes,
                   el'scope'regions = V.fromList $! reverse regions,
-                  el'scope'attrs = scope'attrs,
-                  el'scope'effs = scope'effs,
                   el'scope'symbols =
                     V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                 }
@@ -1979,7 +2031,14 @@ el'AnalyzeExpr
           Just !clsName -> do
             !clsAnno <- newTVar =<< el'ResolveAnnotation outerScope clsName
             let !mro = [] -- TODO C3 linearize cls'exts to get this
-                !cls = EL'Class clsName cls'exts mro cls'scope cls'exps
+                !cls =
+                  EL'Class
+                    clsName
+                    cls'exts
+                    mro
+                    cls'scope
+                    (el'ScopeAttrs cls'scope)
+                    cls'exps
                 !clsVal = EL'ClsVal cls
                 !clsDef =
                   EL'AttrDef
@@ -2001,10 +2060,11 @@ el'AnalyzeExpr
                 then iopdInsert clsName clsDef $ el'branch'effs'wip outerBranch
                 else do
                   let !attrs = el'branch'attrs'wip outerBranch
+                  iopdInsert clsName clsDef $ el'scope'attrs'wip outerProc
                   iopdInsert clsName clsDef attrs
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
-                    >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                    >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
                       . EL'RegionWIP (src'end expr'span)
 
               when (el'ctx'exporting eac) $
@@ -2071,6 +2131,7 @@ el'AnalyzeExpr
   !eas = do
     !nsExts <- newTVar []
     !nsExps <- iopdEmpty
+    !branchAttrs <- iopdEmpty
     !nsAttrs <- iopdEmpty
     !nsEffs <- iopdEmpty
     !nsAnnos <- iopdEmpty
@@ -2080,13 +2141,14 @@ el'AnalyzeExpr
     !nsRegions <- newTVar []
     let !bwip =
           EL'BranchWIP
-            nsAttrs
+            branchAttrs
             nsEffs
             nsAnnos
             branchRegions
         !pwip =
           EL'ProcWIP
             bwip
+            nsAttrs
             nsExts
             nsExps
             nsScopes
@@ -2167,81 +2229,96 @@ el'AnalyzeExpr
 
     defNsArgs argsPkr $ \ !argArts -> do
       iopdUpdate argArts nsAttrs
+      -- record a region starting from beginning of the body
+      iopdSnapshot nsAttrs
+        >>= modifyTVar' branchRegions . (:)
+          . EL'RegionWIP (src'start body'span)
       el'RunTx easNs $
-        el'AnalyzeStmts [ns'body] $ \_ _eas ->
-          do
-            -- update annotations for arguments from body
-            forM_ argArts $ \(!argName, !argDef) ->
-              iopdLookup argName nsAnnos >>= \case
-                Nothing -> pure ()
-                Just !anno ->
-                  writeTVar (el'attr'def'anno argDef) $ Just anno
-            --
+        el'AnalyzeStmts [ns'body] $ \_ !easDone -> do
+          let !eacDone = el'context easDone
+              !swipDone = el'ctx'scope eacDone
+              !pwipDone = el'ProcWIP swipDone
+              !bwipDone = el'scope'branch'wip pwipDone
+          !regions'wip <-
+            fmap
+              ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                  EL'Region
+                    (SrcRange reg'start (src'end body'span))
+                    reg'arts
+              )
+              <$> readTVar (el'branch'regions'wip bwipDone)
 
-            !ns'exts <- readTVar nsExts
-            !ns'exps <- iopdSnapshot nsExps
-            !scope'attrs <- iopdSnapshot nsAttrs
-            !scope'effs <- iopdSnapshot nsEffs
-            !innerScopes <- readTVar nsScopes
-            !regions <- readTVar nsRegions
-            !scope'symbols <- readTVar nsSyms
-            let !ns'scope =
-                  EL'Scope
-                    { el'scope'span = body'span,
-                      el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                      el'scope'regions = V.fromList $! reverse regions,
-                      el'scope'attrs = scope'attrs,
-                      el'scope'effs = scope'effs,
-                      el'scope'symbols =
-                        V.fromList $ snd <$> TreeMap.toAscList scope'symbols
-                    }
-            -- record as an inner scope of outer scope
-            modifyTVar' (el'scope'inner'scopes'wip outerProc) (ns'scope :)
+          -- update annotations for arguments from body
+          forM_ argArts $ \(!argName, !argDef) ->
+            iopdLookup argName nsAnnos >>= \case
+              Nothing -> pure ()
+              Just !anno ->
+                writeTVar (el'attr'def'anno argDef) $ Just anno
+          --
 
-            el'ResolveAttrAddr eas ns'name >>= \case
-              Nothing -> el'Exit eas exit $ EL'Const nil
-              Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
-              Just !nsName -> do
-                !nsAnno <- newTVar =<< el'ResolveAnnotation outerScope nsName
-                let !ns =
-                      EL'Object
-                        el'NamespaceClass
-                        ns'exts
-                        scope'attrs
-                        ns'exps
-                    !nsVal = EL'ObjVal ns
-                    !nsDef =
-                      EL'AttrDef
-                        nsName
-                        docCmt
-                        "<namespace-def>"
-                        ns'name'span
-                        xsrc
-                        nsVal
-                        nsAnno
-                        Nothing
-                -- record as definition symbol of outer scope
-                recordScopeSymbol outerProc $ EL'DefSym nsDef
-                --
+          !ns'exts <- readTVar nsExts
+          !ns'exps <- iopdSnapshot nsExps
+          !innerScopes <- readTVar nsScopes
+          !regions <-
+            (regions'wip ++)
+              <$> readTVar (el'scope'regions'wip pwipDone)
+          !scope'symbols <- readTVar nsSyms
+          let !ns'scope =
+                EL'Scope
+                  { el'scope'span = body'span,
+                    el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                    el'scope'regions = V.fromList $! reverse regions,
+                    el'scope'symbols =
+                      V.fromList $ snd <$> TreeMap.toAscList scope'symbols
+                  }
+          -- record as an inner scope of outer scope
+          modifyTVar' (el'scope'inner'scopes'wip outerProc) (ns'scope :)
 
-                -- record as artifact of outer scope
-                unless (el'ctx'pure eac) $ do
-                  if el'ctx'eff'defining eac
-                    then iopdInsert nsName nsDef $ el'branch'effs'wip outerBranch
-                    else do
-                      let !attrs = el'branch'attrs'wip outerBranch
-                      iopdInsert nsName nsDef attrs
-                      -- record a region after this definition for current scope
-                      iopdSnapshot attrs
-                        >>= modifyTVar' (el'branch'regions'wip outerBranch)
-                          . (:)
-                          . EL'RegionWIP (src'end expr'span)
+          el'ResolveAttrAddr eas ns'name >>= \case
+            Nothing -> el'Exit eas exit $ EL'Const nil
+            Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+            Just !nsName -> do
+              !nsAnno <- newTVar =<< el'ResolveAnnotation outerScope nsName
+              let !ns =
+                    EL'Object
+                      el'NamespaceClass
+                      ns'exts
+                      (el'ScopeAttrs ns'scope)
+                      ns'exps
+                  !nsVal = EL'ObjVal ns
+                  !nsDef =
+                    EL'AttrDef
+                      nsName
+                      docCmt
+                      "<namespace-def>"
+                      ns'name'span
+                      xsrc
+                      nsVal
+                      nsAnno
+                      Nothing
+              -- record as definition symbol of outer scope
+              recordScopeSymbol outerProc $ EL'DefSym nsDef
+              --
 
-                  when (el'ctx'exporting eac) $
-                    iopdInsert nsName nsDef $ el'scope'exps'wip outerProc
+              -- record as artifact of outer scope
+              unless (el'ctx'pure eac) $ do
+                if el'ctx'eff'defining eac
+                  then iopdInsert nsName nsDef $ el'branch'effs'wip outerBranch
+                  else do
+                    let !attrs = el'branch'attrs'wip outerBranch
+                    iopdInsert nsName nsDef $ el'scope'attrs'wip outerProc
+                    iopdInsert nsName nsDef attrs
+                    -- record a region after this definition for current scope
+                    iopdSnapshot attrs
+                      >>= modifyTVar' (el'branch'regions'wip outerBranch)
+                        . (:)
+                        . EL'RegionWIP (src'end expr'span)
 
-                -- return the namespace object value
-                el'Exit eas exit nsVal
+                when (el'ctx'exporting eac) $
+                  iopdInsert nsName nsDef $ el'scope'exps'wip outerProc
+
+              -- return the namespace object value
+              el'Exit eas exit nsVal
     where
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
@@ -2282,19 +2359,29 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
         !easBlk = eas {el'context = eacBlk}
 
     el'RunTx easBlk $
-      el'AnalyzeStmts stmts $ \ !resultVal _eas -> do
-        !scope'attrs <- iopdSnapshot blkAttrs
-        !scope'effs <- iopdSnapshot blkEffs
+      el'AnalyzeStmts stmts $ \ !resultVal !easDone -> do
+        let !eacDone = el'context easDone
+            !swipDone = el'ctx'scope eacDone
+            !pwipDone = el'ProcWIP swipDone
+            !bwipDone = el'scope'branch'wip pwipDone
+        !regions'wip <-
+          fmap
+            ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                EL'Region
+                  (SrcRange reg'start (src'end blk'span))
+                  reg'arts
+            )
+            <$> readTVar (el'branch'regions'wip bwipDone)
         !innerScopes <- readTVar blkScopes
-        !regions <- readTVar blkRegions
+        !regions <-
+          (regions'wip ++)
+            <$> readTVar (el'scope'regions'wip pwipDone)
         !scope'symbols <- readTVar blkSyms
         let !blk'scope =
               EL'Scope
                 { el'scope'span = blk'span,
                   el'scope'inner'scopes = V.fromList $! reverse innerScopes,
                   el'scope'regions = V.fromList $! reverse regions,
-                  el'scope'attrs = scope'attrs,
-                  el'scope'effs = scope'effs,
                   el'scope'symbols =
                     V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                 }
@@ -2335,6 +2422,7 @@ el'AnalyzeExpr
   x@(ExprSrc (IfExpr !cond !cseq !maybeAlt) _expr'span)
   !exit
   !eas =
+    -- TODO use branch in cseq/alt, close when it evals to `return`
     el'RunTx eas $
       el'AnalyzeExpr Nothing cond $
         const $
@@ -2346,10 +2434,24 @@ el'AnalyzeExpr
 --
 
 -- case-of
-el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) _expr'span) !exit !eas =
+el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr Nothing tgt $
-      const $ el'AnalyzeExpr Nothing bs $ const $ el'ExitTx exit $ EL'Expr x
+      const $
+        el'AnalyzeExpr Nothing bs $ \_result _eas -> do
+          -- record a new region following this case-of
+          -- TODO check whether new attrs actually added, don't record if not
+          !scope'attrs <- iopdSnapshot (el'scope'attrs'wip pwip)
+          modifyTVar'
+            (el'branch'regions'wip bwip)
+            (EL'RegionWIP (src'end expr'span) scope'attrs :)
+
+          el'Exit eas exit $ EL'Expr x
+  where
+    !eac = el'context eas
+    !swip = el'ctx'scope eac
+    !pwip = el'ProcWIP swip
+    !bwip = el'scope'branch'wip pwip
 --
 
 -- for-from-do
@@ -2363,6 +2465,7 @@ el'AnalyzeExpr
       PackReceiver !ars -> defLoopArts ars
       SingleReceiver !ar -> defLoopArts [ar]
     unless (null loopArts) $ do
+      iopdUpdate loopArts $ el'scope'attrs'wip pwip
       iopdUpdate loopArts attrs
       -- record a region before the loop body for current scope
       iopdSnapshot attrs
@@ -2371,7 +2474,16 @@ el'AnalyzeExpr
 
     el'RunTx eas $
       el'AnalyzeExpr Nothing it $
-        const $ el'AnalyzeStmt body $ const $ el'ExitTx exit $ EL'Expr x
+        const $
+          el'AnalyzeStmt body $ \_result _eas -> do
+            -- record a new region following this for-from-do loop
+            -- TODO check whether new attrs actually added, don't record if not
+            !scope'attrs <- iopdSnapshot (el'scope'attrs'wip pwip)
+            modifyTVar'
+              (el'branch'regions'wip bwip)
+              (EL'RegionWIP (src'end body'span) scope'attrs :)
+
+            el'Exit eas exit $ EL'Expr x
     where
       !eac = el'context eas
       !swip = el'ctx'scope eac
@@ -2506,6 +2618,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
     -- record as artifact of current scope
     unless (el'ctx'pure eac) $ do
       let !attrs = el'branch'attrs'wip bwip
+      iopdInsert symName symDef $ el'scope'attrs'wip pwip
       iopdInsert symName symDef attrs
       -- record a region after this definition for current scope
       iopdSnapshot attrs
@@ -2597,25 +2710,37 @@ el'DefineMethod
     iopdUpdate argArts mthAttrs
 
     el'RunTx easMth $
-      el'AnalyzeStmts [mth'body] $ \_ _eas -> do
+      el'AnalyzeStmts [mth'body] $ \_ !easDone -> do
+        let !eacDone = el'context easDone
+            !swipDone = el'ctx'scope eacDone
+            !pwipDone = el'ProcWIP swipDone
+            !bwipDone = el'scope'branch'wip pwipDone
+        !regions'wip <-
+          fmap
+            ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                EL'Region
+                  (SrcRange reg'start (src'end body'span))
+                  reg'arts
+            )
+            <$> readTVar (el'branch'regions'wip bwipDone)
+        !innerScopes <- readTVar mthScopes
+        !regions <-
+          (regions'wip ++)
+            <$> readTVar (el'scope'regions'wip pwipDone)
+        !scope'symbols <- readTVar mthSyms
+
         -- update annotations for arguments from body
         forM_ argArts $ \(!argName, !argDef) ->
           iopdLookup argName mthAnnos >>= \case
             Nothing -> pure ()
             Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
         --
-        !scope'attrs <- iopdSnapshot mthAttrs
-        !scope'effs <- iopdSnapshot mthEffs
-        !innerScopes <- readTVar mthScopes
-        !regions <- readTVar mthRegions
-        !scope'symbols <- readTVar mthSyms
+
         let !mth'scope =
               EL'Scope
                 { el'scope'span = body'span,
                   el'scope'inner'scopes = V.fromList $! reverse innerScopes,
                   el'scope'regions = V.fromList $! reverse regions,
-                  el'scope'attrs = scope'attrs,
-                  el'scope'effs = scope'effs,
                   el'scope'symbols =
                     V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                 }
@@ -2652,10 +2777,11 @@ el'DefineMethod
                 then iopdInsert mthName mthDef $ el'branch'effs'wip outerBranch
                 else do
                   let !attrs = el'branch'attrs'wip outerBranch
+                  iopdInsert mthName mthDef $ el'scope'attrs'wip outerProc
                   iopdInsert mthName mthDef attrs
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
-                    >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                    >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
                       . EL'RegionWIP (src'end body'span)
 
               when (el'ctx'exporting eac) $
@@ -2841,25 +2967,37 @@ el'DefineArrowProc
         iopdUpdate argArts mthAttrs
 
         el'RunTx easMth $
-          el'AnalyzeExpr Nothing rhExpr $ \_ _eas -> do
+          el'AnalyzeExpr Nothing rhExpr $ \_ !easDone -> do
+            let !eacDone = el'context easDone
+                !swipDone = el'ctx'scope eacDone
+                !pwipDone = el'ProcWIP swipDone
+                !bwipDone = el'scope'branch'wip pwipDone
+            !regions'wip <-
+              fmap
+                ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                    EL'Region
+                      (SrcRange reg'start (src'end body'span))
+                      reg'arts
+                )
+                <$> readTVar (el'branch'regions'wip bwipDone)
+            !innerScopes <- readTVar mthScopes
+            !regions <-
+              (regions'wip ++)
+                <$> readTVar (el'scope'regions'wip pwipDone)
+            !scope'symbols <- readTVar mthSyms
+
             -- update annotations for arguments from body
             forM_ argArts $ \(!argName, !argDef) ->
               iopdLookup argName mthAnnos >>= \case
                 Nothing -> pure ()
                 Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
             --
-            !scope'attrs <- iopdSnapshot mthAttrs
-            !scope'effs <- iopdSnapshot mthEffs
-            !innerScopes <- readTVar mthScopes
-            !regions <- readTVar mthRegions
-            !scope'symbols <- readTVar mthSyms
+
             let !mth'scope =
                   EL'Scope
                     { el'scope'span = body'span,
                       el'scope'inner'scopes = V.fromList $! reverse innerScopes,
                       el'scope'regions = V.fromList $! reverse regions,
-                      el'scope'attrs = scope'attrs,
-                      el'scope'effs = scope'effs,
                       el'scope'symbols =
                         V.fromList $ snd <$> TreeMap.toAscList scope'symbols
                     }

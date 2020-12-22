@@ -103,7 +103,7 @@ createMetaWorldClass !msClass !clsOuterScope =
               el'WalkResolutionDiags msMeta $ logDiags "Đ semantics"
               -- make the meta scope for ambient of all modules
               let !metaRootScope = el'modu'scope resolvedMeta
-                  !ambient = odMap metaDef (el'scope'attrs metaRootScope)
+                  !ambient = odMap metaDef (el'ScopeAttrs metaRootScope)
                   metaDef !def =
                     def
                       { el'attr'def'focus = noSrcRange,
