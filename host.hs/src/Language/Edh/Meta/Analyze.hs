@@ -642,7 +642,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
 
 -- | pack arguments
 el'PackArgs :: ArgsPacker -> EL'Analysis EL'ArgsPack
-el'PackArgs !argSndrs !exit !eas =
+el'PackArgs (ArgsPacker !argSndrs _) !exit !eas =
   el'RunTx easPure $ collectArgs [] [] argSndrs
   where
     !eac = el'context eas
@@ -1309,7 +1309,109 @@ el'AnalyzeExpr
 
       doBranch :: STM ()
       doBranch = do
-        let analyzeBranch :: [(AttrKey, ExprSrc)] -> STM ()
+        let defExprAttrs ::
+              [(AttrKey, ExprSrc)] ->
+              ( [(AttrKey, EL'AttrDef)] ->
+                STM ()
+              ) ->
+              STM ()
+            defExprAttrs !kes !daExit = go kes []
+              where
+                go :: [(AttrKey, ExprSrc)] -> [(AttrKey, EL'AttrDef)] -> STM ()
+                go [] !kds = daExit kds
+                go ((!attrKey, !attrExpr) : rest) !kds = do
+                  !attrAnno <- newTVar Nothing
+                  !maybePrevDef <-
+                    iopdLookup attrKey $
+                      if el'ctx'eff'defining eac
+                        then el'branch'effs'wip bwip
+                        else el'branch'attrs'wip bwip
+                  let !attrDef =
+                        EL'AttrDef
+                          attrKey
+                          Nothing
+                          opSym
+                          (exprSrcSpan attrExpr)
+                          xsrc
+                          (EL'Expr attrExpr)
+                          attrAnno
+                          maybePrevDef
+                  go rest ((attrKey, attrDef) : kds)
+
+            defDfAttrs ::
+              EL'Artifacts ->
+              [ArgSender] ->
+              ( [(AttrKey, EL'AttrDef)] ->
+                STM ()
+              ) ->
+              STM ()
+            defDfAttrs !arts !sndrs !daExit = go sndrs []
+              where
+                go :: [ArgSender] -> [(AttrKey, EL'AttrDef)] -> STM ()
+                go [] !kds = daExit kds
+                go (sndr : rest) !kds = do
+                  !attrAnno <- newTVar Nothing
+                  case sndr of
+                    SendPosArg
+                      attrExpr@( ExprSrc
+                                   (AttrExpr (DirectRef !rcvAttr))
+                                   !arg'span
+                                 ) ->
+                        el'ResolveAttrAddr eas rcvAttr >>= \case
+                          Nothing -> go rest kds
+                          Just !key -> do
+                            let !attrDef =
+                                  EL'AttrDef
+                                    key
+                                    Nothing
+                                    opSym
+                                    arg'span
+                                    xsrc
+                                    ( maybe
+                                        (EL'Expr attrExpr)
+                                        el'attr'def'value
+                                        $ odLookup key arts
+                                    )
+                                    attrAnno
+                                    Nothing
+                            go rest $ (key, attrDef) : kds
+                    SendKwArg
+                      !srcAttr
+                      attrExpr@( ExprSrc
+                                   (AttrExpr (DirectRef !tgtAttr))
+                                   !arg'span
+                                 ) ->
+                        el'ResolveAttrAddr eas srcAttr >>= \case
+                          Nothing -> go rest kds
+                          Just !srcKey ->
+                            el'ResolveAttrAddr eas tgtAttr >>= \case
+                              Nothing -> go rest kds
+                              Just !tgtKey -> do
+                                let !attrDef =
+                                      EL'AttrDef
+                                        tgtKey
+                                        Nothing
+                                        opSym
+                                        arg'span
+                                        xsrc
+                                        ( maybe
+                                            (EL'Expr attrExpr)
+                                            el'attr'def'value
+                                            $ odLookup srcKey arts
+                                        )
+                                        attrAnno
+                                        Nothing
+                                go rest $ (srcKey, attrDef) : kds
+                    _ -> do
+                      el'LogDiag
+                        diags
+                        el'Error
+                        (argSenderSpan sndr)
+                        "bad-data-field"
+                        "bad data class field extractor"
+                      go rest kds
+
+            analyzeBranch :: [(AttrKey, EL'AttrDef)] -> STM ()
             analyzeBranch !ps = do
               !branchAttrs <- iopdClone $ el'branch'attrs'wip bwip
               !branchEffs <- iopdClone $ el'branch'effs'wip bwip
@@ -1326,7 +1428,7 @@ el'AnalyzeExpr
                     eac {el'ctx'scope = el'SwitchBranch bwipBranch swip}
                   !easBranch = eas {el'context = eacBranch}
 
-                  go :: [(AttrKey, ExprSrc)] -> STM ()
+                  go :: [(AttrKey, EL'AttrDef)] -> STM ()
                   go [] = el'RunTx easBranch $
                     el'AnalyzeExpr Nothing rhExpr $
                       \ !rhResult _eas -> do
@@ -1353,28 +1455,7 @@ el'AnalyzeExpr
                             el'Exit eas exit $ EL'Expr xsrc
                   --
 
-                  go ((!attrKey, !attrExpr) : rest) = do
-                    !attrAnno <- newTVar Nothing
-                    !prevDef <-
-                      iopdLookup attrKey $
-                        if el'ctx'eff'defining eac
-                          then el'branch'effs'wip bwip
-                          else el'branch'attrs'wip bwip
-                    let !attrDef =
-                          EL'AttrDef
-                            attrKey
-                            docCmt
-                            opSym
-                            (exprSrcSpan attrExpr)
-                            xsrc
-                            (EL'Expr attrExpr)
-                            attrAnno
-                            prevDef
-                    !maybePrevDef <-
-                      iopdLookup attrKey $
-                        if el'ctx'eff'defining eac
-                          then el'branch'effs'wip bwip
-                          else el'branch'attrs'wip bwip
+                  go ((!attrKey, !attrDef) : rest) = do
                     -- record as artifact of current scope
                     unless (el'ctx'pure eac) $ do
                       if el'ctx'eff'defining eac
@@ -1387,7 +1468,7 @@ el'AnalyzeExpr
                           let !attrs = el'branch'attrs'wip bwip
                           iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
                           iopdInsert attrKey attrDef attrs
-                          case maybePrevDef of
+                          case el'attr'prev'def attrDef of
                             -- assignment created a new attr, record a region
                             -- after this assignment expr for current scope
                             Nothing ->
@@ -1408,6 +1489,38 @@ el'AnalyzeExpr
             handlePattern = \case
               -- curly braces at lhs means a pattern
               BlockExpr !patternExpr -> case patternExpr of
+                -- { val } -- wild capture pattern
+                [ StmtSrc
+                    ( ExprStmt
+                        valExpr@(AttrExpr (DirectRef !valAddr))
+                        _docCmt
+                      )
+                    !stmt'span
+                  ] ->
+                    el'ResolveAttrAddr eas valAddr >>= \case
+                      Nothing -> analyzeBranch []
+                      Just !attrKey ->
+                        defExprAttrs
+                          [(attrKey, ExprSrc valExpr stmt'span)]
+                          analyzeBranch
+                --
+
+                -- { class( field1, field2, ... ) } -- fields by class pattern
+                -- __match__ magic from the class works here
+                [ StmtSrc
+                    ( ExprStmt
+                        (CallExpr clsExpr@ExprSrc {} (ArgsPacker !apkr _))
+                        _docCmt
+                      )
+                    _
+                  ] -> el'RunTx eas $
+                    el'AnalyzeExpr Nothing clsExpr $
+                      \ !clsResult _eas -> case clsResult of
+                        EL'ClsVal !clsVal ->
+                          defDfAttrs (el'class'attrs clsVal) apkr analyzeBranch
+                        _ -> defDfAttrs odEmpty apkr analyzeBranch
+                --
+
                 -- {( x )} -- single arg
                 [ StmtSrc
                     ( ExprStmt
@@ -1429,7 +1542,7 @@ el'AnalyzeExpr
                     _
                   ] -> do
                     let !attrKey = AttrByName attrName
-                    analyzeBranch [(attrKey, argExpr)]
+                    defExprAttrs [(attrKey, argExpr)] analyzeBranch
                 --
 
                 -- TODO more patterns
@@ -2123,7 +2236,7 @@ el'AnalyzeExpr
                    ns'body@(StmtSrc _body'stmt !body'span)
                    _ns'proc'loc
                  )
-               !argsPkr
+               (ArgsPacker !argsPkr _)
              )
            !expr'span
          )
