@@ -326,6 +326,12 @@ data EL'Value
     EL'ProcVal !EL'Proc
   | -- | a property
     EL'PropVal !EL'Class !AttrKey
+  | -- | result from a return stmt
+    EL'Return !ExprSrc
+  | -- | result from a throw stmt
+    EL'Throw !ExprSrc
+  | -- | result from a rethrow stmt
+    EL'Rethrow
   | -- | an arbitrary expression not resolved at analysis time
     EL'Expr !ExprSrc
 
@@ -343,6 +349,9 @@ instance Show EL'Value where
   show (EL'ModuVal !modu) = show modu
   show (EL'ProcVal !p) = show p
   show (EL'PropVal !cls !prop) = show cls <> "." <> show prop
+  show (EL'Return !x) = show x
+  show (EL'Throw !x) = show x
+  show EL'Rethrow = "<rethrow>"
   show (EL'Expr !x) = show x
 
 el'IsNil :: EL'Value -> Bool

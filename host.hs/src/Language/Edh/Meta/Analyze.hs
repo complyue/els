@@ -949,13 +949,20 @@ el'AnalyzeStmt (StmtSrc FallthroughStmt _stmt'span) !exit !eas =
 -- return
 el'AnalyzeStmt (StmtSrc (ReturnStmt !expr) _stmt'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+    el'AnalyzeExpr Nothing expr $
+      const $ el'ExitTx exit $ EL'Return expr
 --
 
 -- throw
 el'AnalyzeStmt (StmtSrc (ThrowStmt !expr) _stmt'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+    el'AnalyzeExpr Nothing expr $
+      const $ el'ExitTx exit $ EL'Throw expr
+--
+
+-- rethrow
+el'AnalyzeStmt (StmtSrc RethrowStmt _stmt'span) !exit !eas =
+  el'Exit eas exit EL'Rethrow
 --
 
 -- the rest of statements not analyzed
@@ -979,8 +986,43 @@ el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
 --
 
 -- block
-el'AnalyzeExpr _docCmt (ExprSrc (BlockExpr !stmts) _blk'span) !exit !eas =
-  el'RunTx eas $ el'AnalyzeStmts stmts exit
+el'AnalyzeExpr _docCmt (ExprSrc (BlockExpr !stmts) !blk'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeStmts stmts $ \ !blkResult !easDone -> do
+      let closeBlk = do
+            let !eacDone = el'context easDone
+                !swipDone = el'ctx'scope eacDone
+                !pwipDone = el'ProcWIP swipDone
+                !bwipDone = el'scope'branch'wip pwipDone
+            -- close all pending regions
+            !regions'wip <-
+              fmap
+                ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                    EL'Region
+                      (SrcRange reg'start (src'end blk'span))
+                      reg'arts
+                )
+                <$> swapTVar (el'branch'regions'wip bwipDone) []
+            modifyTVar' (el'scope'regions'wip pwipDone) (regions'wip ++)
+
+            el'Exit eas exit blkResult
+
+      case blkResult of
+        EL'Return {} -> closeBlk
+        EL'Throw {} -> closeBlk
+        EL'Rethrow -> closeBlk
+        _ -> do
+          let !eacDone = el'context easDone
+              !swipDone = el'ctx'scope eacDone
+              !pwipDone = el'ProcWIP swipDone
+              !bwipDone = el'scope'branch'wip pwipDone
+              !scope'attrs = el'scope'attrs'wip pwipDone
+              !branch'attrs = el'branch'attrs'wip bwipDone
+          -- merge all scope attrs into branch attrs
+          flip iopdUpdate branch'attrs =<< iopdToList scope'attrs
+
+          el'Exit easDone exit blkResult
+
 --
 
 -- direct attribute addressing
@@ -2552,12 +2594,16 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas =
     el'AnalyzeExpr Nothing tgt $
       const $
         el'AnalyzeExpr Nothing bs $ \_result _eas -> do
-          -- record a new region following this case-of
-          -- TODO check whether new attrs actually added, don't record if not
-          !scope'attrs <- iopdSnapshot (el'scope'attrs'wip pwip)
-          modifyTVar'
-            (el'branch'regions'wip bwip)
-            (EL'RegionWIP (src'end expr'span) scope'attrs :)
+          !bas <- iopdSize branch'attrs
+          -- merge all scope attrs into branch attrs
+          flip iopdUpdate branch'attrs =<< iopdToList scope'attrs
+          !bas' <- iopdSize branch'attrs
+          when (bas' > bas) $ do
+            -- record a new region following this case-of as new attrs defined
+            !attrs <- iopdSnapshot branch'attrs
+            modifyTVar'
+              (el'branch'regions'wip bwip)
+              (EL'RegionWIP (src'end expr'span) attrs :)
 
           el'Exit eas exit $ EL'Expr x
   where
@@ -2565,6 +2611,8 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas =
     !swip = el'ctx'scope eac
     !pwip = el'ProcWIP swip
     !bwip = el'scope'branch'wip pwip
+    !scope'attrs = el'scope'attrs'wip pwip
+    !branch'attrs = el'branch'attrs'wip bwip
 --
 
 -- for-from-do
