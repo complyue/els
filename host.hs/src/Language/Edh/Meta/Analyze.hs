@@ -1693,12 +1693,52 @@ el'AnalyzeExpr
                                       Nothing
                               analyzeBranch [(instKey, attrDef)]
                 --
+
                 -- {[ x,y,z,... ]} -- any-of pattern
                 [StmtSrc (ExprStmt (ListExpr !vExprs) _docCmt) _] ->
                   el'RunTx eas $ -- todo: chain of eas is broken here,
                   -- for blocks / branches to reside in the elements,
                   -- we'd better keep the chain
                     el'AnalyzeExprs vExprs $ \_result _eas -> analyzeBranch []
+                --
+
+                -- { head :> tail } -- uncons pattern
+                [ StmtSrc
+                    ( ExprStmt
+                        ( InfixExpr
+                            ":>"
+                            headExpr@( ExprSrc
+                                         ( AttrExpr
+                                             ( DirectRef
+                                                 ( AttrAddrSrc
+                                                     (NamedAttr !headName)
+                                                     _
+                                                   )
+                                               )
+                                           )
+                                         _
+                                       )
+                            tailExpr@( ExprSrc
+                                         ( AttrExpr
+                                             ( DirectRef
+                                                 ( AttrAddrSrc
+                                                     (NamedAttr !tailName)
+                                                     _
+                                                   )
+                                               )
+                                           )
+                                         _
+                                       )
+                          )
+                        _docCmt
+                      )
+                    _
+                  ] ->
+                    defExprAttrs
+                      [ (AttrByName headName, headExpr),
+                        (AttrByName tailName, tailExpr)
+                      ]
+                      analyzeBranch
                 --
 
                 -- {( x )} -- single arg
