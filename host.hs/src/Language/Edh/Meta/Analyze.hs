@@ -555,11 +555,54 @@ resolveParsedModule ::
   [StmtSrc] ->
   EdhProc EL'ResolvedModule
 resolveParsedModule !world !ms !resolving !body !exit !ets = do
-  !branchAttrs <- iopdEmpty
-  !moduAttrs <- iopdEmpty
+  let !modu'name = el'modu'name ms
+      !name'def =
+        EL'AttrDef
+          (AttrByName "__name__")
+          Nothing
+          "<module>"
+          noSrcRange
+          (ExprSrc (LitExpr (StringLiteral modu'name)) noSrcRange)
+          (EL'Const (EdhString modu'name))
+          maoAnnotation
+          Nothing
+      SrcDoc !modu'file = el'modu'doc ms
+      !modu'path = case T.stripSuffix "/__init__.edh" modu'file of
+        Just !path -> path
+        Nothing -> case T.stripSuffix "/__main__.edh" modu'file of
+          Just !path -> path
+          Nothing -> case T.stripSuffix ".edh" modu'file of
+            Just !path -> path
+            Nothing -> modu'file
+      !file'def =
+        EL'AttrDef
+          (AttrByName "__file__")
+          Nothing
+          "<module>"
+          noSrcRange
+          (ExprSrc (LitExpr (StringLiteral modu'file)) noSrcRange)
+          (EL'Const (EdhString modu'file))
+          maoAnnotation
+          Nothing
+      !path'def =
+        EL'AttrDef
+          (AttrByName "__path__")
+          Nothing
+          "<module>"
+          noSrcRange
+          (ExprSrc (LitExpr (StringLiteral modu'path)) noSrcRange)
+          (EL'Const (EdhString modu'path))
+          maoAnnotation
+          Nothing
+      !builtinAttrs =
+        odFromList $
+          (\ !def -> (el'attr'def'key def, def))
+            <$> [name'def, file'def, path'def]
+  !branchAttrs <- iopdFromList $ odToList builtinAttrs
+  !moduAttrs <- iopdClone branchAttrs
   !moduEffs <- iopdEmpty
   !moduAnnos <- iopdEmpty
-  !branchRegions <- newTVar []
+  !branchRegions <- newTVar [EL'RegionWIP beginningSrcPos builtinAttrs]
   !moduScopes <- newTVar []
   !moduSyms <- newTVar TreeMap.empty
   !moduRegions <- newTVar []
