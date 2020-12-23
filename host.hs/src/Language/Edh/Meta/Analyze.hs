@@ -1,5 +1,7 @@
 module Language.Edh.Meta.Analyze where
 
+-- import Debug.Trace
+
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
@@ -236,46 +238,70 @@ el'WalkResolutionDiags ::
   EL'ModuSlot ->
   (EL'ModuSlot -> [EL'Diagnostic] -> STM ()) ->
   STM ()
-el'WalkResolutionDiags !ms !walker =
-  tryReadTMVar reso >>= \case
-    Nothing -> return ()
-    Just (EL'ModuResolving !resolving _acts) -> do
-      walker ms =<< readTVar (el'resolving'diags resolving)
-      walkDeps . Map.toList =<< readTVar (el'resolving'dependants resolving)
-    Just (EL'ModuResolved !resolved) -> do
-      walker ms $ el'resolution'diags resolved
-      walkDeps $ Map.toList $ el'modu'dependencies resolved
+el'WalkResolutionDiags !msStart !walker = void $ go Map.empty msStart
   where
-    !reso = el'modu'resolution ms
-    walkDeps :: [(EL'ModuSlot, Bool)] -> STM ()
-    walkDeps [] = return ()
-    walkDeps ((!dep, !hold) : rest) = do
-      when hold $ el'WalkResolutionDiags dep walker
-      walkDeps rest
+    walkDeps ::
+      [(EL'ModuSlot, Bool)] ->
+      HashMap Text Bool ->
+      STM (HashMap Text Bool)
+    walkDeps [] !vm = return vm
+    walkDeps ((!dep, !hold) : rest) !vm =
+      if hold
+        then go vm dep >>= walkDeps rest
+        else walkDeps rest vm
+    go :: HashMap Text Bool -> EL'ModuSlot -> STM (HashMap Text Bool)
+    go !vm !ms = case Map.lookup mk vm of
+      Just {} -> return vm
+      Nothing ->
+        tryReadTMVar reso >>= \case
+          Nothing -> return vm'
+          Just (EL'ModuResolving !resolving _acts) -> do
+            walker ms =<< readTVar (el'resolving'diags resolving)
+            flip walkDeps vm' . Map.toList
+              =<< readTVar (el'resolving'dependants resolving)
+          Just (EL'ModuResolved !resolved) -> do
+            walker ms $ el'resolution'diags resolved
+            flip walkDeps vm' $ Map.toList $ el'modu'dependencies resolved
+      where
+        !reso = el'modu'resolution ms
+        SrcDoc !mk = el'modu'doc ms
+        vm' = Map.insert mk True vm
 
 -- | walk through all diagnostics for a module, including all its dependencies
 el'WalkParsingDiags ::
   EL'ModuSlot ->
   (EL'ModuSlot -> [EL'Diagnostic] -> STM ()) ->
   STM ()
-el'WalkParsingDiags !ms !walker = do
-  tryReadTMVar pars >>= \case
-    Just (EL'ModuParsed !parsed) -> walker ms $ el'parsing'diags parsed
-    _ -> return ()
-  tryReadTMVar reso >>= \case
-    Nothing -> return ()
-    Just (EL'ModuResolving !resolving _resolvedVar) ->
-      walkDeps . Map.toList =<< readTVar (el'modu'dependencies'wip resolving)
-    Just (EL'ModuResolved !resolved) ->
-      walkDeps $ Map.toList $ el'modu'dependencies resolved
+el'WalkParsingDiags !msStart !walker = void $ go Map.empty msStart
   where
-    !pars = el'modu'parsing ms
-    !reso = el'modu'resolution ms
-    walkDeps :: [(EL'ModuSlot, Bool)] -> STM ()
-    walkDeps [] = return ()
-    walkDeps ((!dep, !hold) : rest) = do
-      when hold $ el'WalkParsingDiags dep walker
-      walkDeps rest
+    walkDeps ::
+      [(EL'ModuSlot, Bool)] ->
+      HashMap Text Bool ->
+      STM (HashMap Text Bool)
+    walkDeps [] !vm = return vm
+    walkDeps ((!dep, !hold) : rest) !vm =
+      if hold
+        then go vm dep >>= walkDeps rest
+        else walkDeps rest vm
+    go :: HashMap Text Bool -> EL'ModuSlot -> STM (HashMap Text Bool)
+    go !vm !ms = case Map.lookup mk vm of
+      Just {} -> return vm
+      Nothing -> do
+        tryReadTMVar pars >>= \case
+          Just (EL'ModuParsed !parsed) -> walker ms $ el'parsing'diags parsed
+          _ -> return ()
+        tryReadTMVar reso >>= \case
+          Nothing -> return vm'
+          Just (EL'ModuResolving !resolving _resolvedVar) ->
+            flip walkDeps vm' . Map.toList
+              =<< readTVar (el'modu'dependencies'wip resolving)
+          Just (EL'ModuResolved !resolved) ->
+            flip walkDeps vm' $ Map.toList $ el'modu'dependencies resolved
+      where
+        !pars = el'modu'parsing ms
+        !reso = el'modu'resolution ms
+        SrcDoc !mk = el'modu'doc ms
+        vm' = Map.insert mk True vm
 
 -- | invalidate resolution results of this module and all known dependants
 -- will have parsing result invaliated as well if `srcChanged` is @True@
