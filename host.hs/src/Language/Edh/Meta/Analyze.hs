@@ -1741,6 +1741,107 @@ el'AnalyzeExpr
                       analyzeBranch
                 --
 
+                -- { prefix @< match >@ suffix } -- sub-string cut pattern
+                [ StmtSrc
+                    ( ExprStmt
+                        ( InfixExpr
+                            ">@"
+                            prefixExpr@( ExprSrc
+                                           ( InfixExpr
+                                               "@<"
+                                               ( ExprSrc
+                                                   ( AttrExpr
+                                                       ( DirectRef
+                                                           ( AttrAddrSrc
+                                                               ( NamedAttr
+                                                                   !prefixName
+                                                                 )
+                                                               _
+                                                             )
+                                                         )
+                                                     )
+                                                   _
+                                                 )
+                                               !matchExpr
+                                             )
+                                           _
+                                         )
+                            suffixExpr@( ExprSrc
+                                           ( AttrExpr
+                                               ( DirectRef
+                                                   ( AttrAddrSrc
+                                                       (NamedAttr !suffixName)
+                                                       _
+                                                     )
+                                                 )
+                                             )
+                                           _
+                                         )
+                          )
+                        _docCmt
+                      )
+                    _
+                  ] -> el'RunTx eas $
+                    el'AnalyzeExpr Nothing matchExpr $ \_result _eas ->
+                      defExprAttrs
+                        [ (AttrByName prefixName, prefixExpr),
+                          (AttrByName suffixName, suffixExpr)
+                        ]
+                        analyzeBranch
+                -- { match >@ suffix } -- prefix cut pattern
+                [ StmtSrc
+                    ( ExprStmt
+                        ( InfixExpr
+                            ">@"
+                            !prefixExpr
+                            suffixExpr@( ExprSrc
+                                           ( AttrExpr
+                                               ( DirectRef
+                                                   ( AttrAddrSrc
+                                                       (NamedAttr !suffixName)
+                                                       _
+                                                     )
+                                                 )
+                                             )
+                                           _
+                                         )
+                          )
+                        _docCmt
+                      )
+                    _
+                  ] -> el'RunTx eas $
+                    el'AnalyzeExpr Nothing prefixExpr $ \_result _eas ->
+                      defExprAttrs
+                        [(AttrByName suffixName, suffixExpr)]
+                        analyzeBranch
+                -- { prefix @< match } -- suffix cut pattern
+                [ StmtSrc
+                    ( ExprStmt
+                        ( InfixExpr
+                            "@<"
+                            prefixExpr@( ExprSrc
+                                           ( AttrExpr
+                                               ( DirectRef
+                                                   ( AttrAddrSrc
+                                                       (NamedAttr !prefixName)
+                                                       _
+                                                     )
+                                                 )
+                                             )
+                                           _
+                                         )
+                            !suffixExpr
+                          )
+                        _docCmt
+                      )
+                    _
+                  ] -> el'RunTx eas $
+                    el'AnalyzeExpr Nothing suffixExpr $ \_result _eas ->
+                      defExprAttrs
+                        [(AttrByName prefixName, prefixExpr)]
+                        analyzeBranch
+                --
+
                 -- {( x )} -- single arg
                 [ StmtSrc
                     ( ExprStmt
