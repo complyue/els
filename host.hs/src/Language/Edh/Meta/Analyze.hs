@@ -970,6 +970,30 @@ el'AnalyzeStmt _stmt !exit !eas = el'Exit eas exit $ EL'Const nil
 
 -- * expression analysis
 
+-- | analyze a sequence of expressions in pure context
+el'AnalyzeExprs :: [ExprSrc] -> EL'Analysis [EL'Value]
+-- note eas should be passed alone the sequence of expressions, for regions to
+-- be handled properly
+el'AnalyzeExprs [] !exit !eas = el'Exit eas exit []
+el'AnalyzeExprs !exprs !exit !eas = el'RunTx easPure $ go exprs []
+  where
+    !eac = el'context eas
+    !easPure = eas {el'context = eac {el'ctx'pure = True}}
+    !originPure = el'ctx'pure eac
+
+    go :: [ExprSrc] -> [EL'Value] -> EL'Tx
+    go [] _ = error "bug: impossible"
+    go [!expr] !vals = el'AnalyzeExpr Nothing expr $ \ !result !easDone ->
+      el'Exit
+        easDone
+          { el'context = (el'context easDone) {el'ctx'pure = originPure}
+          }
+        exit
+        $! reverse
+        $ result : vals
+    go (expr : rest) !vals = el'AnalyzeExpr Nothing expr $ \ !r ->
+      go rest (r : vals)
+
 -- | literal to analysis time value
 el'LiteralValue :: Literal -> STM EL'Value
 el'LiteralValue = \case
@@ -1554,8 +1578,8 @@ el'AnalyzeExpr
                         EL'ClsVal !clsVal ->
                           defDfAttrs (el'class'attrs clsVal) apkr analyzeBranch
                         _ -> defDfAttrs odEmpty apkr analyzeBranch
-                -- { class( field1, field2, ... ) = instAddr } -- fields by class again
-                -- but receive the matched object as well
+                -- { class( field1, field2, ... ) = instAddr } -- fields by
+                -- class again, but receive the matched object as well
                 -- __match__ magic from the class works here
                 [ StmtSrc
                     ( ExprStmt
@@ -1612,6 +1636,69 @@ el'AnalyzeExpr
                                       anno
                                       Nothing
                               analyzeBranch $ dfs ++ [(instKey, attrDef)]
+                -- {{ class:inst }} -- instance resolving pattern
+                [ StmtSrc
+                    ( ExprStmt
+                        ( DictExpr
+                            [ ( AddrDictKey !clsRef,
+                                instExpr@( ExprSrc
+                                             ( AttrExpr
+                                                 ( DirectRef
+                                                     instAddr@( AttrAddrSrc
+                                                                  _
+                                                                  !inst'span
+                                                                )
+                                                   )
+                                               )
+                                             _
+                                           )
+                                )
+                              ]
+                          )
+                        _docCmt
+                      )
+                    _
+                  ] ->
+                    el'ResolveAttrAddr eas instAddr >>= \case
+                      Nothing -> analyzeBranch []
+                      Just !instKey -> el'RunTx eas $
+                        el'AnalyzeExpr
+                          Nothing
+                          (ExprSrc (AttrExpr clsRef) (attrRefSpan clsRef))
+                          $ \ !clsResult _eas -> case clsResult of
+                            EL'ClsVal !clsVal -> do
+                              !anno <- newTVar Nothing
+                              let !attrDef =
+                                    EL'AttrDef
+                                      instKey
+                                      Nothing
+                                      opSym
+                                      inst'span
+                                      instExpr
+                                      (EL'ObjVal clsVal)
+                                      anno
+                                      Nothing
+                              analyzeBranch [(instKey, attrDef)]
+                            _ -> do
+                              !anno <- newTVar Nothing
+                              let !attrDef =
+                                    EL'AttrDef
+                                      instKey
+                                      Nothing
+                                      opSym
+                                      inst'span
+                                      instExpr
+                                      (EL'Expr instExpr)
+                                      anno
+                                      Nothing
+                              analyzeBranch [(instKey, attrDef)]
+                --
+                -- {[ x,y,z,... ]} -- any-of pattern
+                [StmtSrc (ExprStmt (ListExpr !vExprs) _docCmt) _] ->
+                  el'RunTx eas $ -- todo: chain of eas is broken here,
+                  -- for blocks / branches to reside in the elements,
+                  -- we'd better keep the chain
+                    el'AnalyzeExprs vExprs $ \_result _eas -> analyzeBranch []
                 --
 
                 -- {( x )} -- single arg
@@ -1677,17 +1764,9 @@ el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
 --
 
 -- list ctor
-el'AnalyzeExpr _docCmt (ExprSrc (ListExpr !xs) _) !exit !eas =
-  el'RunTx easPure $ collectValues [] xs
-  where
-    !eac = el'context eas
-    !easPure = eas {el'context = eac {el'ctx'pure = True}}
-
-    collectValues :: [EL'Value] -> [ExprSrc] -> EL'Tx
-    collectValues !vs [] = \_eas ->
-      el'Exit eas exit . EL'List =<< (newTVar $! reverse vs)
-    collectValues !vs (x : rest) = el'AnalyzeExpr Nothing x $ \ !v ->
-      collectValues (v : vs) rest
+el'AnalyzeExpr _docCmt (ExprSrc (ListExpr !xs) _) !exit !eas = el'RunTx eas $
+  el'AnalyzeExprs xs $ \ !vs !easDone ->
+    el'Exit easDone exit . EL'List =<< newTVar vs
 --
 
 -- dict ctor
@@ -1790,7 +1869,10 @@ el'AnalyzeExpr
                                 Nothing
                                 "<module>"
                                 zeroSrcRange
-                                (ExprSrc (AttrExpr ThisRef) noSrcRange)
+                                ( ExprSrc
+                                    (AttrExpr (ThisRef noSrcRange))
+                                    noSrcRange
+                                )
                                 (EL'ObjVal el'ModuleClass)
                                 maoAnnotation
                                 Nothing
