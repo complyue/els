@@ -1176,7 +1176,7 @@ el'AnalyzeExpr
   xsrc@( ExprSrc
            ( InfixExpr
                !opSym
-               lhExpr@(ExprSrc !lhx _lh'span)
+               lhExpr@(ExprSrc !lhx !lh'span)
                rhExpr@(ExprSrc _rhx !rh'span)
              )
            !expr'span
@@ -1544,6 +1544,60 @@ el'AnalyzeExpr
 
               go ps
 
+            invalidPattern :: STM ()
+            invalidPattern = do
+              el'LogDiag
+                diags
+                el'Error
+                lh'span
+                "invalid-pattern"
+                "invalid match pattern"
+              analyzeBranch []
+
+            handlePairPattern ::
+              [(AttrKey, EL'AttrDef)] ->
+              ExprSrc ->
+              ExprSrc ->
+              STM ()
+            handlePairPattern
+              !defs
+              p1Expr@(ExprSrc !p1x _)
+              p2Expr@(ExprSrc !p2x _) = case p1x of
+                AttrExpr (DirectRef (AttrAddrSrc (NamedAttr !p1Name) _)) -> do
+                  !p1Anno <- newTVar Nothing
+                  let !p1Key = AttrByName p1Name
+                      !p1Def =
+                        EL'AttrDef
+                          p1Key
+                          Nothing
+                          opSym
+                          (exprSrcSpan p1Expr)
+                          xsrc
+                          (EL'Expr p1Expr)
+                          p1Anno
+                          Nothing
+                  case p2x of
+                    AttrExpr
+                      (DirectRef (AttrAddrSrc (NamedAttr !p2Name) _)) -> do
+                        !p2Anno <- newTVar Nothing
+                        let !p2Key = AttrByName p2Name
+                            !p2Def =
+                              EL'AttrDef
+                                p2Key
+                                Nothing
+                                opSym
+                                (exprSrcSpan p2Expr)
+                                xsrc
+                                (EL'Expr p2Expr)
+                                p2Anno
+                                Nothing
+                        analyzeBranch
+                          $! reverse ((p2Key, p2Def) : (p1Key, p1Def) : defs)
+                    InfixExpr ":" !p2Expr' p3Expr ->
+                      handlePairPattern ((p1Key, p1Def) : defs) p2Expr' p3Expr
+                    _ -> invalidPattern
+                _ -> invalidPattern
+
             handlePattern :: Expr -> STM ()
             handlePattern = \case
               -- curly braces at lhs means a pattern
@@ -1864,10 +1918,72 @@ el'AnalyzeExpr
                   ] -> do
                     let !attrKey = AttrByName attrName
                     defExprAttrs [(attrKey, argExpr)] analyzeBranch
+                -- {( x,y,z,... )} -- pattern matching number of positional args
+                [ StmtSrc
+                    (ExprStmt (ArgsPackExpr (ArgsPacker !argSenders _)) _docCmt)
+                    _
+                  ] -> defDfAttrs odEmpty argSenders analyzeBranch
                 --
 
-                -- TODO more patterns
-                _ -> analyzeBranch []
+                -- {( x:y:z:... )} -- parenthesised pair pattern
+                [ StmtSrc
+                    ( ExprStmt
+                        (ParenExpr (ExprSrc (InfixExpr ":" !p1Expr !p2Expr) _))
+                        _docCmt
+                      )
+                    _
+                  ] -> handlePairPattern [] p1Expr p2Expr
+                --
+
+                -- { continue } -- match with continue
+                [StmtSrc ContinueStmt _] -> analyzeBranch []
+                -- { break } -- match with break
+                [StmtSrc BreakStmt _] -> analyzeBranch []
+                -- { fallthrough } -- match with fallthrough
+                [StmtSrc FallthroughStmt _] -> analyzeBranch []
+                --
+
+                -- { term := value } -- definition pattern
+                [ StmtSrc
+                    ( ExprStmt
+                        ( InfixExpr
+                            ":="
+                            termExpr@( ExprSrc
+                                         ( AttrExpr
+                                             ( DirectRef
+                                                 ( AttrAddrSrc
+                                                     (NamedAttr !termName)
+                                                     _
+                                                   )
+                                               )
+                                           )
+                                         _
+                                       )
+                            valueExpr@( ExprSrc
+                                          ( AttrExpr
+                                              ( DirectRef
+                                                  ( AttrAddrSrc
+                                                      (NamedAttr !valueName)
+                                                      _
+                                                    )
+                                                )
+                                            )
+                                          _
+                                        )
+                          )
+                        _docCmt
+                      )
+                    _
+                  ] ->
+                    defExprAttrs
+                      [ (AttrByName termName, termExpr),
+                        (AttrByName valueName, valueExpr)
+                      ]
+                      analyzeBranch
+                --
+
+                -- TODO more patterns to support
+                _ -> invalidPattern
               --
 
               -- guarded condition branch
@@ -1876,9 +1992,24 @@ el'AnalyzeExpr
                   \_cndResult _eas -> analyzeBranch []
               --
 
-              -- TODO pair pattern, expand matching attrs
-              DictExpr {} ->
-                analyzeBranch []
+              -- { x:y:z:... } -- pair pattern
+              DictExpr
+                [ ( AddrDictKey
+                      ref1@(DirectRef (AttrAddrSrc (NamedAttr _) !span1)),
+                    !pairPattern
+                    )
+                  ] ->
+                  handlePairPattern
+                    []
+                    (ExprSrc (AttrExpr ref1) span1)
+                    pairPattern
+              --
+              -- this is to establish the intuition that `{ ... }` always
+              -- invokes pattern matching.
+              -- TODO hint that if a literal dict value really meant to be
+              -- matched, the parenthesized form `( {k1: v1, k2: v2, ...} )`
+              -- should be used.
+              DictExpr {} -> invalidPattern
               --
 
               -- not a pattern, value match
