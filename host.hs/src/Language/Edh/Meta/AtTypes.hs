@@ -84,28 +84,45 @@ el'ContextModule !eac = go $ el'ctx'scope eac : el'ctx'outers eac
       EL'InitModule !ms !mi _ -> Just (ms, mi)
       _ -> go outers
 
--- | an object initializing procedure, by far tends to be a namespace procedure
+el'ContextInstance :: EL'Context -> EL'ArtsWIP
+el'ContextInstance !eac = go $ el'ctx'scope eac : el'ctx'outers eac
+  where
+    go [] =
+      -- error "bug: impossible"
+      el'scope'attrs'wip $ el'ProcWIP $ el'ctx'scope eac
+    go (scope : outers) = case scope of
+      EL'InitModule _ _ !pwip -> el'scope'attrs'wip pwip
+      EL'InitObject !owip _pwip -> el'obj'attrs'wip owip
+      EL'DefineClass !cwip _pwip -> el'inst'attrs'wip cwip
+      _ -> go outers
+
+-- | an object initializing procedure, by far tends to be a namespace defining
+-- procedure
 data EL'ObjectWIP = EL'ObjectWIP
-  { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
+  { -- | all attributes assigned to @this.xxx@
+    el'obj'attrs'wip :: !EL'ArtsWIP,
+    -- | all @extends@ appeared in the direct scope and nested scopes (i.e.
     -- super objects),  up to time of analysis
-    el'obj'exts'wip :: !(TVar [EL'Object]),
-    -- | 1st appearances of exported artifacts in the direct scope and nested
+    el'obj'exts'wip :: !(TVar [EL'Class]),
+    -- | last appearances of exported artifacts in the direct scope and nested
     -- (method) scopes (i.e. object exports), up to time of analysis
     el'obj'exps'wip :: !EL'ArtsWIP
   }
 
 -- | a class defining procedure
 data EL'ClassWIP = EL'ClassWIP
-  { -- | all `extends` appeared in the direct class scope (i.e. super classes),
+  { -- | all attributes assigned to @this.xxx@ from methods (esp. @__init__()@)
+    el'inst'attrs'wip :: !EL'ArtsWIP,
+    -- | all `extends` appeared in the direct class scope (i.e. super classes),
     --  up to time of analysis
-    el'class'exts'wip :: !(TVar [EL'Object]),
+    el'class'exts'wip :: !(TVar [EL'Class]),
     -- | all `extends` appeared in nested (method) scopes (i.e. super objects),
     --  up to time of analysis
-    el'inst'exts'wip :: !(TVar [EL'Object]),
-    -- | 1st appearances of exported artifacts in the direct class scope (i.e.
+    el'inst'exts'wip :: !(TVar [EL'Class]),
+    -- | last appearances of exported artifacts in the direct class scope (i.e.
     -- class exports), up to time of analysis
     el'class'exps'wip :: !EL'ArtsWIP,
-    -- | 1st appearances of exported artifacts in nested (method) scopes (i.e.
+    -- | last appearances of exported artifacts in nested (method) scopes (i.e.
     -- object exports), up to time of analysis
     el'inst'exps'wip :: !EL'ArtsWIP
   }
@@ -123,7 +140,7 @@ data EL'ProcWIP = EL'ProcWIP
     el'scope'attrs'wip :: !EL'ArtsWIP,
     -- | this points to `el'modu'exts'wip` or `el'obj'exts'wip` or
     -- `el'class'exts'wip` or `el'inst'exts'wip` whichever is appropriate
-    el'scope'exts'wip :: !(TVar [EL'Object]),
+    el'scope'exts'wip :: !(TVar [EL'Class]),
     -- | this points to `el'modu'exps'wip` or `el'obj'exps'wip` or
     -- `el'class'exps'wip` or `el'inst'exps'wip` whichever is appropriate
     el'scope'exps'wip :: !EL'ArtsWIP,

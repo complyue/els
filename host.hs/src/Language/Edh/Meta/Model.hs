@@ -174,7 +174,7 @@ data EL'ParsedModule = EL'ParsedModule
 data EL'ResolvingModu = EL'ResolvingModu
   { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
     -- super modules), up to time of analysis
-    el'modu'exts'wip :: !(TVar [EL'Object]),
+    el'modu'exts'wip :: !(TVar [EL'Class]),
     -- | exports from this module up-to-time of analysis
     el'modu'exps'wip :: !EL'ArtsWIP,
     -- | other modules this module depends on
@@ -317,7 +317,7 @@ data EL'Value
   | -- | dict at analyze time
     EL'Dict !(TVar [(EL'Value, EL'Value)])
   | -- | an object
-    EL'ObjVal !EL'Object
+    EL'ObjVal !EL'Class
   | -- | a class
     EL'ClsVal !EL'Class
   | -- | a module object
@@ -367,80 +367,105 @@ data EL'Proc = EL'Proc
   }
   deriving (Show)
 
--- | an object, with module and namespace being special cases
-data EL'Object
-  = EL'ClsObj !EL'Class
-  | EL'Object
-      { el'obj'class :: !EL'Class,
-        -- | the `supers` list of an object at runtime is instances created
-        -- according to its class' `mro` list, plus more super objects appended
-        -- by `extends` statements (usually from within the `__init__()` method
-        -- but dynamic `extends` from arbitrary methods whenever called is also
-        -- allowed)
-        --
-        -- this list is collected at analysis time
-        el'obj'exts :: ![EL'Object],
-        -- | all attributes of the object
-        el'obj'attrs :: !EL'Artifacts,
-        -- | object attributes are exported from the object initialising
-        -- procedure in case of a module or namespace object, and typically
-        -- from the `__init__()` method otherwise. while it is allowed to
-        -- export artifacts from an arbitrary instance method whenever called,
-        -- which should probably be considered unusual.
-        el'obj'exps :: !EL'Artifacts
-      }
-  deriving (Show)
-
 -- | a class
+--
+-- note the `supers` list of an object at runtime is instances created
+-- according to its class' `mro` list, plus more super objects appended
+-- by `extends` statements (usually from within the `__init__()` method
+-- but dynamic `extends` from arbitrary methods whenever called is also
+-- allowed)
 data EL'Class = EL'Class
-  { el'class'name :: AttrKey,
-    -- | extends
-    el'class'exts :: ![EL'Object],
+  { -- | class name
+    el'class'name :: !AttrKey,
+    -- | meta class
+    -- not this field can not be strict
+    el'class'meta :: EL'Class,
+    -- | super classes installed via @extends@ from class defining procedure
+    el'class'exts :: ![EL'Class],
     -- | C3 linearized mro list
     el'class'mro :: ![EL'Class],
-    -- | scope of the class initializing procedure
+    -- | scope of the class defining procedure
     el'class'scope :: !EL'Scope,
     -- | all attributes of the class
     el'class'attrs :: !EL'Artifacts,
-    -- TODO use a inst'attrs field here to track assignments in methods (esp.
-    -- __init__()) like `this.xxx =` ?
-
-    -- | class attributes are exported from the class defining procedure, while
-    -- it is allowed to export artifacts from an arbitrary class method whenever
-    -- called, which should probably be considered unusual.
-    el'class'exps :: !EL'Artifacts
+    -- | attributes exported from the class defining procedure
+    el'class'exps :: !EL'Artifacts,
+    -- | instance attributes ever assigned via @this.xxx@ from methods (esp.
+    -- @__init__()@)
+    el'inst'attrs :: !EL'Artifacts,
+    -- | super instances ever installed via @extends@ from methods (esp.
+    -- @__init__()@)
+    el'inst'exts :: ![EL'Class],
+    -- | attributes ever exported from methods (esp. @__init__()@)
+    el'inst'exps :: !EL'Artifacts
   }
   deriving (Show)
 
 el'MetaClass :: EL'Class
-el'MetaClass =
-  EL'Class
-    (AttrByName "class")
-    []
-    []
-    ( EL'Scope
-        noSrcRange
-        V.empty
-        V.empty
-        V.empty
-    )
-    odEmpty
-    odEmpty
+el'MetaClass = mc
+  where
+    mc =
+      EL'Class
+        (AttrByName "class")
+        mc -- meta of meta is itself
+        []
+        []
+        ( EL'Scope
+            noSrcRange
+            V.empty
+            V.empty
+            V.empty
+        )
+        odEmpty
+        odEmpty
+        odEmpty
+        []
+        odEmpty
 {-# NOINLINE el'MetaClass #-}
 
 el'NamespaceClass :: EL'Class
 el'NamespaceClass =
-  EL'Class (AttrByName "<namespace>") [] [] maoScope odEmpty odEmpty
+  EL'Class
+    (AttrByName "<namespace>")
+    el'MetaClass
+    []
+    []
+    maoScope
+    odEmpty
+    odEmpty
+    odEmpty
+    []
+    odEmpty
 {-# NOINLINE el'NamespaceClass #-}
 
 el'ModuleClass :: EL'Class
 el'ModuleClass =
-  EL'Class (AttrByName "<module>") [] [] maoScope odEmpty odEmpty
+  EL'Class
+    (AttrByName "<module>")
+    el'MetaClass
+    []
+    []
+    maoScope
+    odEmpty
+    odEmpty
+    odEmpty
+    []
+    odEmpty
 {-# NOINLINE el'ModuleClass #-}
 
 el'ScopeClass :: EL'Class
 el'ScopeClass =
-  EL'Class (AttrByName "<scope>") [] [] maoScope odEmpty odEmpty
+  EL'Class
+    (AttrByName "<scope>")
+    el'MetaClass
+    []
+    []
+    maoScope
+    odEmpty
+    odEmpty
+    odEmpty
+    []
+    odEmpty
 {-# NOINLINE el'ScopeClass #-}
 
 -- | a scope is backed by an entity with arbitrary attributes, as Edh allows

@@ -1018,11 +1018,18 @@ el'AnalyzeExpr _docCmt (ExprSrc (BlockExpr !stmts) !blk'span) !exit !eas =
               !bwipDone = el'scope'branch'wip pwipDone
               !scope'attrs = el'scope'attrs'wip pwipDone
               !branch'attrs = el'branch'attrs'wip bwipDone
+          !bas <- iopdSize branch'attrs
           -- merge all scope attrs into branch attrs
           flip iopdUpdate branch'attrs =<< iopdToList scope'attrs
+          !bas' <- iopdSize branch'attrs
+          when (bas' /= bas) $ do
+            -- record a new region following this block as attrs changed
+            !attrs <- iopdSnapshot branch'attrs
+            modifyTVar'
+              (el'branch'regions'wip bwipDone)
+              (EL'RegionWIP (src'end blk'span) attrs :)
 
           el'Exit easDone exit blkResult
-
 --
 
 -- direct attribute addressing
@@ -1077,19 +1084,20 @@ el'AnalyzeExpr
          )
   !exit
   !eas = el'RunTx eas $
-    el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal _eas -> case tgtVal of
-      EL'ObjVal !obj ->
-        el'ResolveAttrAddr eas addr >>= \case
-          Nothing -> returnAsExpr
-          Just !refKey -> case obj of
-            EL'ClsObj !cls -> case odLookup refKey (el'class'attrs cls) of
+    el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal _eas ->
+      el'ResolveAttrAddr eas addr >>= \case
+        Nothing -> returnAsExpr
+        Just !refKey -> case tgtVal of
+          -- object instance attribute addressing
+          EL'ObjVal !cls -> case odLookup refKey $ el'inst'attrs cls of
+            Nothing -> case odLookup refKey $ el'class'attrs cls of
               Nothing -> do
                 el'LogDiag
                   diags
                   el'Error
                   addr'span
-                  "no-cls-attr"
-                  "no such attribute"
+                  "no-obj-attr"
+                  "no such object attribute"
                 returnAsExpr
               Just !attrDef -> do
                 -- record as referencing symbol of outer scope
@@ -1097,40 +1105,23 @@ el'AnalyzeExpr
                 recordScopeSymbol pwip $ EL'RefSym attrRef
 
                 el'Exit eas exit $ el'attr'def'value attrDef
-            EL'Object !cls _obj'exts !obj'attrs _obj'exps ->
-              case odLookup refKey obj'attrs of
-                Nothing -> case odLookup refKey (el'class'attrs cls) of
-                  Nothing -> do
-                    el'LogDiag
-                      diags
-                      el'Error
-                      addr'span
-                      "no-obj-attr"
-                      "no such attribute"
-                    returnAsExpr
-                  Just !attrDef -> do
-                    -- record as referencing symbol of outer scope
-                    let !attrRef = EL'AttrRef addr attrDef
-                    recordScopeSymbol pwip $ EL'RefSym attrRef
+            Just !attrDef -> do
+              -- record as referencing symbol of outer scope
+              let !attrRef = EL'AttrRef addr attrDef
+              recordScopeSymbol pwip $ EL'RefSym attrRef
 
-                    el'Exit eas exit $ el'attr'def'value attrDef
-                Just !attrDef -> do
-                  -- record as referencing symbol of outer scope
-                  let !attrRef = EL'AttrRef addr attrDef
-                  recordScopeSymbol pwip $ EL'RefSym attrRef
+              el'Exit eas exit $ el'attr'def'value attrDef
+          --
 
-                  el'Exit eas exit $ el'attr'def'value attrDef
-      EL'ClsVal !cls ->
-        el'ResolveAttrAddr eas addr >>= \case
-          Nothing -> returnAsExpr
-          Just !refKey -> case odLookup refKey (el'class'attrs cls) of
+          -- class attribute addressing
+          EL'ClsVal !cls -> case odLookup refKey (el'class'attrs cls) of
             Nothing -> do
               el'LogDiag
                 diags
                 el'Error
                 addr'span
                 "no-cls-attr"
-                "no such attribute"
+                "no such class attribute"
               returnAsExpr
             Just !attrDef -> do
               -- record as referencing symbol of outer scope
@@ -1138,13 +1129,15 @@ el'AnalyzeExpr
               recordScopeSymbol pwip $ EL'RefSym attrRef
 
               el'Exit eas exit $ el'attr'def'value attrDef
-      -- EL'Const (EdhObject _obj) -> undefined -- TODO this possible ?
-      -- EL'External _ms _attrDef -> undefined -- TODO this possible ?
-      -- EL'ModuVal !ms -> undefined -- TODO handle this
-      -- EL'ProcVal !p -> undefined -- TODO handle this
-      -- EL'Const (EdhDict (Dict _ _ds)) -> undefined -- TODO handle this
-      -- EL'Const (EdhList (List _ _ls)) -> undefined -- TODO handle this
-      _ -> returnAsExpr -- unrecognized value
+          --
+
+          -- EL'Const (EdhObject _obj) -> undefined -- TODO this possible ?
+          -- EL'External _ms _attrDef -> undefined -- TODO this possible ?
+          -- EL'ModuVal !ms -> undefined -- TODO handle this
+          -- EL'ProcVal !p -> undefined -- TODO handle this
+          -- EL'Const (EdhDict (Dict _ _ds)) -> undefined -- TODO handle this
+          -- EL'Const (EdhList (List _ _ls)) -> undefined -- TODO handle this
+          _ -> returnAsExpr -- unrecognized value
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
@@ -1561,6 +1554,64 @@ el'AnalyzeExpr
                         EL'ClsVal !clsVal ->
                           defDfAttrs (el'class'attrs clsVal) apkr analyzeBranch
                         _ -> defDfAttrs odEmpty apkr analyzeBranch
+                -- { class( field1, field2, ... ) = instAddr } -- fields by class again
+                -- but receive the matched object as well
+                -- __match__ magic from the class works here
+                [ StmtSrc
+                    ( ExprStmt
+                        ( InfixExpr
+                            "="
+                            ( ExprSrc
+                                ( CallExpr
+                                    clsExpr@ExprSrc {}
+                                    (ArgsPacker !apkr _)
+                                  )
+                                _
+                              )
+                            instExpr@( ExprSrc
+                                         (AttrExpr (DirectRef !instAddr))
+                                         !inst'span
+                                       )
+                          )
+                        _docCmt
+                      )
+                    _
+                  ] -> el'RunTx eas $
+                    el'AnalyzeExpr Nothing clsExpr $
+                      \ !clsResult _eas -> case clsResult of
+                        EL'ClsVal !clsVal ->
+                          defDfAttrs (el'class'attrs clsVal) apkr $ \ !dfs ->
+                            el'ResolveAttrAddr eas instAddr >>= \case
+                              Nothing -> analyzeBranch dfs
+                              Just !instKey -> do
+                                !anno <- newTVar Nothing
+                                let !attrDef =
+                                      EL'AttrDef
+                                        instKey
+                                        Nothing
+                                        opSym
+                                        inst'span
+                                        instExpr
+                                        (EL'ObjVal clsVal)
+                                        anno
+                                        Nothing
+                                analyzeBranch $ dfs ++ [(instKey, attrDef)]
+                        _ -> defDfAttrs odEmpty apkr $ \ !dfs ->
+                          el'ResolveAttrAddr eas instAddr >>= \case
+                            Nothing -> analyzeBranch dfs
+                            Just !instKey -> do
+                              !anno <- newTVar Nothing
+                              let !attrDef =
+                                    EL'AttrDef
+                                      instKey
+                                      Nothing
+                                      opSym
+                                      inst'span
+                                      instExpr
+                                      (EL'Expr instExpr)
+                                      anno
+                                      Nothing
+                              analyzeBranch $ dfs ++ [(instKey, attrDef)]
                 --
 
                 -- {( x )} -- single arg
@@ -1731,9 +1782,7 @@ el'AnalyzeExpr
                   el'LogDiag diags el'Error spec'span "err-import" err
                   el'Exit eas exit $ EL'Const nil
                 Right !msImportee -> do
-                  -- record as an attribute defined to reference the module,
-                  -- this have to be performed later than the importing of
-                  -- artifacts, to preserve symbol order in the source
+                  -- record as an attribute defined to reference the module
                   let defImpSym =
                         let !importeeDef =
                               EL'AttrDef
@@ -1742,14 +1791,7 @@ el'AnalyzeExpr
                                 "<module>"
                                 zeroSrcRange
                                 (ExprSrc (AttrExpr ThisRef) noSrcRange)
-                                ( EL'ObjVal
-                                    ( EL'Object
-                                        el'ModuleClass
-                                        []
-                                        odEmpty
-                                        odEmpty
-                                    )
-                                )
+                                (EL'ObjVal el'ModuleClass)
                                 maoAnnotation
                                 Nothing
                             !impDef =
@@ -2001,6 +2043,7 @@ el'AnalyzeExpr
          )
   !exit
   !eas = do
+    !instAttrs <- iopdEmpty
     !clsExts <- newTVar []
     !instExts <- newTVar []
     !clsExps <- iopdEmpty
@@ -2033,6 +2076,7 @@ el'AnalyzeExpr
             { el'ctx'scope =
                 EL'DefineClass
                   ( EL'ClassWIP
+                      instAttrs
                       clsExts
                       instExts
                       clsExps
@@ -2169,6 +2213,9 @@ el'AnalyzeExpr
 
         !cls'exts <- readTVar clsExts
         !cls'exps <- iopdSnapshot clsExps
+        !inst'attrs <- iopdSnapshot instAttrs
+        !inst'exts <- readTVar instExts
+        !inst'exps <- iopdSnapshot instExps
         let !cls'scope =
               EL'Scope
                 { el'scope'span = body'span,
@@ -2189,11 +2236,15 @@ el'AnalyzeExpr
                 !cls =
                   EL'Class
                     clsName
+                    el'MetaClass
                     cls'exts
                     mro
                     cls'scope
                     (el'ScopeAttrs cls'scope)
                     cls'exps
+                    inst'attrs
+                    inst'exts
+                    inst'exps
                 !clsVal = EL'ClsVal cls
                 !clsDef =
                   EL'AttrDef
@@ -2311,7 +2362,8 @@ el'AnalyzeExpr
             nsRegions
         !eacNs =
           EL'Context
-            { el'ctx'scope = EL'InitObject (EL'ObjectWIP nsExts nsExps) pwip,
+            { el'ctx'scope =
+                EL'InitObject (EL'ObjectWIP nsAttrs nsExts nsExps) pwip,
               el'ctx'outers = outerScope : el'ctx'outers eac,
               el'ctx'pure = False,
               el'ctx'exporting = False,
@@ -2411,6 +2463,7 @@ el'AnalyzeExpr
                 writeTVar (el'attr'def'anno argDef) $ Just anno
           --
 
+          !ns'attrs <- iopdSnapshot nsAttrs
           !ns'exts <- readTVar nsExts
           !ns'exps <- iopdSnapshot nsExps
           !innerScopes <- readTVar nsScopes
@@ -2434,13 +2487,15 @@ el'AnalyzeExpr
             Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
             Just !nsName -> do
               !nsAnno <- newTVar =<< el'ResolveAnnotation outerScope nsName
-              let !ns =
-                    EL'Object
-                      el'NamespaceClass
-                      ns'exts
-                      (el'ScopeAttrs ns'scope)
-                      ns'exps
-                  !nsVal = EL'ObjVal ns
+              let !nsCls =
+                    el'NamespaceClass
+                      { el'class'name = nsName,
+                        el'class'scope = ns'scope,
+                        el'inst'attrs = ns'attrs,
+                        el'inst'exts = ns'exts,
+                        el'inst'exps = ns'exps
+                      }
+                  !nsVal = EL'ObjVal nsCls
                   !nsDef =
                     EL'AttrDef
                       nsName
@@ -2598,8 +2653,8 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas =
           -- merge all scope attrs into branch attrs
           flip iopdUpdate branch'attrs =<< iopdToList scope'attrs
           !bas' <- iopdSize branch'attrs
-          when (bas' > bas) $ do
-            -- record a new region following this case-of as new attrs defined
+          when (bas' /= bas) $ do
+            -- record a new region following this case-of as attrs changed
             !attrs <- iopdSnapshot branch'attrs
             modifyTVar'
               (el'branch'regions'wip bwip)
