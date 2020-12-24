@@ -1542,6 +1542,8 @@ el'AnalyzeExpr
             analyzeBranch :: [(AttrKey, EL'AttrDef)] -> STM ()
             analyzeBranch !ps = do
               !branchAttrs <- iopdClone $ el'branch'attrs'wip bwip
+              iopdUpdate ps branchAttrs
+              iopdUpdate ps $ el'scope'attrs'wip pwip
               !branchEffs <- iopdClone $ el'branch'effs'wip bwip
               !branchAnnos <- iopdClone $ el'branch'annos'wip bwip
               !branchRegions <- newTVar []
@@ -1555,63 +1557,30 @@ el'AnalyzeExpr
                   !eacBranch =
                     eac {el'ctx'scope = el'SwitchBranch bwipBranch swip}
                   !easBranch = eas {el'context = eacBranch}
-
-                  go :: [(AttrKey, EL'AttrDef)] -> STM ()
-                  go [] = el'RunTx easBranch $
-                    el'AnalyzeExpr Nothing rhExpr $
-                      \ !rhResult _eas -> do
-                        -- TODO fill annos of ps from branchAnnos now
-                        case rhResult of
-                          EL'Const EdhFallthrough -> do
-                            -- this branch leaks to its following code
-                            !prevRegions <-
-                              readTVar
-                                (el'branch'regions'wip bwip)
-                            modifyTVar' branchRegions (++ prevRegions)
-                            el'Exit easBranch exit $ EL'Expr xsrc
-                          _ -> do
-                            -- this branch closes
-                            !regions <-
-                              fmap
-                                ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                                    EL'Region
-                                      (SrcRange reg'start (src'end rh'span))
-                                      reg'arts
-                                )
-                                <$> readTVar branchRegions
-                            modifyTVar' (el'scope'regions'wip pwip) (regions ++)
-                            el'Exit eas exit $ EL'Expr xsrc
-                  --
-
-                  go ((!attrKey, !attrDef) : rest) = do
-                    -- record as artifact of current scope
-                    unless (el'ctx'pure eac) $ do
-                      if el'ctx'eff'defining eac
-                        then do
-                          let !effs = el'branch'effs'wip bwip
-                          case el'attr'def'value attrDef of
-                            EL'Const EdhNil -> iopdDelete attrKey effs
-                            _ -> iopdInsert attrKey attrDef effs
-                        else do
-                          let !attrs = el'branch'attrs'wip bwip
-                          iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
-                          iopdInsert attrKey attrDef attrs
-                          case el'attr'prev'def attrDef of
-                            -- assignment created a new attr, record a region
-                            -- after this assignment expr for current scope
-                            Nothing ->
-                              iopdSnapshot attrs
-                                >>= modifyTVar' (el'branch'regions'wip bwip)
-                                  . (:)
-                                  . EL'RegionWIP (src'end expr'span)
-                            _ -> pure ()
-
-                      when (el'ctx'exporting eac) $
-                        iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
-
-                    go rest
-
-              go ps
+              el'RunTx easBranch $
+                el'AnalyzeExpr Nothing rhExpr $
+                  \ !rhResult _eas -> do
+                    -- TODO fill annos of ps from branchAnnos now
+                    case rhResult of
+                      EL'Const EdhFallthrough -> do
+                        -- this branch leaks to its following code
+                        !prevRegions <-
+                          readTVar
+                            (el'branch'regions'wip bwip)
+                        modifyTVar' branchRegions (++ prevRegions)
+                        el'Exit easBranch exit $ EL'Expr xsrc
+                      _ -> do
+                        -- this branch closes
+                        !regions <-
+                          fmap
+                            ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                                EL'Region
+                                  (SrcRange reg'start (src'end rh'span))
+                                  reg'arts
+                            )
+                            <$> readTVar branchRegions
+                        modifyTVar' (el'scope'regions'wip pwip) (regions ++)
+                        el'Exit eas exit $ EL'Expr xsrc
 
             invalidPattern :: STM ()
             invalidPattern = do
