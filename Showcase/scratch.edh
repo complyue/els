@@ -1,8 +1,10 @@
 
+case 5 of { i } -> i
+
 x = 1
 
 x += 2
 
 x *= 5
 
-y = f( x )
+y = f( x, i )
