@@ -1446,7 +1446,14 @@ el'AnalyzeExpr
 
       doBranch :: STM ()
       doBranch = do
-        let defExprAttrs ::
+        let (!fullExpr, !maybeGuardExpr) = case lhx of
+              -- pattern or value match, guarded
+              InfixExpr "|" (ExprSrc !matchExpr _) !guardExpr ->
+                (matchExpr, Just guardExpr)
+              -- pattern or value match
+              _ -> (lhx, Nothing)
+
+            defExprAttrs ::
               [(AttrKey, ExprSrc)] ->
               ( [(AttrKey, EL'AttrDef)] ->
                 STM ()
@@ -1566,30 +1573,37 @@ el'AnalyzeExpr
                   !eacBranch =
                     eac {el'ctx'scope = el'SwitchBranch bwipBranch swip}
                   !easBranch = eas {el'context = eacBranch}
-              el'RunTx easBranch $
-                el'AnalyzeExpr Nothing rhExpr $
-                  \ !rhResult _eas -> do
-                    -- TODO fill annos of ps from branchAnnos now
-                    case rhResult of
-                      EL'Const EdhFallthrough -> do
-                        -- this branch leaks to its following code
-                        !prevRegions <-
-                          readTVar
-                            (el'branch'regions'wip bwip)
-                        modifyTVar' branchRegions (++ prevRegions)
-                        el'Exit easBranch exit $ EL'Expr xsrc
-                      _ -> do
-                        -- this branch closes
-                        !regions <-
-                          fmap
-                            ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                                EL'Region
-                                  (SrcRange reg'start (src'end rh'span))
-                                  reg'arts
-                            )
-                            <$> readTVar branchRegions
-                        modifyTVar' (el'scope'regions'wip pwip) (regions ++)
-                        el'Exit eas exit $ EL'Expr xsrc
+
+                  analyzeContent =
+                    el'AnalyzeExpr Nothing rhExpr $
+                      \ !rhResult !easDone -> do
+                        -- TODO fill annos of ps from branchAnnos now
+                        case rhResult of
+                          EL'Const EdhFallthrough -> do
+                            -- this branch leaks to its following code
+                            !prevRegions <-
+                              readTVar
+                                (el'branch'regions'wip bwip)
+                            modifyTVar' branchRegions (++ prevRegions)
+                            el'Exit easDone exit $ EL'Expr xsrc
+                          _ -> do
+                            -- this branch closes
+                            !regions <-
+                              fmap
+                                ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                                    EL'Region
+                                      (SrcRange reg'start (src'end rh'span))
+                                      reg'arts
+                                )
+                                <$> readTVar branchRegions
+                            modifyTVar' (el'scope'regions'wip pwip) (regions ++)
+                            el'Exit eas exit $ EL'Expr xsrc
+
+              case maybeGuardExpr of
+                Nothing -> el'RunTx easBranch analyzeContent
+                Just !guardExpr ->
+                  el'RunTx easBranch $
+                    el'AnalyzeExpr Nothing guardExpr $ const analyzeContent
 
             invalidPattern :: STM ()
             invalidPattern = do
@@ -1645,436 +1659,428 @@ el'AnalyzeExpr
                     _ -> invalidPattern
                 _ -> invalidPattern
 
-            handlePattern :: Expr -> STM ()
-            handlePattern = \case
-              -- curly braces at lhs means a pattern
-              BlockExpr !patternExpr -> case patternExpr of
-                -- { val } -- wild capture pattern
-                [ StmtSrc
-                    ( ExprStmt
-                        valExpr@(AttrExpr (DirectRef !valAddr))
-                        _docCmt
-                      )
-                    !stmt'span
-                  ] ->
-                    el'ResolveAttrAddr eas valAddr >>= \case
-                      Nothing -> analyzeBranch []
-                      Just !attrKey ->
-                        defExprAttrs
-                          [(attrKey, ExprSrc valExpr stmt'span)]
-                          analyzeBranch
-                --
-
-                -- { class( field1, field2, ... ) } -- fields by class pattern
-                -- __match__ magic from the class works here
-                [ StmtSrc
-                    ( ExprStmt
-                        (CallExpr clsExpr@ExprSrc {} (ArgsPacker !apkr _))
-                        _docCmt
-                      )
-                    _
-                  ] -> el'RunTx eas $
-                    el'AnalyzeExpr Nothing clsExpr $
-                      \ !clsResult _eas -> case clsResult of
-                        EL'ClsVal !clsVal ->
-                          defDfAttrs (el'class'attrs clsVal) apkr analyzeBranch
-                        _ -> defDfAttrs odEmpty apkr analyzeBranch
-                -- { class( field1, field2, ... ) = instAddr } -- fields by
-                -- class again, but receive the matched object as well
-                -- __match__ magic from the class works here
-                [ StmtSrc
-                    ( ExprStmt
-                        ( InfixExpr
-                            "="
-                            ( ExprSrc
-                                ( CallExpr
-                                    clsExpr@ExprSrc {}
-                                    (ArgsPacker !apkr _)
-                                  )
-                                _
-                              )
-                            instExpr@( ExprSrc
-                                         (AttrExpr (DirectRef !instAddr))
-                                         !inst'span
-                                       )
-                          )
-                        _docCmt
-                      )
-                    _
-                  ] -> el'RunTx eas $
-                    el'AnalyzeExpr Nothing clsExpr $
-                      \ !clsResult _eas -> case clsResult of
-                        EL'ClsVal !clsVal ->
-                          defDfAttrs (el'class'attrs clsVal) apkr $ \ !dfs ->
-                            el'ResolveAttrAddr eas instAddr >>= \case
-                              Nothing -> analyzeBranch dfs
-                              Just !instKey -> do
-                                !anno <- newTVar Nothing
-                                let !attrDef =
-                                      EL'AttrDef
-                                        instKey
-                                        Nothing
-                                        opSym
-                                        inst'span
-                                        instExpr
-                                        (EL'ObjVal clsVal)
-                                        anno
-                                        Nothing
-                                analyzeBranch $ dfs ++ [(instKey, attrDef)]
-                        _ -> defDfAttrs odEmpty apkr $ \ !dfs ->
-                          el'ResolveAttrAddr eas instAddr >>= \case
-                            Nothing -> analyzeBranch dfs
-                            Just !instKey -> do
-                              !anno <- newTVar Nothing
-                              let !attrDef =
-                                    EL'AttrDef
-                                      instKey
-                                      Nothing
-                                      opSym
-                                      inst'span
-                                      instExpr
-                                      (EL'Expr instExpr)
-                                      anno
-                                      Nothing
-                              analyzeBranch $ dfs ++ [(instKey, attrDef)]
-                -- {{ class:inst }} -- instance resolving pattern
-                [ StmtSrc
-                    ( ExprStmt
-                        ( DictExpr
-                            [ ( AddrDictKey !clsRef,
-                                instExpr@( ExprSrc
-                                             ( AttrExpr
-                                                 ( DirectRef
-                                                     instAddr@( AttrAddrSrc
-                                                                  _
-                                                                  !inst'span
-                                                                )
-                                                   )
-                                               )
-                                             _
-                                           )
-                                )
-                              ]
-                          )
-                        _docCmt
-                      )
-                    _
-                  ] ->
-                    el'ResolveAttrAddr eas instAddr >>= \case
-                      Nothing -> analyzeBranch []
-                      Just !instKey -> el'RunTx eas $
-                        el'AnalyzeExpr
-                          Nothing
-                          (ExprSrc (AttrExpr clsRef) (attrRefSpan clsRef))
-                          $ \ !clsResult _eas -> case clsResult of
-                            EL'ClsVal !clsVal -> do
-                              !anno <- newTVar Nothing
-                              let !attrDef =
-                                    EL'AttrDef
-                                      instKey
-                                      Nothing
-                                      opSym
-                                      inst'span
-                                      instExpr
-                                      (EL'ObjVal clsVal)
-                                      anno
-                                      Nothing
-                              analyzeBranch [(instKey, attrDef)]
-                            _ -> do
-                              !anno <- newTVar Nothing
-                              let !attrDef =
-                                    EL'AttrDef
-                                      instKey
-                                      Nothing
-                                      opSym
-                                      inst'span
-                                      instExpr
-                                      (EL'Expr instExpr)
-                                      anno
-                                      Nothing
-                              analyzeBranch [(instKey, attrDef)]
-                --
-
-                -- {[ x,y,z,... ]} -- any-of pattern
-                [StmtSrc (ExprStmt (ListExpr !vExprs) _docCmt) _] ->
-                  el'RunTx eas $ -- todo: chain of eas is broken here,
-                  -- for blocks / branches to reside in the elements,
-                  -- we'd better keep the chain
-                    el'AnalyzeExprs vExprs $ \_result _eas -> analyzeBranch []
-                --
-
-                -- { head :> tail } -- uncons pattern
-                [ StmtSrc
-                    ( ExprStmt
-                        ( InfixExpr
-                            ":>"
-                            headExpr@( ExprSrc
-                                         ( AttrExpr
-                                             ( DirectRef
-                                                 ( AttrAddrSrc
-                                                     (NamedAttr !headName)
-                                                     _
-                                                   )
-                                               )
-                                           )
-                                         _
-                                       )
-                            tailExpr@( ExprSrc
-                                         ( AttrExpr
-                                             ( DirectRef
-                                                 ( AttrAddrSrc
-                                                     (NamedAttr !tailName)
-                                                     _
-                                                   )
-                                               )
-                                           )
-                                         _
-                                       )
-                          )
-                        _docCmt
-                      )
-                    _
-                  ] ->
-                    defExprAttrs
-                      [ (AttrByName headName, headExpr),
-                        (AttrByName tailName, tailExpr)
-                      ]
-                      analyzeBranch
-                --
-
-                -- { prefix @< match >@ suffix } -- sub-string cut pattern
-                [ StmtSrc
-                    ( ExprStmt
-                        ( InfixExpr
-                            ">@"
-                            prefixExpr@( ExprSrc
-                                           ( InfixExpr
-                                               "@<"
-                                               ( ExprSrc
-                                                   ( AttrExpr
-                                                       ( DirectRef
-                                                           ( AttrAddrSrc
-                                                               ( NamedAttr
-                                                                   !prefixName
-                                                                 )
-                                                               _
-                                                             )
-                                                         )
-                                                     )
-                                                   _
-                                                 )
-                                               !matchExpr
-                                             )
-                                           _
-                                         )
-                            suffixExpr@( ExprSrc
-                                           ( AttrExpr
-                                               ( DirectRef
-                                                   ( AttrAddrSrc
-                                                       (NamedAttr !suffixName)
-                                                       _
-                                                     )
-                                                 )
-                                             )
-                                           _
-                                         )
-                          )
-                        _docCmt
-                      )
-                    _
-                  ] -> el'RunTx eas $
-                    el'AnalyzeExpr Nothing matchExpr $ \_result _eas ->
-                      defExprAttrs
-                        [ (AttrByName prefixName, prefixExpr),
-                          (AttrByName suffixName, suffixExpr)
-                        ]
-                        analyzeBranch
-                -- { match >@ suffix } -- prefix cut pattern
-                [ StmtSrc
-                    ( ExprStmt
-                        ( InfixExpr
-                            ">@"
-                            !prefixExpr
-                            suffixExpr@( ExprSrc
-                                           ( AttrExpr
-                                               ( DirectRef
-                                                   ( AttrAddrSrc
-                                                       (NamedAttr !suffixName)
-                                                       _
-                                                     )
-                                                 )
-                                             )
-                                           _
-                                         )
-                          )
-                        _docCmt
-                      )
-                    _
-                  ] -> el'RunTx eas $
-                    el'AnalyzeExpr Nothing prefixExpr $ \_result _eas ->
-                      defExprAttrs
-                        [(AttrByName suffixName, suffixExpr)]
-                        analyzeBranch
-                -- { prefix @< match } -- suffix cut pattern
-                [ StmtSrc
-                    ( ExprStmt
-                        ( InfixExpr
-                            "@<"
-                            prefixExpr@( ExprSrc
-                                           ( AttrExpr
-                                               ( DirectRef
-                                                   ( AttrAddrSrc
-                                                       (NamedAttr !prefixName)
-                                                       _
-                                                     )
-                                                 )
-                                             )
-                                           _
-                                         )
-                            !suffixExpr
-                          )
-                        _docCmt
-                      )
-                    _
-                  ] -> el'RunTx eas $
-                    el'AnalyzeExpr Nothing suffixExpr $ \_result _eas ->
-                      defExprAttrs
-                        [(AttrByName prefixName, prefixExpr)]
-                        analyzeBranch
-                --
-
-                -- {( x )} -- single arg
-                [ StmtSrc
-                    ( ExprStmt
-                        ( ParenExpr
-                            argExpr@( ExprSrc
-                                        ( AttrExpr
-                                            ( DirectRef
-                                                ( AttrAddrSrc
-                                                    (NamedAttr !attrName)
-                                                    _
-                                                  )
-                                              )
-                                          )
-                                        _
-                                      )
-                          )
-                        _docCmt
-                      )
-                    _
-                  ] -> do
-                    let !attrKey = AttrByName attrName
-                    defExprAttrs [(attrKey, argExpr)] analyzeBranch
-                -- {( x,y,z,... )} -- pattern matching number of positional args
-                [ StmtSrc
-                    (ExprStmt (ArgsPackExpr (ArgsPacker !argSenders _)) _docCmt)
-                    _
-                  ] -> defDfAttrs odEmpty argSenders analyzeBranch
-                --
-
-                -- {( x:y:z:... )} -- parenthesised pair pattern
-                [ StmtSrc
-                    ( ExprStmt
-                        (ParenExpr (ExprSrc (InfixExpr ":" !p1Expr !p2Expr) _))
-                        _docCmt
-                      )
-                    _
-                  ] -> handlePairPattern [] p1Expr p2Expr
-                --
-
-                -- { continue } -- match with continue
-                [StmtSrc ContinueStmt _] -> analyzeBranch []
-                -- { break } -- match with break
-                [StmtSrc BreakStmt _] -> analyzeBranch []
-                -- { fallthrough } -- match with fallthrough
-                [StmtSrc FallthroughStmt _] -> analyzeBranch []
-                --
-
-                -- { term := value } -- definition pattern
-                [ StmtSrc
-                    ( ExprStmt
-                        ( InfixExpr
-                            ":="
-                            termExpr@( ExprSrc
-                                         ( AttrExpr
-                                             ( DirectRef
-                                                 ( AttrAddrSrc
-                                                     (NamedAttr !termName)
-                                                     _
-                                                   )
-                                               )
-                                           )
-                                         _
-                                       )
-                            valueExpr@( ExprSrc
-                                          ( AttrExpr
-                                              ( DirectRef
-                                                  ( AttrAddrSrc
-                                                      (NamedAttr !valueName)
-                                                      _
-                                                    )
-                                                )
-                                            )
-                                          _
-                                        )
-                          )
-                        _docCmt
-                      )
-                    _
-                  ] ->
-                    defExprAttrs
-                      [ (AttrByName termName, termExpr),
-                        (AttrByName valueName, valueExpr)
-                      ]
-                      analyzeBranch
-                --
-
-                -- TODO more patterns to support
-                _ -> invalidPattern
-              --
-
-              -- guarded condition branch
-              PrefixExpr Guard !condExpr -> el'RunTx eas $
-                el'AnalyzeExpr Nothing condExpr $
-                  \_cndResult _eas -> analyzeBranch []
-              --
-
-              -- { x:y:z:... } -- pair pattern
-              DictExpr
-                [ ( AddrDictKey
-                      ref1@(DirectRef (AttrAddrSrc (NamedAttr _) !span1)),
-                    !pairPattern
-                    )
-                  ] ->
-                  handlePairPattern
-                    []
-                    (ExprSrc (AttrExpr ref1) span1)
-                    pairPattern
-              --
-              -- this is to establish the intuition that `{ ... }` always
-              -- invokes pattern matching.
-              -- TODO hint that if a literal dict value really meant to be
-              -- matched, the parenthesized form `( {k1: v1, k2: v2, ...} )`
-              -- should be used.
-              DictExpr {} -> invalidPattern
-              --
-
-              -- not a pattern, value match
-              _ -> el'RunTx eas $
-                el'AnalyzeExpr Nothing lhExpr $
-                  \_lhResult _eas -> analyzeBranch []
-        --
-
-        case lhx of
+        case fullExpr of
           -- wild match
           AttrExpr (DirectRef (AttrAddrSrc (NamedAttr "_") _)) ->
             analyzeBranch []
-          -- pattern or value match, guarded
-          InfixExpr "|" (ExprSrc !matchExpr _) !guardExpr -> el'RunTx eas $
-            el'AnalyzeExpr Nothing guardExpr $
-              \_guardResult _eas -> handlePattern matchExpr
-          -- pattern or value match
-          _ -> handlePattern lhx
+          --
+
+          -- curly braces at lhs means a pattern
+          BlockExpr !patternExpr -> case patternExpr of
+            -- { val } -- wild capture pattern
+            [ StmtSrc
+                ( ExprStmt
+                    valExpr@(AttrExpr (DirectRef !valAddr))
+                    _docCmt
+                  )
+                !stmt'span
+              ] ->
+                el'ResolveAttrAddr eas valAddr >>= \case
+                  Nothing -> analyzeBranch []
+                  Just !attrKey ->
+                    defExprAttrs
+                      [(attrKey, ExprSrc valExpr stmt'span)]
+                      analyzeBranch
+            --
+
+            -- { class( field1, field2, ... ) } -- fields by class pattern
+            -- __match__ magic from the class works here
+            [ StmtSrc
+                ( ExprStmt
+                    (CallExpr clsExpr@ExprSrc {} (ArgsPacker !apkr _))
+                    _docCmt
+                  )
+                _
+              ] -> el'RunTx eas $
+                el'AnalyzeExpr Nothing clsExpr $
+                  \ !clsResult _eas -> case clsResult of
+                    EL'ClsVal !clsVal ->
+                      defDfAttrs (el'class'attrs clsVal) apkr analyzeBranch
+                    _ -> defDfAttrs odEmpty apkr analyzeBranch
+            -- { class( field1, field2, ... ) = instAddr } -- fields by
+            -- class again, but receive the matched object as well
+            -- __match__ magic from the class works here
+            [ StmtSrc
+                ( ExprStmt
+                    ( InfixExpr
+                        "="
+                        ( ExprSrc
+                            ( CallExpr
+                                clsExpr@ExprSrc {}
+                                (ArgsPacker !apkr _)
+                              )
+                            _
+                          )
+                        instExpr@( ExprSrc
+                                     (AttrExpr (DirectRef !instAddr))
+                                     !inst'span
+                                   )
+                      )
+                    _docCmt
+                  )
+                _
+              ] -> el'RunTx eas $
+                el'AnalyzeExpr Nothing clsExpr $
+                  \ !clsResult _eas -> case clsResult of
+                    EL'ClsVal !clsVal ->
+                      defDfAttrs (el'class'attrs clsVal) apkr $ \ !dfs ->
+                        el'ResolveAttrAddr eas instAddr >>= \case
+                          Nothing -> analyzeBranch dfs
+                          Just !instKey -> do
+                            !anno <- newTVar Nothing
+                            let !attrDef =
+                                  EL'AttrDef
+                                    instKey
+                                    Nothing
+                                    opSym
+                                    inst'span
+                                    instExpr
+                                    (EL'ObjVal clsVal)
+                                    anno
+                                    Nothing
+                            analyzeBranch $ dfs ++ [(instKey, attrDef)]
+                    _ -> defDfAttrs odEmpty apkr $ \ !dfs ->
+                      el'ResolveAttrAddr eas instAddr >>= \case
+                        Nothing -> analyzeBranch dfs
+                        Just !instKey -> do
+                          !anno <- newTVar Nothing
+                          let !attrDef =
+                                EL'AttrDef
+                                  instKey
+                                  Nothing
+                                  opSym
+                                  inst'span
+                                  instExpr
+                                  (EL'Expr instExpr)
+                                  anno
+                                  Nothing
+                          analyzeBranch $ dfs ++ [(instKey, attrDef)]
+            -- {{ class:inst }} -- instance resolving pattern
+            [ StmtSrc
+                ( ExprStmt
+                    ( DictExpr
+                        [ ( AddrDictKey !clsRef,
+                            instExpr@( ExprSrc
+                                         ( AttrExpr
+                                             ( DirectRef
+                                                 instAddr@( AttrAddrSrc
+                                                              _
+                                                              !inst'span
+                                                            )
+                                               )
+                                           )
+                                         _
+                                       )
+                            )
+                          ]
+                      )
+                    _docCmt
+                  )
+                _
+              ] ->
+                el'ResolveAttrAddr eas instAddr >>= \case
+                  Nothing -> analyzeBranch []
+                  Just !instKey -> el'RunTx eas $
+                    el'AnalyzeExpr
+                      Nothing
+                      (ExprSrc (AttrExpr clsRef) (attrRefSpan clsRef))
+                      $ \ !clsResult _eas -> case clsResult of
+                        EL'ClsVal !clsVal -> do
+                          !anno <- newTVar Nothing
+                          let !attrDef =
+                                EL'AttrDef
+                                  instKey
+                                  Nothing
+                                  opSym
+                                  inst'span
+                                  instExpr
+                                  (EL'ObjVal clsVal)
+                                  anno
+                                  Nothing
+                          analyzeBranch [(instKey, attrDef)]
+                        _ -> do
+                          !anno <- newTVar Nothing
+                          let !attrDef =
+                                EL'AttrDef
+                                  instKey
+                                  Nothing
+                                  opSym
+                                  inst'span
+                                  instExpr
+                                  (EL'Expr instExpr)
+                                  anno
+                                  Nothing
+                          analyzeBranch [(instKey, attrDef)]
+            --
+
+            -- {[ x,y,z,... ]} -- any-of pattern
+            [StmtSrc (ExprStmt (ListExpr !vExprs) _docCmt) _] ->
+              el'RunTx eas $ -- todo: chain of eas is broken here,
+              -- for blocks / branches to reside in the elements,
+              -- we'd better keep the chain
+                el'AnalyzeExprs vExprs $ \_result _eas -> analyzeBranch []
+            --
+
+            -- { head :> tail } -- uncons pattern
+            [ StmtSrc
+                ( ExprStmt
+                    ( InfixExpr
+                        ":>"
+                        headExpr@( ExprSrc
+                                     ( AttrExpr
+                                         ( DirectRef
+                                             ( AttrAddrSrc
+                                                 (NamedAttr !headName)
+                                                 _
+                                               )
+                                           )
+                                       )
+                                     _
+                                   )
+                        tailExpr@( ExprSrc
+                                     ( AttrExpr
+                                         ( DirectRef
+                                             ( AttrAddrSrc
+                                                 (NamedAttr !tailName)
+                                                 _
+                                               )
+                                           )
+                                       )
+                                     _
+                                   )
+                      )
+                    _docCmt
+                  )
+                _
+              ] ->
+                defExprAttrs
+                  [ (AttrByName headName, headExpr),
+                    (AttrByName tailName, tailExpr)
+                  ]
+                  analyzeBranch
+            --
+
+            -- { prefix @< match >@ suffix } -- sub-string cut pattern
+            [ StmtSrc
+                ( ExprStmt
+                    ( InfixExpr
+                        ">@"
+                        prefixExpr@( ExprSrc
+                                       ( InfixExpr
+                                           "@<"
+                                           ( ExprSrc
+                                               ( AttrExpr
+                                                   ( DirectRef
+                                                       ( AttrAddrSrc
+                                                           ( NamedAttr
+                                                               !prefixName
+                                                             )
+                                                           _
+                                                         )
+                                                     )
+                                                 )
+                                               _
+                                             )
+                                           !matchExpr
+                                         )
+                                       _
+                                     )
+                        suffixExpr@( ExprSrc
+                                       ( AttrExpr
+                                           ( DirectRef
+                                               ( AttrAddrSrc
+                                                   (NamedAttr !suffixName)
+                                                   _
+                                                 )
+                                             )
+                                         )
+                                       _
+                                     )
+                      )
+                    _docCmt
+                  )
+                _
+              ] -> el'RunTx eas $
+                el'AnalyzeExpr Nothing matchExpr $ \_result _eas ->
+                  defExprAttrs
+                    [ (AttrByName prefixName, prefixExpr),
+                      (AttrByName suffixName, suffixExpr)
+                    ]
+                    analyzeBranch
+            -- { match >@ suffix } -- prefix cut pattern
+            [ StmtSrc
+                ( ExprStmt
+                    ( InfixExpr
+                        ">@"
+                        !prefixExpr
+                        suffixExpr@( ExprSrc
+                                       ( AttrExpr
+                                           ( DirectRef
+                                               ( AttrAddrSrc
+                                                   (NamedAttr !suffixName)
+                                                   _
+                                                 )
+                                             )
+                                         )
+                                       _
+                                     )
+                      )
+                    _docCmt
+                  )
+                _
+              ] -> el'RunTx eas $
+                el'AnalyzeExpr Nothing prefixExpr $ \_result _eas ->
+                  defExprAttrs
+                    [(AttrByName suffixName, suffixExpr)]
+                    analyzeBranch
+            -- { prefix @< match } -- suffix cut pattern
+            [ StmtSrc
+                ( ExprStmt
+                    ( InfixExpr
+                        "@<"
+                        prefixExpr@( ExprSrc
+                                       ( AttrExpr
+                                           ( DirectRef
+                                               ( AttrAddrSrc
+                                                   (NamedAttr !prefixName)
+                                                   _
+                                                 )
+                                             )
+                                         )
+                                       _
+                                     )
+                        !suffixExpr
+                      )
+                    _docCmt
+                  )
+                _
+              ] -> el'RunTx eas $
+                el'AnalyzeExpr Nothing suffixExpr $ \_result _eas ->
+                  defExprAttrs
+                    [(AttrByName prefixName, prefixExpr)]
+                    analyzeBranch
+            --
+
+            -- {( x )} -- single arg
+            [ StmtSrc
+                ( ExprStmt
+                    ( ParenExpr
+                        argExpr@( ExprSrc
+                                    ( AttrExpr
+                                        ( DirectRef
+                                            ( AttrAddrSrc
+                                                (NamedAttr !attrName)
+                                                _
+                                              )
+                                          )
+                                      )
+                                    _
+                                  )
+                      )
+                    _docCmt
+                  )
+                _
+              ] -> do
+                let !attrKey = AttrByName attrName
+                defExprAttrs [(attrKey, argExpr)] analyzeBranch
+            -- {( x,y,z,... )} -- pattern matching number of positional args
+            [ StmtSrc
+                (ExprStmt (ArgsPackExpr (ArgsPacker !argSenders _)) _docCmt)
+                _
+              ] -> defDfAttrs odEmpty argSenders analyzeBranch
+            --
+
+            -- {( x:y:z:... )} -- parenthesised pair pattern
+            [ StmtSrc
+                ( ExprStmt
+                    (ParenExpr (ExprSrc (InfixExpr ":" !p1Expr !p2Expr) _))
+                    _docCmt
+                  )
+                _
+              ] -> handlePairPattern [] p1Expr p2Expr
+            --
+
+            -- { continue } -- match with continue
+            [StmtSrc ContinueStmt _] -> analyzeBranch []
+            -- { break } -- match with break
+            [StmtSrc BreakStmt _] -> analyzeBranch []
+            -- { fallthrough } -- match with fallthrough
+            [StmtSrc FallthroughStmt _] -> analyzeBranch []
+            --
+
+            -- { term := value } -- definition pattern
+            [ StmtSrc
+                ( ExprStmt
+                    ( InfixExpr
+                        ":="
+                        termExpr@( ExprSrc
+                                     ( AttrExpr
+                                         ( DirectRef
+                                             ( AttrAddrSrc
+                                                 (NamedAttr !termName)
+                                                 _
+                                               )
+                                           )
+                                       )
+                                     _
+                                   )
+                        valueExpr@( ExprSrc
+                                      ( AttrExpr
+                                          ( DirectRef
+                                              ( AttrAddrSrc
+                                                  (NamedAttr !valueName)
+                                                  _
+                                                )
+                                            )
+                                        )
+                                      _
+                                    )
+                      )
+                    _docCmt
+                  )
+                _
+              ] ->
+                defExprAttrs
+                  [ (AttrByName termName, termExpr),
+                    (AttrByName valueName, valueExpr)
+                  ]
+                  analyzeBranch
+            --
+
+            -- TODO more patterns to support
+            _ -> invalidPattern
+          --
+
+          -- guarded condition branch
+          PrefixExpr Guard !condExpr -> el'RunTx eas $
+            el'AnalyzeExpr Nothing condExpr $
+              \_cndResult _eas -> analyzeBranch []
+          --
+
+          -- { x:y:z:... } -- pair pattern
+          DictExpr
+            [ ( AddrDictKey
+                  ref1@(DirectRef (AttrAddrSrc (NamedAttr _) !span1)),
+                !pairPattern
+                )
+              ] ->
+              handlePairPattern
+                []
+                (ExprSrc (AttrExpr ref1) span1)
+                pairPattern
+          --
+          -- this is to establish the intuition that `{ ... }` always
+          -- invokes pattern matching.
+          -- TODO hint that if a literal dict value really meant to be
+          -- matched, the parenthesized form `( {k1: v1, k2: v2, ...} )`
+          -- should be used.
+          DictExpr {} -> invalidPattern
+          --
+
+          -- not a pattern, value match
+          _ -> el'RunTx eas $
+            el'AnalyzeExpr Nothing lhExpr $
+              \_lhResult _eas -> analyzeBranch []
 --
 
 -- apk ctor
