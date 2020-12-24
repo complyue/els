@@ -716,10 +716,16 @@ el'PackArgs (ArgsPacker !argSndrs _) !exit !eas =
   where
     !eac = el'context eas
     !easPure = eas {el'context = eac {el'ctx'pure = True}}
+    !originPure = el'ctx'pure eac
 
     collectArgs :: [EL'Value] -> [(AttrKey, EL'Value)] -> [ArgSender] -> EL'Tx
-    collectArgs !args !kwargs [] = \_eas ->
-      el'Exit eas exit $ EL'ArgsPack (reverse args) $ odFromList $ reverse kwargs
+    collectArgs !args !kwargs [] = \ !easDone ->
+      el'Exit
+        easDone
+          { el'context = (el'context easDone) {el'ctx'pure = originPure}
+          }
+        exit
+        $ EL'ArgsPack (reverse args) $ odFromList $ reverse kwargs
     collectArgs !args !kwargs (asndr : rest) = case asndr of
       UnpackPosArgs !ax -> el'AnalyzeExpr Nothing ax $ \_argVal ->
         -- TODO try analyze the unpacking
@@ -732,10 +738,10 @@ el'PackArgs (ArgsPacker !argSndrs _) !exit !eas =
         collectArgs args kwargs rest
       SendPosArg !ax -> el'AnalyzeExpr Nothing ax $ \ !argVal ->
         collectArgs (argVal : args) kwargs rest
-      SendKwArg !argAddr !ax -> \_eas ->
-        el'ResolveAttrAddr eas argAddr >>= \case
-          Nothing -> el'RunTx easPure $ collectArgs args kwargs rest
-          Just !argKey -> el'RunTx easPure $
+      SendKwArg !argAddr !ax -> \ !easDone ->
+        el'ResolveAttrAddr easDone argAddr >>= \case
+          Nothing -> el'RunTx easDone $ collectArgs args kwargs rest
+          Just !argKey -> el'RunTx easDone $
             el'AnalyzeExpr Nothing ax $ \ !argVal ->
               collectArgs args ((argKey, argVal) : kwargs) rest
 
@@ -1296,7 +1302,7 @@ el'AnalyzeExpr
     "::" -> case lhExpr of
       ExprSrc (AttrExpr (DirectRef !addr)) _ ->
         el'ResolveAttrAddr eas addr >>= \case
-          Nothing -> returnAsExpr
+          Nothing -> returnAsExpr eas
           Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
           Just !attrKey -> do
             let !attrAnno = EL'AttrAnno rhExpr docCmt
@@ -1309,7 +1315,7 @@ el'AnalyzeExpr
           bad'anno'span
           "bad-anno"
           "bad annotation"
-        returnAsExpr
+        returnAsExpr eas
     --
 
     -- left-dropping annotation
@@ -1319,35 +1325,37 @@ el'AnalyzeExpr
     -- TODO special treatment of ($) (|) (&) etc. ?
 
     -- other operations without special treatment
-    _ -> el'RunTx easPure $
-      el'AnalyzeExpr Nothing lhExpr $ \_lhVal ->
-        el'AnalyzeExpr Nothing rhExpr $ \_rhVal _eas -> returnAsExpr
-        --
+    _ ->
+      el'RunTx eas $
+        el'AnalyzeExpr Nothing lhExpr $
+          const $
+            el'AnalyzeExpr Nothing rhExpr $ const returnAsExpr
+            --
 
-        --
+            --
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
       !swip = el'ctx'scope eac
       !pwip = el'ProcWIP swip
       !bwip = el'scope'branch'wip pwip
-      returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
-
-      easPure = eas {el'context = eac {el'ctx'pure = True}}
+      returnAsExpr = el'ExitTx exit $ EL'Expr xsrc
 
       doCmp :: STM ()
-      doCmp = el'RunTx easPure $
-        el'AnalyzeExpr Nothing lhExpr $ \_lhVal ->
-          el'AnalyzeExpr Nothing rhExpr $ \_rhVal _eas -> returnAsExpr
+      doCmp =
+        el'RunTx eas $
+          el'AnalyzeExpr Nothing lhExpr $
+            const $
+              el'AnalyzeExpr Nothing rhExpr $ const returnAsExpr
 
       doAssign :: STM ()
-      doAssign = el'RunTx easPure $
-        el'AnalyzeExpr Nothing rhExpr $ \ !rhVal _eas -> do
+      doAssign = el'RunTx eas $
+        el'AnalyzeExpr Nothing rhExpr $ \ !rhVal !easDone -> do
           case lhExpr of
             ExprSrc (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span))) _ ->
-              el'ResolveAttrAddr eas addr >>= \case
-                Nothing -> returnAsExpr
-                Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+              el'ResolveAttrAddr easDone addr >>= \case
+                Nothing -> returnAsExpr easDone
+                Just (AttrByName "_") -> el'Exit easDone exit $ EL'Const nil
                 Just !attrKey -> do
                   !attrAnno <-
                     newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
@@ -1404,28 +1412,29 @@ el'AnalyzeExpr
                     then do
                       -- record as definition symbol of current scope
                       recordScopeSymbol pwip $ EL'DefSym attrDef
-                      el'Exit eas exit rhVal
+                      el'Exit easDone exit rhVal
                     else case maybePrevDef of
                       Just !prevDef -> do
                         -- record as reference symbol of current scope
                         let !attrRef = EL'AttrRef addr prevDef
                         recordScopeSymbol pwip $ EL'RefSym attrRef
-                        returnAsExpr
+                        returnAsExpr easDone
                       Nothing -> do
                         -- record as definition symbol of current scope
                         recordScopeSymbol pwip $ EL'DefSym attrDef
-                        returnAsExpr
+                        returnAsExpr easDone
             ExprSrc (AttrExpr (IndirectRef !tgtExpr !addr)) _expr'span ->
-              el'RunTx easPure $
-                el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
-                  -- TODO add to lh obj attrs for (=) ?
+              el'RunTx easDone $
+                el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal !easDone' -> do
+                  -- TODO add to lh obj (esp. this) attrs for (=)
                   --      other cases ?
-                  el'ResolveAttrAddr eas addr >> returnAsExpr
+                  void $ el'ResolveAttrAddr easDone' addr
+                  returnAsExpr easDone'
             ExprSrc (IndexExpr !idxExpr !tgtExpr) _expr'span ->
-              el'RunTx easPure $
-                el'AnalyzeExpr Nothing idxExpr $ \_idxVal ->
-                  el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal _eas ->
-                    returnAsExpr
+              el'RunTx easDone $
+                el'AnalyzeExpr Nothing idxExpr $
+                  const $
+                    el'AnalyzeExpr Nothing tgtExpr $ const returnAsExpr
             ExprSrc _ !bad'assign'tgt'span -> do
               el'LogDiag
                 diags
@@ -1433,7 +1442,7 @@ el'AnalyzeExpr
                 bad'assign'tgt'span
                 "bad-assign-target"
                 "bad assignment target"
-              returnAsExpr
+              returnAsExpr easDone
 
       doBranch :: STM ()
       doBranch = do
@@ -2085,18 +2094,23 @@ el'AnalyzeExpr _docCmt (ExprSrc (DictExpr !es) _) !exit !eas =
   where
     !eac = el'context eas
     !easPure = eas {el'context = eac {el'ctx'pure = True}}
+    !originPure = el'ctx'pure eac
 
     collectEntries ::
       [(EL'Value, EL'Value)] ->
       [(DictKeyExpr, ExprSrc)] ->
       EL'Tx
-    collectEntries !evs [] = \_eas ->
-      el'Exit eas exit . EL'Dict =<< (newTVar $! reverse evs)
+    collectEntries !evs [] = \ !easDone ->
+      el'Exit
+        easDone {el'context = (el'context easDone) {el'ctx'pure = originPure}}
+        exit
+        . EL'Dict
+        =<< (newTVar $! reverse evs)
     collectEntries !evs ((!dkx, !vx) : rest) =
       el'AnalyzeExpr Nothing vx $ \ !v -> case dkx of
-        LitDictKey !lit -> \_eas ->
+        LitDictKey !lit -> \ !easDone ->
           el'LiteralValue lit >>= \ !k ->
-            el'RunTx easPure $ collectEntries ((k, v) : evs) rest
+            el'RunTx easDone $ collectEntries ((k, v) : evs) rest
         AddrDictKey !kaddr -> el'AnalyzeExpr
           Nothing
           (ExprSrc (AttrExpr kaddr) noSrcRange)
@@ -2109,10 +2123,17 @@ el'AnalyzeExpr _docCmt (ExprSrc (DictExpr !es) _) !exit !eas =
 -- parenthesis
 el'AnalyzeExpr !docCmt (ExprSrc (ParenExpr !x) _) !exit !eas =
   el'RunTx easPure $
-    el'AnalyzeExpr docCmt x $ \ !val _eas -> el'Exit eas exit val
+    el'AnalyzeExpr docCmt x $ \ !val !easDone ->
+      el'Exit
+        easDone
+          { el'context = (el'context easDone) {el'ctx'pure = originPure}
+          }
+        exit
+        val
   where
     !eac = el'context eas
     !easPure = eas {el'context = eac {el'ctx'pure = True}}
+    !originPure = el'ctx'pure eac
 --
 
 -- literal value
@@ -3036,11 +3057,17 @@ el'AnalyzeExpr
 --
 
 -- case-of
-el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas =
-  el'RunTx eas $
+el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas0 =
+  el'RunTx eas0 $
     el'AnalyzeExpr Nothing tgt $
       const $
-        el'AnalyzeExpr Nothing bs $ \_result _eas -> do
+        el'AnalyzeExpr Nothing bs $ \_result !eas -> do
+          let !eac = el'context eas
+              !swip = el'ctx'scope eac
+              !pwip = el'ProcWIP swip
+              !bwip = el'scope'branch'wip pwip
+              !scope'attrs = el'scope'attrs'wip pwip
+              !branch'attrs = el'branch'attrs'wip bwip
           !bas <- iopdSize branch'attrs
           -- merge all scope attrs into branch attrs
           flip iopdUpdate branch'attrs =<< iopdToList scope'attrs
@@ -3053,13 +3080,6 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas =
               (EL'RegionWIP (src'end expr'span) attrs :)
 
           el'Exit eas exit $ EL'Expr x
-  where
-    !eac = el'context eas
-    !swip = el'ctx'scope eac
-    !pwip = el'ProcWIP swip
-    !bwip = el'scope'branch'wip pwip
-    !scope'attrs = el'scope'attrs'wip pwip
-    !branch'attrs = el'branch'attrs'wip bwip
 --
 
 -- for-from-do
