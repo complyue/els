@@ -99,6 +99,7 @@ createMetaWorldClass !msClass !clsOuterScope =
           \ !msMeta -> asModuleResolved bootstrapWorld msMeta $
             \ !resolvedMeta _ets -> do
               -- log all parsing/resolution diags
+              -- TODO only do so when debug
               el'WalkParsingDiags msMeta $ logDiags "Đ syntax"
               el'WalkResolutionDiags msMeta $ logDiags "Đ semantics"
               -- make the meta scope for ambient of all modules
