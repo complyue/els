@@ -4,6 +4,7 @@ module Language.Edh.Meta.AtTypes where
 import Control.Concurrent.STM
 import Data.Vector (Vector)
 import Language.Edh.EHI
+import Language.Edh.Meta.FIFO
 import Language.Edh.Meta.Model
 import Prelude
 
@@ -26,9 +27,15 @@ type EL'Tx = EL'AnalysisState -> STM ()
 
 data EL'AnalysisState = EL'AnalysisState
   { el'world :: !EL'World,
+    el'backlog :: !(TVar (FIFO AnalysisInQueue)),
     el'context :: !EL'Context,
     el'ets :: !EdhThreadState
   }
+
+type AnalysisInQueue = STM () -> STM ()
+
+el'PostAnalysis :: EL'AnalysisState -> AnalysisInQueue -> STM ()
+el'PostAnalysis !eas !aiq = modifyTVar' (el'backlog eas) $ fifoEnque aiq
 
 -- | analysis context
 data EL'Context = EL'Context

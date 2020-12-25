@@ -19,6 +19,7 @@ import qualified Data.Vector as V
 import GHC.Conc (unsafeIOToSTM)
 import Language.Edh.EHI
 import Language.Edh.Meta.AtTypes
+import Language.Edh.Meta.FIFO
 import Language.Edh.Meta.Model
 import Numeric.Search.Range
 import System.Directory
@@ -581,6 +582,20 @@ resolveParsedModule ::
   [StmtSrc] ->
   EdhProc EL'ResolvedModule
 resolveParsedModule !world !ms !resolving !body !exit !ets = do
+  !backlog <- newTVar fifoEmpty
+  let drainBacklog :: STM () -> STM ()
+      drainBacklog !finallyDone = chkQue
+        where
+          chkQue :: STM ()
+          chkQue =
+            {- HLINT ignore "Redundant <$>" -}
+            fifoDeque <$> swapTVar backlog fifoEmpty >>= \case
+              (Nothing, _) -> finallyDone
+              !more -> go more
+          go :: (Maybe AnalysisInQueue, FIFO AnalysisInQueue) -> STM ()
+          go (Nothing, _) = chkQue
+          go (Just !aiq, q) = aiq $ go $ fifoDeque q
+
   let !modu'name = el'modu'name ms
       !name'def =
         EL'AttrDef
@@ -659,12 +674,13 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !eas =
         EL'AnalysisState
           { el'world = world,
+            el'backlog = backlog,
             el'context = eac,
             el'ets = ets
           }
 
   el'RunTx eas $
-    el'AnalyzeStmts body $ \_ !easDone -> do
+    el'AnalyzeStmts body $ \_ !easDone -> drainBacklog $ do
       let !eacDone = el'context easDone
           !swipDone = el'ctx'scope eacDone
           !pwipDone = el'ProcWIP swipDone
