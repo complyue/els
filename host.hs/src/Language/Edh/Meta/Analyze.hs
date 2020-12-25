@@ -2593,11 +2593,6 @@ el'AnalyzeExpr
                     ( EL'Proc
                         (AttrByName mthName)
                         WildReceiver -- todo elaborate actual args
-                        ( EL'Scope
-                            cls'name'span
-                            V.empty
-                            V.empty
-                        )
                     )
                 )
                 anno
@@ -3375,7 +3370,7 @@ el'DefineMethod
             let -- TODO for sake of parameter hints in IDE
                 -- - elide 1st `callerScope` for interpreter and 3-arg operator
                 -- - supplement `outlet` for producer if omitted
-                !mth = EL'Proc mthName argsRcvr mth'scope
+                !mth = EL'Proc mthName argsRcvr
                 !mthVal = EL'ProcVal mth
                 !mthDef =
                   EL'AttrDef
@@ -3619,7 +3614,7 @@ el'DefineArrowProc
                 -- TODO for sake of parameter hints in IDE
                 -- - elide 1st `callerScope` for interpreter and 3-arg operator
                 -- - supplement `outlet` for producer if omitted
-                !mth = EL'Proc mthName argsRcvr mth'scope
+                !mth = EL'Proc mthName argsRcvr
                 !mthVal = EL'ProcVal mth
             --
 

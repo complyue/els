@@ -363,9 +363,7 @@ el'IsNil _ = False
 -- | a procedure
 data EL'Proc = EL'Proc
   { el'proc'name :: AttrKey,
-    el'proc'args :: !ArgsReceiver,
-    -- | scope of this proc
-    el'proc'scope :: !EL'Scope
+    el'proc'args :: !ArgsReceiver
   }
   deriving (Show)
 
