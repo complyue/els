@@ -329,9 +329,9 @@ data EL'Value
   | -- | a property
     EL'PropVal !EL'Class !AttrKey
   | -- | result from a return stmt
-    EL'Return !ExprSrc
+    EL'Return !EL'Value
   | -- | result from a throw stmt
-    EL'Throw !ExprSrc
+    EL'Throw !EL'Value
   | -- | result from a rethrow stmt
     EL'Rethrow
   | -- | an arbitrary expression not resolved at analysis time

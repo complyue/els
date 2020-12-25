@@ -1040,14 +1040,14 @@ el'AnalyzeStmt (StmtSrc FallthroughStmt _stmt'span) !exit !eas =
 el'AnalyzeStmt (StmtSrc (ReturnStmt !expr) _stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr Nothing expr $
-      const $ el'ExitTx exit $ EL'Return expr
+      el'ExitTx exit . EL'Return
 --
 
 -- throw
 el'AnalyzeStmt (StmtSrc (ThrowStmt !expr) _stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr Nothing expr $
-      const $ el'ExitTx exit $ EL'Throw expr
+      el'ExitTx exit . EL'Throw
 --
 
 -- rethrow
