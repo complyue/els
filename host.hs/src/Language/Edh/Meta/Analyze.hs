@@ -3281,129 +3281,50 @@ el'DefineMethod
     )
   !exit
   !eas = do
-    !mthAttrs <- iopdEmpty
-    !mthEffs <- iopdEmpty
-    !mthAnnos <- iopdEmpty
-    !branchRegions <- newTVar []
-    !mthScopes <- newTVar []
-    !mthRegions <- newTVar []
-    let !bwip =
-          outerBranch
-            { el'branch'attrs'wip = mthAttrs,
-              el'branch'effs'wip = mthEffs,
-              el'branch'annos'wip = mthAnnos,
-              el'branch'regions'wip = branchRegions
-            }
-        !pwip = case outerScope of
-          EL'DefineClass !cwip _pwip ->
-            outerProc
-              { el'scope'branch'wip = bwip,
-                el'scope'exts'wip = el'inst'exts'wip cwip,
-                el'scope'exps'wip = el'inst'exps'wip cwip,
-                el'scope'inner'scopes'wip = mthScopes,
-                el'scope'regions'wip = mthRegions
-              }
-          _ ->
-            outerProc -- inherit exts/exps from outer scope
-              { el'scope'branch'wip = bwip,
-                el'scope'inner'scopes'wip = mthScopes,
-                el'scope'regions'wip = mthRegions
-              }
-        !eacMth =
-          EL'Context
-            { el'ctx'scope = EL'ProcFlow pwip,
-              el'ctx'outers = outerScope : el'ctx'outers eac,
-              el'ctx'pure = False,
-              el'ctx'exporting = False,
-              el'ctx'eff'defining = False,
-              el'ctx'symbols = el'ctx'symbols eac,
-              el'ctx'diags = el'ctx'diags eac
-            }
-        !easMth = eas {el'context = eacMth}
+    -- postpone analysis in calling this method to happen after current scope
+    -- finished analysis
+    el'PostAnalysis eas analyzeMthCall
 
-    !argArts <- case argsRcvr of
-      WildReceiver -> return []
-      PackReceiver !ars -> defArgArts ars
-      SingleReceiver !ar -> defArgArts [ar]
-    iopdUpdate argArts mthAttrs
-
-    el'RunTx easMth $
-      el'AnalyzeStmts [mth'body] $ \_ !easDone -> do
-        let !eacDone = el'context easDone
-            !swipDone = el'ctx'scope eacDone
-            !pwipDone = el'ProcWIP swipDone
-            !bwipDone = el'scope'branch'wip pwipDone
-        !regions'wip <-
-          fmap
-            ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                EL'Region
-                  (SrcRange reg'start (src'end body'span))
-                  reg'arts
-            )
-            <$> readTVar (el'branch'regions'wip bwipDone)
-        !innerScopes <- readTVar mthScopes
-        !regions <-
-          (regions'wip ++)
-            <$> readTVar (el'scope'regions'wip pwipDone)
-
-        -- update annotations for arguments from body
-        forM_ argArts $ \(!argName, !argDef) ->
-          iopdLookup argName mthAnnos >>= \case
-            Nothing -> pure ()
-            Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
+    -- define the attribute & return the value at level of current scope
+    el'ResolveAttrAddr eas mth'name >>= \case
+      Nothing -> el'Exit eas exit $ EL'Const nil
+      Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+      Just !mthName -> do
+        !mthAnno <- newTVar =<< el'ResolveAnnotation outerScope mthName
+        let !mth = EL'Proc mthName argsRcvr
+            !mthVal = EL'ProcVal mth
+            !mthDef =
+              EL'AttrDef
+                mthName
+                docCmt
+                "<proc-def>"
+                mth'name'span
+                xsrc
+                mthVal
+                mthAnno
+                Nothing
+        -- record as definition symbol of outer scope
+        recordCtxSym eac $ EL'DefSym mthDef
         --
 
-        let !mth'scope =
-              EL'Scope
-                { el'scope'span = body'span,
-                  el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                  el'scope'regions = V.fromList $! reverse regions
-                }
-        -- record as an inner scope of outer scope
-        modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
+        -- record as artifact of outer scope
+        unless (el'ctx'pure eac) $ do
+          if el'ctx'eff'defining eac
+            then iopdInsert mthName mthDef $ el'branch'effs'wip outerBranch
+            else do
+              let !attrs = el'branch'attrs'wip outerBranch
+              iopdInsert mthName mthDef $ el'scope'attrs'wip outerProc
+              iopdInsert mthName mthDef attrs
+              -- record a region after this definition for current scope
+              iopdSnapshot attrs
+                >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
+                  . EL'RegionWIP (src'end body'span)
 
-        el'ResolveAttrAddr eas mth'name >>= \case
-          Nothing -> el'Exit eas exit $ EL'Const nil
-          Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
-          Just !mthName -> do
-            !mthAnno <- newTVar =<< el'ResolveAnnotation outerScope mthName
-            let -- TODO for sake of parameter hints in IDE
-                -- - elide 1st `callerScope` for interpreter and 3-arg operator
-                -- - supplement `outlet` for producer if omitted
-                !mth = EL'Proc mthName argsRcvr
-                !mthVal = EL'ProcVal mth
-                !mthDef =
-                  EL'AttrDef
-                    mthName
-                    docCmt
-                    "<proc-def>"
-                    mth'name'span
-                    xsrc
-                    mthVal
-                    mthAnno
-                    Nothing
-            -- record as definition symbol of outer scope
-            recordCtxSym eac $ EL'DefSym mthDef
-            --
+          when (el'ctx'exporting eac) $
+            iopdInsert mthName mthDef $ el'scope'exps'wip outerProc
 
-            -- record as artifact of outer scope
-            unless (el'ctx'pure eac) $ do
-              if el'ctx'eff'defining eac
-                then iopdInsert mthName mthDef $ el'branch'effs'wip outerBranch
-                else do
-                  let !attrs = el'branch'attrs'wip outerBranch
-                  iopdInsert mthName mthDef $ el'scope'attrs'wip outerProc
-                  iopdInsert mthName mthDef attrs
-                  -- record a region after this definition for current scope
-                  iopdSnapshot attrs
-                    >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
-                      . EL'RegionWIP (src'end body'span)
-
-              when (el'ctx'exporting eac) $
-                iopdInsert mthName mthDef $ el'scope'exps'wip outerProc
-
-            -- return the procedure object value
-            el'Exit eas exit mthVal
+        -- return the procedure object value
+        el'Exit eas exit mthVal
     where
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
@@ -3413,6 +3334,9 @@ el'DefineMethod
 
       -- define artifacts from arguments for a procedure
       defArgArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
+      -- TODO special treatments for interpreter and 3-arg operator:
+      -- - 1st `callerScope` be of scope object type
+      -- - rest args be of expr type
       defArgArts !ars = go [] ars
         where
           go ::
@@ -3457,6 +3381,92 @@ el'DefineMethod
                           args
                         )
                         rest
+
+      analyzeMthCall :: STM () -> STM ()
+      analyzeMthCall !doneMthCall = do
+        !mthAttrs <- iopdEmpty
+        !mthEffs <- iopdEmpty
+        !mthAnnos <- iopdEmpty
+        !branchRegions <- newTVar []
+        !mthScopes <- newTVar []
+        !mthRegions <- newTVar []
+        let !bwip =
+              outerBranch
+                { el'branch'attrs'wip = mthAttrs,
+                  el'branch'effs'wip = mthEffs,
+                  el'branch'annos'wip = mthAnnos,
+                  el'branch'regions'wip = branchRegions
+                }
+            !pwip = case outerScope of
+              EL'DefineClass !cwip _pwip ->
+                outerProc
+                  { el'scope'branch'wip = bwip,
+                    el'scope'exts'wip = el'inst'exts'wip cwip,
+                    el'scope'exps'wip = el'inst'exps'wip cwip,
+                    el'scope'inner'scopes'wip = mthScopes,
+                    el'scope'regions'wip = mthRegions
+                  }
+              _ ->
+                outerProc -- inherit exts/exps from outer scope
+                  { el'scope'branch'wip = bwip,
+                    el'scope'inner'scopes'wip = mthScopes,
+                    el'scope'regions'wip = mthRegions
+                  }
+            !eacMth =
+              EL'Context
+                { el'ctx'scope = EL'ProcFlow pwip,
+                  el'ctx'outers = outerScope : el'ctx'outers eac,
+                  el'ctx'pure = False,
+                  el'ctx'exporting = False,
+                  el'ctx'eff'defining = False,
+                  el'ctx'symbols = el'ctx'symbols eac,
+                  el'ctx'diags = el'ctx'diags eac
+                }
+            !easMth = eas {el'context = eacMth}
+
+        !argArts <- case argsRcvr of
+          WildReceiver -> return []
+          PackReceiver !ars -> defArgArts ars
+          SingleReceiver !ar -> defArgArts [ar]
+        iopdUpdate argArts mthAttrs
+
+        el'RunTx easMth $
+          el'AnalyzeStmts [mth'body] $ \_ !easDone -> do
+            let !eacDone = el'context easDone
+                !swipDone = el'ctx'scope eacDone
+                !pwipDone = el'ProcWIP swipDone
+                !bwipDone = el'scope'branch'wip pwipDone
+            !regions'wip <-
+              fmap
+                ( \(EL'RegionWIP !reg'start !reg'arts) ->
+                    EL'Region
+                      (SrcRange reg'start (src'end body'span))
+                      reg'arts
+                )
+                <$> readTVar (el'branch'regions'wip bwipDone)
+            !innerScopes <- readTVar mthScopes
+            !regions <-
+              (regions'wip ++)
+                <$> readTVar (el'scope'regions'wip pwipDone)
+
+            -- update annotations for arguments from body
+            forM_ argArts $ \(!argName, !argDef) ->
+              iopdLookup argName mthAnnos >>= \case
+                Nothing -> pure ()
+                Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
+            --
+
+            let !mth'scope =
+                  EL'Scope
+                    { el'scope'span = body'span,
+                      el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                      el'scope'regions = V.fromList $! reverse regions
+                    }
+            -- record as an inner scope of outer scope
+            modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
+
+            -- done analyzing this method call
+            doneMthCall
 
 --
 
