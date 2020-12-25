@@ -2,7 +2,6 @@
 module Language.Edh.Meta.AtTypes where
 
 import Control.Concurrent.STM
-import qualified Data.Map.Strict as TreeMap
 import Data.Vector (Vector)
 import Language.Edh.EHI
 import Language.Edh.Meta.Model
@@ -49,6 +48,8 @@ data EL'Context = EL'Context
     el'ctx'eff'defining :: !Bool,
     --
 
+    -- | accumulated symbols
+    el'ctx'symbols :: !(TVar [EL'AttrSym]),
     -- | diagnostics collector in context
     el'ctx'diags :: !(TVar [EL'Diagnostic])
   }
@@ -146,8 +147,6 @@ data EL'ProcWIP = EL'ProcWIP
     el'scope'exps'wip :: !EL'ArtsWIP,
     -- | accumulated inner scopes lately
     el'scope'inner'scopes'wip :: !(TVar [EL'Scope]),
-    -- | accumulated symbols lately
-    el'scope'symbols'wip :: !(TVar (TreeMap.Map SrcPos EL'AttrSym)),
     -- | accumulated regions lately
     el'scope'regions'wip :: !(TVar [EL'Region])
   }
@@ -173,17 +172,8 @@ data EL'RegionWIP = EL'RegionWIP
     el'region'attrs'wip :: !EL'Artifacts
   }
 
-recordScopeSymbol :: EL'ProcWIP -> EL'AttrSym -> STM ()
-recordScopeSymbol !pwip !sym = case sym of
-  EL'DefSym !def ->
-    let !symKeyPos = src'end $ el'attr'def'focus def
-     in modifyTVar' syms $ TreeMap.insert symKeyPos sym
-  EL'RefSym !ref ->
-    let AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
-        !symKeyPos = src'end ref'span
-     in modifyTVar' syms $ TreeMap.insert symKeyPos sym
-  where
-    !syms = el'scope'symbols'wip pwip
+recordCtxSym :: EL'Context -> EL'AttrSym -> STM ()
+recordCtxSym !eac !sym = modifyTVar' (el'ctx'symbols eac) (sym :)
 
 el'ResolveLexicalAttr :: [EL'ScopeWIP] -> AttrKey -> STM (Maybe EL'AttrDef)
 el'ResolveLexicalAttr [] _ = return Nothing

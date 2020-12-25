@@ -195,10 +195,12 @@ data EL'ResolvedModule = EL'ResolvedModule
     el'modu'scope :: !EL'Scope,
     -- | finalized exports from this module
     el'modu'exports :: !EL'Artifacts,
-    -- | other modules this module depends on
-    el'modu'dependencies :: !(HashMap EL'ModuSlot Bool),
+    -- | all symbols in this module, sorted so as they appear in source code
+    el'modu'symbols :: !(Vector EL'AttrSym),
     -- | diagnostics generated during resolution
     el'resolution'diags :: ![EL'Diagnostic],
+    -- | other modules this module depends on
+    el'modu'dependencies :: !(HashMap EL'ModuSlot Bool),
     -- | other modules depending on this module, and defined with this revision
     -- of resolution for this module
     --
@@ -414,7 +416,6 @@ el'MetaClass = mc
             noSrcRange
             V.empty
             V.empty
-            V.empty
         )
         odEmpty
         odEmpty
@@ -471,8 +472,8 @@ el'ScopeClass =
 -- | a scope is backed by an entity with arbitrary attributes, as Edh allows
 -- very straight forward sharing of lexical scopes to goroutines spawned from
 -- within an inner scope, it may be more right to assume all attributes ever
--- defined in outer scopes are accessible, before we can represent sequential
--- order of attribute availablility with respect to precise concurrency analysis
+-- defined in outer scopes are accessible, before precise concurrent flow
+-- analysis is performed
 data EL'Scope = EL'Scope
   { el'scope'span :: !SrcRange,
     -- | nested scopes
@@ -483,15 +484,13 @@ data EL'Scope = EL'Scope
     -- sections within a scope appear naturally in source order, we use an
     -- immutable vector here, so it can be used with binary search to locate
     -- the region for a target location within this scope
-    el'scope'regions :: !(Vector EL'Region),
-    -- | all symbols encountered in this scope, in order as appeared in src
-    el'scope'symbols :: !(Vector EL'AttrSym)
+    el'scope'regions :: !(Vector EL'Region)
   }
   deriving (Show)
 
 -- | 冇 scope
 maoScope :: EL'Scope
-maoScope = EL'Scope noSrcRange V.empty V.empty V.empty
+maoScope = EL'Scope noSrcRange V.empty V.empty
 
 el'ScopeAttrs :: EL'Scope -> EL'Artifacts
 el'ScopeAttrs =
@@ -518,25 +517,19 @@ instance Show EL'Artifacts where
 data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
   deriving (Show)
 
-locateSymbolInScope :: Int -> Int -> EL'Scope -> Maybe EL'AttrSym
-locateSymbolInScope !line !char = searchScope
+attrSymKey :: EL'AttrSym -> SrcPos
+attrSymKey (EL'DefSym !def) = src'end $ el'attr'def'focus def
+attrSymKey (EL'RefSym !ref) = src'end ref'span
+  where
+    AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
+
+locateSymbolInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrSym
+locateSymbolInModule !line !char !modu =
+  locateSym $ -- TODO use binary search for performance with large modules
+    V.toList $ el'modu'symbols modu
   where
     !p = SrcPos line char
 
-    searchScope :: EL'Scope -> Maybe EL'AttrSym
-    searchScope !s = case srcPosCmp2Range p $ el'scope'span s of
-      EQ -> case locateSym $ V.toList $ el'scope'symbols s of
-        gotIt@Just {} -> gotIt
-        Nothing -> searchInners $ V.toList $ el'scope'inner'scopes s
-      _ -> Nothing
-
-    searchInners :: [EL'Scope] -> Maybe EL'AttrSym
-    searchInners [] = Nothing
-    searchInners (i : rest) = case searchScope i of
-      gotIt@Just {} -> gotIt
-      Nothing -> searchInners rest
-
-    -- TODO use binary search for performance on large scopes
     locateSym :: [EL'AttrSym] -> Maybe EL'AttrSym
     locateSym [] = Nothing
     locateSym (x : rest) = case x of

@@ -9,7 +9,7 @@ import qualified Data.ByteString as B
 import Data.Dynamic
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
-import qualified Data.Map.Strict as TreeMap
+import Data.List
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -562,16 +562,16 @@ asModuleResolving !world !ms !exit !ets =
                     noSrcRange
                     V.empty
                     V.empty
-                    V.empty
                 )
                 odEmpty
-                Map.empty
+                V.empty
                 [ el'Diag
                     el'Error
                     noSrcRange
                     "resolve-err"
                     exDesc
                 ]
+                Map.empty
                 (el'resolving'dependants resolving)
 
 resolveParsedModule ::
@@ -624,13 +624,13 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
         odFromList $
           (\ !def -> (el'attr'def'key def, def))
             <$> [name'def, file'def, path'def]
+  !ctxSyms <- newTVar []
   !branchAttrs <- iopdFromList $ odToList builtinAttrs
   !moduAttrs <- iopdClone branchAttrs
   !moduEffs <- iopdEmpty
   !moduAnnos <- iopdEmpty
   !branchRegions <- newTVar [EL'RegionWIP beginningSrcPos builtinAttrs]
   !moduScopes <- newTVar []
-  !moduSyms <- newTVar TreeMap.empty
   !moduRegions <- newTVar []
   let !bwip =
         EL'BranchWIP
@@ -645,7 +645,6 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
           (el'modu'exts'wip resolving)
           (el'modu'exps'wip resolving)
           moduScopes
-          moduSyms
           moduRegions
       !eac =
         EL'Context
@@ -654,6 +653,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
             el'ctx'pure = False,
             el'ctx'exporting = False,
             el'ctx'eff'defining = False,
+            el'ctx'symbols = ctxSyms,
             el'ctx'diags = el'resolving'diags resolving
           }
       !eas =
@@ -681,7 +681,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !regions <-
         (regions'wip ++)
           <$> readTVar (el'scope'regions'wip pwipDone)
-      !scope'symbols <- readTVar moduSyms
+      !modu'symbols <- sortOn attrSymKey <$> readTVar ctxSyms
 
       !diags <- readTVar $ el'resolving'diags resolving
       !moduExps <- iopdSnapshot $ el'modu'exps'wip resolving
@@ -690,16 +690,15 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
             EL'Scope
               { el'scope'span = SrcRange beginningSrcPos moduEnd,
                 el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                el'scope'regions = V.fromList $! reverse regions,
-                el'scope'symbols =
-                  V.fromList $ snd <$> TreeMap.toAscList scope'symbols
+                el'scope'regions = V.fromList $! reverse regions
               }
       exitEdh ets exit $
         EL'ResolvedModule
           el'scope
           moduExps
-          dependencies
+          (V.fromList modu'symbols)
           (reverse diags)
+          dependencies
           (el'resolving'dependants resolving)
   where
     moduEnd :: SrcPos
@@ -915,7 +914,7 @@ el'AnalyzeStmt
                 attrAnno
                 prevDef
         -- record as definition symbol of current scope
-        recordScopeSymbol pwip $ EL'DefSym attrDef
+        recordCtxSym eac $ EL'DefSym attrDef
         if el'ctx'eff'defining eac
           then do
             let !effs = el'branch'effs'wip bwip
@@ -1163,14 +1162,12 @@ el'AnalyzeExpr
           Just !attrDef -> do
             -- record as referencing symbol of outer scope
             let !attrRef = EL'AttrRef addr attrDef
-            recordScopeSymbol pwip $ EL'RefSym attrRef
+            recordCtxSym eac $ EL'RefSym attrRef
 
             el'Exit eas exit $ el'attr'def'value attrDef
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
-      !swip = el'ctx'scope eac
-      !pwip = el'ProcWIP swip
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 --
 
@@ -1201,13 +1198,13 @@ el'AnalyzeExpr
               Just !attrDef -> do
                 -- record as referencing symbol of outer scope
                 let !attrRef = EL'AttrRef addr attrDef
-                recordScopeSymbol pwip $ EL'RefSym attrRef
+                recordCtxSym eac $ EL'RefSym attrRef
 
                 el'Exit eas exit $ el'attr'def'value attrDef
             Just !attrDef -> do
               -- record as referencing symbol of outer scope
               let !attrRef = EL'AttrRef addr attrDef
-              recordScopeSymbol pwip $ EL'RefSym attrRef
+              recordCtxSym eac $ EL'RefSym attrRef
 
               el'Exit eas exit $ el'attr'def'value attrDef
           --
@@ -1225,7 +1222,7 @@ el'AnalyzeExpr
             Just !attrDef -> do
               -- record as referencing symbol of outer scope
               let !attrRef = EL'AttrRef addr attrDef
-              recordScopeSymbol pwip $ EL'RefSym attrRef
+              recordCtxSym eac $ EL'RefSym attrRef
 
               el'Exit eas exit $ el'attr'def'value attrDef
           --
@@ -1240,8 +1237,6 @@ el'AnalyzeExpr
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
-      !swip = el'ctx'scope eac
-      !pwip = el'ProcWIP swip
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 --
 
@@ -1411,17 +1406,17 @@ el'AnalyzeExpr
                   if "=" == opSym || ":=" == opSym
                     then do
                       -- record as definition symbol of current scope
-                      recordScopeSymbol pwip $ EL'DefSym attrDef
+                      recordCtxSym eac $ EL'DefSym attrDef
                       el'Exit easDone exit rhVal
                     else case maybePrevDef of
                       Just !prevDef -> do
                         -- record as reference symbol of current scope
                         let !attrRef = EL'AttrRef addr prevDef
-                        recordScopeSymbol pwip $ EL'RefSym attrRef
+                        recordCtxSym eac $ EL'RefSym attrRef
                         returnAsExpr easDone
                       Nothing -> do
                         -- record as definition symbol of current scope
-                        recordScopeSymbol pwip $ EL'DefSym attrDef
+                        recordCtxSym eac $ EL'DefSym attrDef
                         returnAsExpr easDone
             ExprSrc (AttrExpr (IndirectRef !tgtExpr !addr)) _expr'span ->
               el'RunTx easDone $
@@ -2217,7 +2212,7 @@ el'AnalyzeExpr
                                 (EL'External msImportee importeeDef)
                                 maoAnnotation
                                 Nothing
-                         in recordScopeSymbol pwip $ EL'DefSym impDef
+                         in recordCtxSym eac $ EL'DefSym impDef
                   -- record as a dependency
                   modifyTVar' (el'modu'dependencies'wip resolvImporter) $
                     Map.insert msImportee True
@@ -2429,7 +2424,7 @@ el'AnalyzeExpr
                                         srcVal
                                         artAnno
                                         Nothing
-                                recordScopeSymbol pwip $ EL'DefSym attrDef
+                                recordCtxSym eac $ EL'DefSym attrDef
                                 -- register as local attribute
                                 iopdInsert localKey attrDef localTgt
                                 -- export it if specified so
@@ -2467,7 +2462,6 @@ el'AnalyzeExpr
     !clsAnnos <- iopdEmpty
     !branchRegions <- newTVar []
     !clsScopes <- newTVar []
-    !clsSyms <- newTVar TreeMap.empty
     !clsRegions <- newTVar []
     let !bwip =
           EL'BranchWIP
@@ -2482,7 +2476,6 @@ el'AnalyzeExpr
             clsExts
             clsExps
             clsScopes
-            clsSyms
             clsRegions
         !eacCls =
           EL'Context
@@ -2500,6 +2493,7 @@ el'AnalyzeExpr
               el'ctx'pure = False,
               el'ctx'exporting = False,
               el'ctx'eff'defining = False,
+              el'ctx'symbols = el'ctx'symbols eac,
               el'ctx'diags = el'ctx'diags eac
             }
         !easCls = eas {el'context = eacCls}
@@ -2587,7 +2581,6 @@ el'AnalyzeExpr
                             cls'name'span
                             V.empty
                             V.empty
-                            V.empty
                         )
                     )
                 )
@@ -2622,7 +2615,6 @@ el'AnalyzeExpr
         !regions <-
           (regions'wip ++)
             <$> readTVar (el'scope'regions'wip pwipDone)
-        !scope'symbols <- readTVar clsSyms
 
         !cls'exts <- readTVar clsExts
         !cls'exps <- iopdSnapshot clsExps
@@ -2633,9 +2625,7 @@ el'AnalyzeExpr
               EL'Scope
                 { el'scope'span = body'span,
                   el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                  el'scope'regions = V.fromList $! reverse regions,
-                  el'scope'symbols =
-                    V.fromList $ snd <$> TreeMap.toAscList scope'symbols
+                  el'scope'regions = V.fromList $! reverse regions
                 }
         -- record as an inner scope of outer scope
         modifyTVar' (el'scope'inner'scopes'wip outerProc) (cls'scope :)
@@ -2670,7 +2660,7 @@ el'AnalyzeExpr
                     clsAnno
                     Nothing
             -- record as definition symbol of outer scope
-            recordScopeSymbol outerProc $ EL'DefSym clsDef
+            recordCtxSym eac $ EL'DefSym clsDef
             --
 
             -- record as artifact of outer scope
@@ -2756,7 +2746,6 @@ el'AnalyzeExpr
     !nsAnnos <- iopdEmpty
     !branchRegions <- newTVar []
     !nsScopes <- newTVar []
-    !nsSyms <- newTVar TreeMap.empty
     !nsRegions <- newTVar []
     let !bwip =
           EL'BranchWIP
@@ -2771,7 +2760,6 @@ el'AnalyzeExpr
             nsExts
             nsExps
             nsScopes
-            nsSyms
             nsRegions
         !eacNs =
           EL'Context
@@ -2781,6 +2769,7 @@ el'AnalyzeExpr
               el'ctx'pure = False,
               el'ctx'exporting = False,
               el'ctx'eff'defining = False,
+              el'ctx'symbols = el'ctx'symbols eac,
               el'ctx'diags = el'ctx'diags eac
             }
         !easNs = eas {el'context = eacNs}
@@ -2883,14 +2872,11 @@ el'AnalyzeExpr
           !regions <-
             (regions'wip ++)
               <$> readTVar (el'scope'regions'wip pwipDone)
-          !scope'symbols <- readTVar nsSyms
           let !ns'scope =
                 EL'Scope
                   { el'scope'span = body'span,
                     el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                    el'scope'regions = V.fromList $! reverse regions,
-                    el'scope'symbols =
-                      V.fromList $ snd <$> TreeMap.toAscList scope'symbols
+                    el'scope'regions = V.fromList $! reverse regions
                   }
           -- record as an inner scope of outer scope
           modifyTVar' (el'scope'inner'scopes'wip outerProc) (ns'scope :)
@@ -2920,7 +2906,7 @@ el'AnalyzeExpr
                       nsAnno
                       Nothing
               -- record as definition symbol of outer scope
-              recordScopeSymbol outerProc $ EL'DefSym nsDef
+              recordCtxSym eac $ EL'DefSym nsDef
               --
 
               -- record as artifact of outer scope
@@ -2958,7 +2944,6 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
     !blkAnnos <- iopdEmpty
     !branchRegions <- newTVar []
     !blkScopes <- newTVar []
-    !blkSyms <- newTVar TreeMap.empty
     !blkRegions <- newTVar []
     let !bwip =
           outerBranch
@@ -2971,7 +2956,6 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
           outerProc -- inherit exts/exps from outer scope
             { el'scope'branch'wip = bwip,
               el'scope'inner'scopes'wip = blkScopes,
-              el'scope'symbols'wip = blkSyms,
               el'scope'regions'wip = blkRegions
             }
         !eacBlk =
@@ -2999,14 +2983,11 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
         !regions <-
           (regions'wip ++)
             <$> readTVar (el'scope'regions'wip pwipDone)
-        !scope'symbols <- readTVar blkSyms
         let !blk'scope =
               EL'Scope
                 { el'scope'span = blk'span,
                   el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                  el'scope'regions = V.fromList $! reverse regions,
-                  el'scope'symbols =
-                    V.fromList $ snd <$> TreeMap.toAscList scope'symbols
+                  el'scope'regions = V.fromList $! reverse regions
                 }
         --
 
@@ -3241,7 +3222,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
             Nothing
 
     -- record as definition symbol of current scope
-    recordScopeSymbol pwip $ EL'DefSym symDef
+    recordCtxSym eac $ EL'DefSym symDef
 
     -- record as artifact of current scope
     unless (el'ctx'pure eac) $ do
@@ -3294,7 +3275,6 @@ el'DefineMethod
     !mthAnnos <- iopdEmpty
     !branchRegions <- newTVar []
     !mthScopes <- newTVar []
-    !mthSyms <- newTVar TreeMap.empty
     !mthRegions <- newTVar []
     let !bwip =
           outerBranch
@@ -3310,14 +3290,12 @@ el'DefineMethod
                 el'scope'exts'wip = el'inst'exts'wip cwip,
                 el'scope'exps'wip = el'inst'exps'wip cwip,
                 el'scope'inner'scopes'wip = mthScopes,
-                el'scope'symbols'wip = mthSyms,
                 el'scope'regions'wip = mthRegions
               }
           _ ->
             outerProc -- inherit exts/exps from outer scope
               { el'scope'branch'wip = bwip,
                 el'scope'inner'scopes'wip = mthScopes,
-                el'scope'symbols'wip = mthSyms,
                 el'scope'regions'wip = mthRegions
               }
         !eacMth =
@@ -3327,6 +3305,7 @@ el'DefineMethod
               el'ctx'pure = False,
               el'ctx'exporting = False,
               el'ctx'eff'defining = False,
+              el'ctx'symbols = el'ctx'symbols eac,
               el'ctx'diags = el'ctx'diags eac
             }
         !easMth = eas {el'context = eacMth}
@@ -3355,7 +3334,6 @@ el'DefineMethod
         !regions <-
           (regions'wip ++)
             <$> readTVar (el'scope'regions'wip pwipDone)
-        !scope'symbols <- readTVar mthSyms
 
         -- update annotations for arguments from body
         forM_ argArts $ \(!argName, !argDef) ->
@@ -3368,9 +3346,7 @@ el'DefineMethod
               EL'Scope
                 { el'scope'span = body'span,
                   el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                  el'scope'regions = V.fromList $! reverse regions,
-                  el'scope'symbols =
-                    V.fromList $ snd <$> TreeMap.toAscList scope'symbols
+                  el'scope'regions = V.fromList $! reverse regions
                 }
         -- record as an inner scope of outer scope
         modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
@@ -3396,7 +3372,7 @@ el'DefineMethod
                     mthAnno
                     Nothing
             -- record as definition symbol of outer scope
-            recordScopeSymbol outerProc $ EL'DefSym mthDef
+            recordCtxSym eac $ EL'DefSym mthDef
             --
 
             -- record as artifact of outer scope
@@ -3553,7 +3529,6 @@ el'DefineArrowProc
         !mthAnnos <- iopdEmpty
         !mthScopes <- newTVar []
         !mthRegions <- newTVar []
-        !mthSyms <- newTVar TreeMap.empty
         let !bwip =
               outerBranch
                 { el'branch'attrs'wip = mthAttrs,
@@ -3567,14 +3542,12 @@ el'DefineArrowProc
                     el'scope'exts'wip = el'inst'exts'wip cwip,
                     el'scope'exps'wip = el'inst'exps'wip cwip,
                     el'scope'inner'scopes'wip = mthScopes,
-                    el'scope'symbols'wip = mthSyms,
                     el'scope'regions'wip = mthRegions
                   }
               _ ->
                 outerProc -- inherit exts/exps from outer scope
                   { el'scope'branch'wip = bwip,
                     el'scope'inner'scopes'wip = mthScopes,
-                    el'scope'symbols'wip = mthSyms,
                     el'scope'regions'wip = mthRegions
                   }
             !eacMth =
@@ -3584,6 +3557,7 @@ el'DefineArrowProc
                   el'ctx'pure = False,
                   el'ctx'exporting = False,
                   el'ctx'eff'defining = False,
+                  el'ctx'symbols = el'ctx'symbols eac,
                   el'ctx'diags = el'ctx'diags eac
                 }
             !easMth = eas {el'context = eacMth}
@@ -3612,7 +3586,6 @@ el'DefineArrowProc
             !regions <-
               (regions'wip ++)
                 <$> readTVar (el'scope'regions'wip pwipDone)
-            !scope'symbols <- readTVar mthSyms
 
             -- update annotations for arguments from body
             forM_ argArts $ \(!argName, !argDef) ->
@@ -3625,9 +3598,7 @@ el'DefineArrowProc
                   EL'Scope
                     { el'scope'span = body'span,
                       el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                      el'scope'regions = V.fromList $! reverse regions,
-                      el'scope'symbols =
-                        V.fromList $ snd <$> TreeMap.toAscList scope'symbols
+                      el'scope'regions = V.fromList $! reverse regions
                     }
                 -- TODO for sake of parameter hints in IDE
                 -- - elide 1st `callerScope` for interpreter and 3-arg operator

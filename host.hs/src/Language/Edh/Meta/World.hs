@@ -187,7 +187,7 @@ createMetaWorldClass !msClass !clsOuterScope =
         withThisHostObj ets $ \ !elw ->
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
-              case locateSymbolInScope line char $ el'modu'scope resolved of
+              case locateSymbolInModule line char resolved of
                 Nothing -> exitEdh ets exit $ jsonArray []
                 Just (EL'RefSym !ref) -> exitEdh ets exit $ toLSP (ms, ref)
                 Just (EL'DefSym !def) -> exitEdh ets exit $ toLSP (ms, def)
