@@ -7,4 +7,11 @@ x += 2
 
 x *= 5
 
-y = f( x, i )
+method f() {
+  y = g( x )
+  return y - 3
+}
+
+method g( x ) {
+  return x + i
+}
