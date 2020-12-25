@@ -929,7 +929,7 @@ el'AnalyzeStmt
                 attrVal
                 attrAnno
                 prevDef
-        -- record as definition symbol of current scope
+        -- record as definition symbol
         recordCtxSym eac $ EL'DefSym attrDef
         if el'ctx'eff'defining eac
           then do
@@ -1060,6 +1060,17 @@ el'AnalyzeStmt _stmt !exit !eas = el'Exit eas exit $ EL'Const nil
 
 -- * expression analysis
 
+-- | literal to analysis time value
+el'LiteralValue :: Literal -> STM EL'Value
+el'LiteralValue = \case
+  DecLiteral !v -> return $ EL'Const (EdhDecimal v)
+  StringLiteral !v -> return $ EL'Const (EdhString v)
+  BoolLiteral !v -> return $ EL'Const (EdhBool v)
+  NilLiteral -> return $ EL'Const nil
+  TypeLiteral !v -> return $ EL'Const (EdhType v)
+  SinkCtor -> EL'Const . EdhSink <$> newEventSink
+  ValueLiteral !v -> return $ EL'Const v
+
 -- | analyze a sequence of expressions in pure context
 el'AnalyzeExprs :: [ExprSrc] -> EL'Analysis [EL'Value]
 -- note eas should be passed alone the sequence of expressions, for regions to
@@ -1083,17 +1094,6 @@ el'AnalyzeExprs !exprs !exit !eas = el'RunTx easPure $ go exprs []
         $ result : vals
     go (expr : rest) !vals = el'AnalyzeExpr Nothing expr $ \ !r ->
       go rest (r : vals)
-
--- | literal to analysis time value
-el'LiteralValue :: Literal -> STM EL'Value
-el'LiteralValue = \case
-  DecLiteral !v -> return $ EL'Const (EdhDecimal v)
-  StringLiteral !v -> return $ EL'Const (EdhString v)
-  BoolLiteral !v -> return $ EL'Const (EdhBool v)
-  NilLiteral -> return $ EL'Const nil
-  TypeLiteral !v -> return $ EL'Const (EdhType v)
-  SinkCtor -> EL'Const . EdhSink <$> newEventSink
-  ValueLiteral !v -> return $ EL'Const v
 
 -- | analyze an expression in context
 el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
@@ -1289,7 +1289,7 @@ el'AnalyzeExpr
     "->" -> doBranch
     --
 
-    -- method/generator arrow procedure
+    -- vanilla/generator arrow procedure
     "=>" ->
       el'RunTx eas $
         el'DefineArrowProc
@@ -1387,51 +1387,51 @@ el'AnalyzeExpr
                           maybePrevDef
 
                   -- record as artifact of current scope
-                  unless (el'ctx'pure eac) $ do
-                    if el'ctx'eff'defining eac
-                      then do
-                        let !effs = el'branch'effs'wip bwip
-                        case rhVal of
-                          EL'Const EdhNil -> iopdDelete attrKey effs
-                          _ -> iopdInsert attrKey attrDef effs
-                      else do
-                        let !attrs = el'branch'attrs'wip bwip
-                        if el'IsNil rhVal && "=" == opSym
-                          then do
-                            iopdDelete attrKey $ el'scope'attrs'wip pwip
-                            iopdDelete attrKey attrs
-                            iopdSnapshot attrs
-                              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-                                . EL'RegionWIP (src'end expr'span)
-                          else do
-                            iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
-                            iopdInsert attrKey attrDef attrs
-                            case maybePrevDef of
-                              -- assignment created a new attr, record a region
-                              -- after this assignment expr for current scope
-                              Nothing ->
-                                iopdSnapshot attrs
-                                  >>= modifyTVar' (el'branch'regions'wip bwip)
-                                    . (:)
-                                    . EL'RegionWIP (src'end expr'span)
-                              _ -> pure ()
-                    when (el'ctx'exporting eac) $
-                      iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
+                  -- note the assignment defines attr regardless of pure ctx
+                  if el'ctx'eff'defining eac
+                    then do
+                      let !effs = el'branch'effs'wip bwip
+                      case rhVal of
+                        EL'Const EdhNil -> iopdDelete attrKey effs
+                        _ -> iopdInsert attrKey attrDef effs
+                    else do
+                      let !attrs = el'branch'attrs'wip bwip
+                      if el'IsNil rhVal && "=" == opSym
+                        then do
+                          iopdDelete attrKey $ el'scope'attrs'wip pwip
+                          iopdDelete attrKey attrs
+                          iopdSnapshot attrs
+                            >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                              . EL'RegionWIP (src'end expr'span)
+                        else do
+                          iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
+                          iopdInsert attrKey attrDef attrs
+                          case maybePrevDef of
+                            -- assignment created a new attr, record a region
+                            -- after this assignment expr for current scope
+                            Nothing ->
+                              iopdSnapshot attrs
+                                >>= modifyTVar' (el'branch'regions'wip bwip)
+                                  . (:)
+                                  . EL'RegionWIP (src'end expr'span)
+                            _ -> pure ()
+                  when (el'ctx'exporting eac) $
+                    iopdInsert attrKey attrDef $ el'scope'exps'wip pwip
                   --
 
                   if "=" == opSym || ":=" == opSym
                     then do
-                      -- record as definition symbol of current scope
+                      -- record as definition symbol
                       recordCtxSym eac $ EL'DefSym attrDef
                       el'Exit easDone exit rhVal
                     else case maybePrevDef of
                       Just !prevDef -> do
-                        -- record as reference symbol of current scope
+                        -- record as reference symbol
                         let !attrRef = EL'AttrRef addr prevDef
                         recordCtxSym eac $ EL'RefSym attrRef
                         returnAsExpr easDone
                       Nothing -> do
-                        -- record as definition symbol of current scope
+                        -- record as definition symbol
                         recordCtxSym eac $ EL'DefSym attrDef
                         returnAsExpr easDone
             ExprSrc (AttrExpr (IndirectRef !tgtExpr !addr)) _expr'span ->
@@ -2429,7 +2429,7 @@ el'AnalyzeExpr
                               Just !srcVal -> do
                                 !artAnno <-
                                   newTVar =<< el'ResolveAnnotation swip localKey
-                                -- record as definition symbol of current scope
+                                -- record as definition symbol
                                 let !attrDef =
                                       EL'AttrDef
                                         localKey
@@ -3237,7 +3237,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
             symAnno
             Nothing
 
-    -- record as definition symbol of current scope
+    -- record as definition symbol
     recordCtxSym eac $ EL'DefSym symDef
 
     -- record as artifact of current scope

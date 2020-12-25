@@ -422,7 +422,6 @@ el'MetaClass = mc
         odEmpty
         []
         odEmpty
-{-# NOINLINE el'MetaClass #-}
 
 el'NamespaceClass :: EL'Class
 el'NamespaceClass =
@@ -437,7 +436,6 @@ el'NamespaceClass =
     odEmpty
     []
     odEmpty
-{-# NOINLINE el'NamespaceClass #-}
 
 el'ModuleClass :: EL'Class
 el'ModuleClass =
@@ -452,7 +450,6 @@ el'ModuleClass =
     odEmpty
     []
     odEmpty
-{-# NOINLINE el'ModuleClass #-}
 
 el'ScopeClass :: EL'Class
 el'ScopeClass =
@@ -467,7 +464,6 @@ el'ScopeClass =
     odEmpty
     []
     odEmpty
-{-# NOINLINE el'ScopeClass #-}
 
 -- | a scope is backed by an entity with arbitrary attributes, as Edh allows
 -- very straight forward sharing of lexical scopes to goroutines spawned from
