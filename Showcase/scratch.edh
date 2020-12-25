@@ -7,11 +7,11 @@ x += 2
 
 x *= 5
 
-method f() {
+f = () => {
   y = g( x )
   return y - 3
 }
 
-method g( x ) {
+g = ( x ) => {
   return x + i
 }

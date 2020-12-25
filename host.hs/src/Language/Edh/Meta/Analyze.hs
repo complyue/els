@@ -3323,7 +3323,7 @@ el'DefineMethod
           when (el'ctx'exporting eac) $
             iopdInsert mthName mthDef $ el'scope'exps'wip outerProc
 
-        -- return the procedure object value
+        -- return the procedure value
         el'Exit eas exit mthVal
     where
       !eac = el'context eas
@@ -3487,14 +3487,23 @@ el'DefineArrowProc
     argsRcvrCnvrt argPkr $ \case
       Left !argErr -> do
         el'LogDiag diags el'Error args'span "bad-arrow-args" argErr
-        goDef (PackReceiver [])
-      Right !argsRcvr -> goDef argsRcvr
+        withArgsRcvr (PackReceiver [])
+      Right !argsRcvr -> withArgsRcvr argsRcvr
     where
       !eac = el'context eas
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
       !outerBranch = el'scope'branch'wip outerProc
       diags = el'ctx'diags eac
+
+      withArgsRcvr :: ArgsReceiver -> STM ()
+      withArgsRcvr !argsRcvr = do
+        -- postpone analysis in calling this method to happen after current
+        -- scope finished analysis
+        el'PostAnalysis eas (analyzeMthCall argsRcvr)
+
+        -- return the procedure value
+        el'Exit eas exit $ EL'ProcVal $ EL'Proc mthName argsRcvr
 
       -- define artifacts from arguments for an arrow procedure
       defArgArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
@@ -3543,8 +3552,8 @@ el'DefineArrowProc
                         )
                         rest
 
-      goDef :: ArgsReceiver -> STM ()
-      goDef !argsRcvr = do
+      analyzeMthCall :: ArgsReceiver -> STM () -> STM ()
+      analyzeMthCall !argsRcvr !doneMthCall = do
         !mthAttrs <- iopdEmpty
         !mthEffs <- iopdEmpty
         !mthAnnos <- iopdEmpty
@@ -3621,17 +3630,12 @@ el'DefineArrowProc
                       el'scope'inner'scopes = V.fromList $! reverse innerScopes,
                       el'scope'regions = V.fromList $! reverse regions
                     }
-                -- TODO for sake of parameter hints in IDE
-                -- - elide 1st `callerScope` for interpreter and 3-arg operator
-                -- - supplement `outlet` for producer if omitted
-                !mth = EL'Proc mthName argsRcvr
-                !mthVal = EL'ProcVal mth
             --
 
             -- record as an inner scope of outer scope
             modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
 
-            -- return the procedure object value
-            el'Exit eas exit mthVal
+            -- done analyzing this method call
+            doneMthCall
 
 --
