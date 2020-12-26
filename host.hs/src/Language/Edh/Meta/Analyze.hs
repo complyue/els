@@ -2807,110 +2807,48 @@ el'AnalyzeExpr
          )
   !exit
   !eas = do
-    !nsExts <- newTVar []
-    !nsExps <- iopdEmpty
-    !branchAttrs <- iopdEmpty
-    !nsAttrs <- iopdEmpty
-    !nsEffs <- iopdEmpty
-    !nsAnnos <- iopdEmpty
-    !branchRegions <- newTVar []
-    !nsScopes <- newTVar []
-    !nsRegions <- newTVar []
-    let !bwip =
-          EL'BranchWIP
-            branchAttrs
-            nsEffs
-            nsAnnos
-            branchRegions
-        !pwip =
-          EL'ProcWIP
-            bwip
-            nsAttrs
-            nsExts
-            nsExps
-            nsScopes
-            nsRegions
-        !eacNs =
-          EL'Context
-            { el'ctx'scope =
-                EL'InitObject (EL'ObjectWIP nsAttrs nsExts nsExps) pwip,
-              el'ctx'outers = outerScope : el'ctx'outers eac,
-              el'ctx'pure = False,
-              el'ctx'exporting = False,
-              el'ctx'eff'defining = False,
-              el'ctx'symbols = el'ctx'symbols eac,
-              el'ctx'diags = el'ctx'diags eac
-            }
-        !easNs = eas {el'context = eacNs}
-
-        -- define artifacts from arguments for a namespace
-        defNsArgs ::
-          [ArgSender] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
-        defNsArgs !aps !nsaExit = go [] aps
-          where
-            go :: [(AttrKey, EL'AttrDef)] -> [ArgSender] -> STM ()
-            go !argArts [] = nsaExit $ reverse argArts
-            go !argArts (argSndr : rest) = case argSndr of
-              SendKwArg argAddr@(AttrAddrSrc _ !arg'name'span) !argExpr ->
-                el'ResolveAttrAddr eas argAddr >>= \case
-                  Nothing -> go argArts rest
-                  Just !argKey -> el'RunTx eas $
-                    el'AnalyzeExpr docCmt argExpr $ \ !argVal _eas -> do
-                      !argAnno <- newTVar Nothing
-                      go
-                        ( ( argKey,
-                            EL'AttrDef
-                              argKey
-                              Nothing
-                              "<namespace-arg>"
-                              arg'name'span
-                              xsrc
-                              argVal
-                              argAnno
-                              Nothing
-                          ) :
-                          argArts
-                        )
-                        rest
-              UnpackKwArgs _kwExpr@(ExprSrc _ !argx'span) -> do
-                el'LogDiag
-                  diags
-                  el'Warning
-                  argx'span
-                  "ns-unpack-kwargs"
-                  "not analyzed yet: unpacking kwargs to a namespace"
-                go argArts rest
-              SendPosArg (ExprSrc _ !argx'span) -> do
-                el'LogDiag
-                  diags
-                  el'Error
-                  argx'span
-                  "invalid-ns-arg"
-                  "sending positional arg to a namespace"
-                go argArts rest
-              UnpackPosArgs (ExprSrc _ !argx'span) -> do
-                el'LogDiag
-                  diags
-                  el'Error
-                  argx'span
-                  "invalid-ns-arg"
-                  "unpacking positional args to a namespace"
-                go argArts rest
-              UnpackPkArgs (ExprSrc _ !argx'span) -> do
-                el'LogDiag
-                  diags
-                  el'Error
-                  argx'span
-                  "invalid-ns-arg"
-                  "unpacking apk to a namespace"
-                go argArts rest
-
     defNsArgs argsPkr $ \ !argArts -> do
-      iopdUpdate argArts nsAttrs
+      !nsExts <- newTVar []
+      !nsExps <- iopdEmpty
+      !branchAttrs <- iopdFromList argArts
+      !nsAttrs <- iopdFromList argArts
+      !nsEffs <- iopdEmpty
+      !nsAnnos <- iopdEmpty
+      !branchRegions <- newTVar []
+      !nsScopes <- newTVar []
+      !nsRegions <- newTVar []
+      let !bwip =
+            EL'BranchWIP
+              branchAttrs
+              nsEffs
+              nsAnnos
+              branchRegions
+          !pwip =
+            EL'ProcWIP
+              bwip
+              nsAttrs
+              nsExts
+              nsExps
+              nsScopes
+              nsRegions
+          !eacNs =
+            EL'Context
+              { el'ctx'scope =
+                  EL'InitObject (EL'ObjectWIP nsAttrs nsExts nsExps) pwip,
+                el'ctx'outers = outerScope : el'ctx'outers eac,
+                el'ctx'pure = False,
+                el'ctx'exporting = False,
+                el'ctx'eff'defining = False,
+                el'ctx'symbols = el'ctx'symbols eac,
+                el'ctx'diags = el'ctx'diags eac
+              }
+          !easNs = eas {el'context = eacNs}
+
       -- record a region starting from beginning of the body
       iopdSnapshot nsAttrs
         >>= modifyTVar' branchRegions . (:)
           . EL'RegionWIP (src'start body'span)
+
       el'RunTx easNs $
         el'AnalyzeStmts [ns'body] $ \_ !easDone -> do
           let !eacDone = el'context easDone
@@ -3003,6 +2941,68 @@ el'AnalyzeExpr
       !outerProc = el'ProcWIP outerScope
       !outerBranch = el'scope'branch'wip outerProc
       diags = el'ctx'diags eac
+
+      -- define artifacts from arguments for a namespace
+      defNsArgs ::
+        [ArgSender] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
+      defNsArgs !aps !nsaExit = go [] aps
+        where
+          go :: [(AttrKey, EL'AttrDef)] -> [ArgSender] -> STM ()
+          go !argArts [] = nsaExit $ reverse argArts
+          go !argArts (argSndr : rest) = case argSndr of
+            SendKwArg argAddr@(AttrAddrSrc _ !arg'name'span) !argExpr ->
+              el'ResolveAttrAddr eas argAddr >>= \case
+                Nothing -> go argArts rest
+                Just !argKey -> el'RunTx eas $
+                  el'AnalyzeExpr docCmt argExpr $ \ !argVal _eas -> do
+                    !argAnno <- newTVar Nothing
+                    go
+                      ( ( argKey,
+                          EL'AttrDef
+                            argKey
+                            Nothing
+                            "<namespace-arg>"
+                            arg'name'span
+                            xsrc
+                            argVal
+                            argAnno
+                            Nothing
+                        ) :
+                        argArts
+                      )
+                      rest
+            UnpackKwArgs _kwExpr@(ExprSrc _ !argx'span) -> do
+              el'LogDiag
+                diags
+                el'Warning
+                argx'span
+                "ns-unpack-kwargs"
+                "not analyzed yet: unpacking kwargs to a namespace"
+              go argArts rest
+            SendPosArg (ExprSrc _ !argx'span) -> do
+              el'LogDiag
+                diags
+                el'Error
+                argx'span
+                "invalid-ns-arg"
+                "sending positional arg to a namespace"
+              go argArts rest
+            UnpackPosArgs (ExprSrc _ !argx'span) -> do
+              el'LogDiag
+                diags
+                el'Error
+                argx'span
+                "invalid-ns-arg"
+                "unpacking positional args to a namespace"
+              go argArts rest
+            UnpackPkArgs (ExprSrc _ !argx'span) -> do
+              el'LogDiag
+                diags
+                el'Error
+                argx'span
+                "invalid-ns-arg"
+                "unpacking apk to a namespace"
+              go argArts rest
 --
 
 -- scoped block

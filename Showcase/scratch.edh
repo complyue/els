@@ -16,3 +16,19 @@ f = () => {
 g = ( x ) => {
   return x + i
 }
+
+data D( x, y ) {
+  method z() {
+    this.x + this.y
+  }
+}
+
+d = D()
+
+d.x * d.y - d.z
+
+namespace ns ( x=3, z=5 ) {
+  y = x * z
+}
+
+ns.y + ns.x
