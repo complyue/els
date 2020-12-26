@@ -37,14 +37,14 @@ export method initialize(
           ]
         },
 
-        'signatureHelpProvider': {
-          'triggerCharacters': [
-            '(',
-          ],
-          'retriggerCharacters': [
-            ',',
-          ],
-        },
+        # 'signatureHelpProvider': {
+        #   'triggerCharacters': [
+        #     '(',
+        #   ],
+        #   'retriggerCharacters': [
+        #     ',',
+        #   ],
+        # },
 
         # TODO impl. them
         # 'referencesProvider': true,
