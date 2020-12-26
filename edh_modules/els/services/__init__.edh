@@ -3,5 +3,6 @@ export {
   import * './lifecycle'
   import * './docsync'
   import * './defi'
+  import * './hover'
 
 }

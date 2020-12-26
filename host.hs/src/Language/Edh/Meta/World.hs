@@ -79,7 +79,8 @@ createMetaWorldClass !msClass !clsOuterScope =
                 [ ("locate", EdhMethod, wrapHostProc locateProc),
                   ("locateByFile", EdhMethod, wrapHostProc locateByFileProc),
                   ("diags", EdhMethod, wrapHostProc diagsProc),
-                  ("defi", EdhMethod, wrapHostProc defiProc)
+                  ("defi", EdhMethod, wrapHostProc defiProc),
+                  ("hover", EdhMethod, wrapHostProc hoverProc)
                 ]
           ]
             ++ [ (AttrByName nm,)
@@ -190,3 +191,21 @@ createMetaWorldClass !msClass !clsOuterScope =
               case locateSymbolRefInModule line char resolved of
                 Nothing -> exitEdh ets exit $ jsonArray []
                 Just !ref -> exitEdh ets exit $ toLSP ref
+
+    hoverProc ::
+      "modu" !: EL'ModuSlot ->
+      "line" !: Int ->
+      "char" !: Int ->
+      EdhHostProc
+    hoverProc
+      (mandatoryArg -> !ms)
+      (mandatoryArg -> !line)
+      (mandatoryArg -> !char)
+      !exit
+      !ets =
+        withThisHostObj ets $ \ !elw ->
+          runEdhTx ets $
+            asModuleResolved elw ms $ \ !resolved _ets ->
+              case el'AttrDoc <$> locateSymbolRefInModule line char resolved of
+                Nothing -> exitEdh ets exit $ jsonArray []
+                Just !doc -> exitEdh ets exit $ toLSP doc

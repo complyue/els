@@ -29,10 +29,10 @@ export method initialize(
         },
 
         'definitionProvider' : true,
+        'hoverProvider' : true,
 
         # TODO impl. them
         # 'referencesProvider' : true,
-        # 'hoverProvider' : false,
         # 'foldingRangeProvider' : false,
 
         # 'documentSymbolProvider' : false,

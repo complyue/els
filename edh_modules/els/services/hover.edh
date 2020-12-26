@@ -1,0 +1,21 @@
+
+import ( world, elsDebug, **_ ) 'els'
+
+import * './utils'
+
+
+export method @'textDocument/hover' (
+  textDocument, position, ***_
+) void {
+  # try parse & resolve then obtain hover asynchronously,
+  # to not block subsequent requests from the lsp client
+  case textDocument of { TxtDocFile( absFilePath ) } ->
+  case position of { Position( line, character ) } ->
+  { return { go {
+        modu = world.locateByFile( absFilePath )
+        hoverResult = world.hover( modu, line, character )
+        # debug and null( hoverResult ) and elsDebug.replHere()
+        perform lspRespond( hoverResult )
+  } } }
+  error( 'unexpected lsp params' )
+}

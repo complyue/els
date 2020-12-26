@@ -4,8 +4,10 @@ import ( x as x', **otherStuff ) './lib'
 
 import * './framework'
 
-
-k = 5
+{##
+ # k is so must be 6
+ #}
+k = succ( 5 )
 
 y = f( x' ) - g( k )
 

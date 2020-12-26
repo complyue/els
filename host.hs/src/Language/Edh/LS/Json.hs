@@ -1,5 +1,6 @@
 module Language.Edh.LS.Json where
 
+import qualified Data.Text as T
 import Language.Edh.EHI
 import Language.Edh.Meta.Model
 import Prelude
@@ -111,3 +112,17 @@ instance ToLSP EL'AttrRef where
               ("targetSelectionRange", toLSP $ el'attr'def'focus def)
             ] :
           attrUpLinkChain def
+
+instance ToLSP EL'AttrDoc where
+  toLSP (EL'AttrDoc (AttrAddrSrc _ !addr'span) !docs) =
+    jsonObject
+      [ ("range", toLSP addr'span),
+        ( "contents",
+          jsonObject
+            [ ("kind", EdhString "markdown"),
+              ("value", EdhString mdContents)
+            ]
+        )
+      ]
+    where
+      !mdContents = T.intercalate "\n***\n" $ T.intercalate "\n" <$> docs

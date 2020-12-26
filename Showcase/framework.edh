@@ -2,4 +2,14 @@
 
 export import ( f, **_ ) './lib'
 
+{##
+ # we are re-exporting `f` as `succ` from the demo lib here
+ #}
+export succ = f
+
+{##
+ ## h1 ..
+ ## h2 ...
+ # `g()` does xxx
+ #}
 export method g( n ) f( n ) * 3

@@ -235,7 +235,7 @@ data EL'AttrDef = EL'AttrDef
   { -- | the key of this attribute
     el'attr'def'key :: !AttrKey,
     -- | doc comment preceeding this definition
-    el'attr'doc'cmt :: !(Maybe DocComment),
+    el'attr'def'doc :: !(Maybe DocComment),
     -- | the operation created this attribute
     -- in addition to assignment operators e.g. @=@ @+=@ etc. it can be
     -- @<arrow>@, @<proc-def>@, @<import>@ and @<let>@ etc.
@@ -307,6 +307,21 @@ data EL'AttrRef = EL'AttrRef
 instance Show EL'AttrRef where
   show (EL'AttrRef (AttrAddrSrc !addr _span) !orig'modu _adef) =
     "<ref: " <> show addr <> ":" <> T.unpack (el'modu'name orig'modu) <> ">"
+
+-- | doc-comments for an attribute encountered at all definition sites
+data EL'AttrDoc = EL'AttrDoc !AttrAddrSrc ![DocComment]
+
+-- | collect all doc-comments from an attribute reference
+el'AttrDoc :: EL'AttrRef -> EL'AttrDoc
+el'AttrDoc (EL'AttrRef !addr _ms !tip) = go [] tip
+  where
+    go !docs !def = case el'attr'def'doc def of
+      Nothing -> go' docs
+      Just !doc -> go' (doc : docs)
+      where
+        go' !docs' = case el'attr'def'value def of
+          EL'External _ms !def' -> go docs' def'
+          _ -> EL'AttrDoc addr $! reverse docs'
 
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
 

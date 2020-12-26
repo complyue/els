@@ -1,4 +1,13 @@
 
+{##
+ # const `x` is defind in the demo library and exported
+ #}
 export x = 5
 
+{##
+ # method `f` works like `succ` in Haskell, e.g.
+```edh
+assert$ 3 is f(2)
+```
+ #}
 export method f( x ) x + 1
