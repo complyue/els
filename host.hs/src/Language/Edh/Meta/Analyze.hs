@@ -2155,11 +2155,37 @@ el'AnalyzeExpr _docCmt (ExprSrc (LitExpr !lit) _expr'span) !exit !eas =
 -- call making
 el'AnalyzeExpr
   _docCmt
-  xsrc@(ExprSrc (CallExpr !calleeExpr !argsSndr) _expr'span)
+  xsrc@(ExprSrc (CallExpr !calleeExpr !apkr) _expr'span)
   !exit
-  !eas = el'RunTx eas $
-    el'AnalyzeExpr Nothing calleeExpr $ \_calleeVal -> el'PackArgs argsSndr $
-      \_apk -> el'ExitTx exit $ EL'Expr xsrc
+  !eas = do
+    when
+      ( paren'start'line > callee'end'line
+          || paren'start'char > callee'end'char + 1
+      )
+      $ el'LogDiag
+        diags
+        el'Error
+        (SrcRange callee'end paren'start)
+        "unintended-call"
+        "you want to insert a semicolon here, or it is procedure call making"
+
+    el'RunTx eas $
+      el'AnalyzeExpr Nothing calleeExpr $ \_calleeVal -> el'PackArgs apkr $
+        \_apk -> el'ExitTx exit $ EL'Expr xsrc
+    where
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+      SrcRange _ callee'end@(SrcPos !callee'end'line !callee'end'char) =
+        exprSrcSpan calleeExpr
+      ArgsPacker
+        _
+        ( SrcRange
+            paren'start@( SrcPos
+                            !paren'start'line
+                            !paren'start'char
+                          )
+            _
+          ) = apkr
 --
 
 -- exporting
