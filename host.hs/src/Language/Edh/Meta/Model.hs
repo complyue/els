@@ -260,10 +260,24 @@ instance Show EL'AttrDef where
   show !adef =
     "<attr-def: " <> T.unpack (attrKeyStr $ el'attr'def'key adef) <> ">"
 
-el'UltimateValue :: EL'AttrDef -> EL'Value
-el'UltimateValue !def = case el'attr'def'value def of
-  EL'External _ms !def' -> el'UltimateValue def'
+-- | get ultimate value
+el'UltimateValue :: EL'Value -> EL'Value
+el'UltimateValue = \case
+  EL'External _msExt !defExt -> el'UltimateValue $ el'attr'def'value defExt
   !val -> val
+
+-- | get ultimate value with original module
+el'UltimateValue' :: EL'ModuSlot -> EL'Value -> (EL'ModuSlot, EL'Value)
+el'UltimateValue' !ms = \case
+  EL'External !msExt !defExt ->
+    el'UltimateValue' msExt $ el'attr'def'value defExt
+  !val -> (ms, val)
+
+-- | get ultimate original definition of an attribute
+el'UltimateDefi :: EL'ModuSlot -> EL'AttrDef -> (EL'ModuSlot, EL'AttrDef)
+el'UltimateDefi ms !def = case el'attr'def'value def of
+  EL'External !msExt !defExt -> el'UltimateDefi msExt defExt
+  _ -> (ms, def)
 
 -- | an annotation created by the (::) operator
 data EL'AttrAnno = EL'AttrAnno
@@ -280,19 +294,19 @@ maoAnnotation :: TVar (Maybe a)
 maoAnnotation = unsafePerformIO $ newTVarIO Nothing
 {-# NOINLINE maoAnnotation #-}
 
--- | an attribute reference, links to its respective definition
+-- | an attribute reference, links a local addressor to its oritinal definition
 data EL'AttrRef = EL'AttrRef
   { -- | the referencing addressor
     el'attr'ref'addr :: !AttrAddrSrc,
-    -- | the definition introduced this attribute
-    -- this field is guaranteed to be filled only after all outer scopes have
-    -- been loaded
-    el'attr'ref'def :: !EL'AttrDef
+    -- | the original module of the attribute definition
+    el'attr'ref'modu :: !EL'ModuSlot,
+    -- | the original definition of the attribute value
+    el'attr'ref'defi :: !EL'AttrDef
   }
 
 instance Show EL'AttrRef where
-  show (EL'AttrRef (AttrAddrSrc !addr _span) _adef) =
-    "<ref: " <> show addr <> ">"
+  show (EL'AttrRef (AttrAddrSrc !addr _span) !orig'modu _adef) =
+    "<ref: " <> show addr <> ":" <> T.unpack (el'modu'name orig'modu) <> ">"
 
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
 

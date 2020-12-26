@@ -25,10 +25,19 @@ data D( x, y ) {
 
 d = D()
 
-d.x * d.y - d.z
+D.z
+
+d.x * d.y - d.z()
+
+case d of { D( x= x', y= y' ) = d' } -> {
+  x' + y' - d'.z()
+}
 
 namespace ns ( x=3, z=5 ) {
   y = x * z
+  method f( n ) n * x + 1
 }
 
-ns.y + ns.x
+ns.f(
+  ns.y + ns.x
+)

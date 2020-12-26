@@ -88,11 +88,8 @@ attrUpLinkChain !def = case el'attr'def'value def of
         attrUpLinkChain fromDef
   _ -> []
 
-instance ToLSP (EL'ModuSlot, EL'AttrDef) where
-  toLSP (_originModu, !def) = jsonArray $ attrUpLinkChain def
-
-instance ToLSP (EL'ModuSlot, EL'AttrRef) where
-  toLSP (!originModu, EL'AttrRef (AttrAddrSrc _ !addr'span) !def) =
+instance ToLSP EL'AttrRef where
+  toLSP (EL'AttrRef (AttrAddrSrc _ !addr'span) !originModu !def) =
     if src'line (src'start $ el'attr'def'focus def) < 0
       then case el'attr'def'value def of -- hidden definition
         EL'External !fromModu !fromDef ->

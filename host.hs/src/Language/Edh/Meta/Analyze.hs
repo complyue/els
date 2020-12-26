@@ -1177,12 +1177,13 @@ el'AnalyzeExpr
             returnAsExpr
           Just !attrDef -> do
             -- record as referencing symbol of outer scope
-            let !attrRef = EL'AttrRef addr attrDef
+            let !attrRef = EL'AttrRef addr mwip attrDef
             recordCtxSym eac $ EL'RefSym attrRef
 
             el'Exit eas exit $ el'attr'def'value attrDef
     where
       !eac = el'context eas
+      !mwip = el'ContextModule eac
       diags = el'ctx'diags eac
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 --
@@ -1199,48 +1200,53 @@ el'AnalyzeExpr
     el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal _eas ->
       el'ResolveAttrAddr eas addr >>= \case
         Nothing -> returnAsExpr
-        Just !refKey -> case tgtVal of
+        Just !refKey -> case el'UltimateValue' mwip tgtVal of
           -- object instance attribute addressing
-          EL'ObjVal !cls -> case odLookup refKey $ el'inst'attrs cls of
-            Nothing -> case odLookup refKey $ el'class'attrs cls of
+          (!objModu, EL'ObjVal !cls) ->
+            case odLookup refKey $ el'inst'attrs cls of
+              Nothing -> case odLookup refKey $ el'class'attrs cls of
+                Nothing -> do
+                  el'LogDiag
+                    diags
+                    el'Error
+                    addr'span
+                    "no-obj-attr"
+                    "no such object attribute"
+                  returnAsExpr
+                Just !attrDef -> do
+                  -- record as referencing symbol of outer scope
+                  let (!origModu, !origDef) = el'UltimateDefi objModu attrDef
+                      !attrRef = EL'AttrRef addr origModu origDef
+                  recordCtxSym eac $ EL'RefSym attrRef
+
+                  el'Exit eas exit $ el'attr'def'value attrDef
+              Just !attrDef -> do
+                -- record as referencing symbol of outer scope
+                let (!origModu, !origDef) = el'UltimateDefi objModu attrDef
+                    !attrRef = EL'AttrRef addr origModu origDef
+                recordCtxSym eac $ EL'RefSym attrRef
+
+                el'Exit eas exit $ el'attr'def'value attrDef
+          --
+
+          -- static class attribute addressing
+          (!clsModu, EL'ClsVal !cls) ->
+            case odLookup refKey (el'class'attrs cls) of
               Nothing -> do
                 el'LogDiag
                   diags
                   el'Error
                   addr'span
-                  "no-obj-attr"
-                  "no such object attribute"
+                  "no-cls-attr"
+                  "no such class attribute"
                 returnAsExpr
               Just !attrDef -> do
                 -- record as referencing symbol of outer scope
-                let !attrRef = EL'AttrRef addr attrDef
+                let (!origModu, !origDef) = el'UltimateDefi clsModu attrDef
+                    !attrRef = EL'AttrRef addr origModu origDef
                 recordCtxSym eac $ EL'RefSym attrRef
 
                 el'Exit eas exit $ el'attr'def'value attrDef
-            Just !attrDef -> do
-              -- record as referencing symbol of outer scope
-              let !attrRef = EL'AttrRef addr attrDef
-              recordCtxSym eac $ EL'RefSym attrRef
-
-              el'Exit eas exit $ el'attr'def'value attrDef
-          --
-
-          -- class attribute addressing
-          EL'ClsVal !cls -> case odLookup refKey (el'class'attrs cls) of
-            Nothing -> do
-              el'LogDiag
-                diags
-                el'Error
-                addr'span
-                "no-cls-attr"
-                "no such class attribute"
-              returnAsExpr
-            Just !attrDef -> do
-              -- record as referencing symbol of outer scope
-              let !attrRef = EL'AttrRef addr attrDef
-              recordCtxSym eac $ EL'RefSym attrRef
-
-              el'Exit eas exit $ el'attr'def'value attrDef
           --
 
           -- EL'Const (EdhObject _obj) -> undefined -- TODO this possible ?
@@ -1252,7 +1258,9 @@ el'AnalyzeExpr
           _ -> returnAsExpr -- unrecognized value
     where
       !eac = el'context eas
+      !mwip = el'ContextModule eac
       diags = el'ctx'diags eac
+
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 --
 
@@ -1347,6 +1355,7 @@ el'AnalyzeExpr
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
+      !mwip = el'ContextModule eac
       !swip = el'ctx'scope eac
       !pwip = el'ProcWIP swip
       !bwip = el'scope'branch'wip pwip
@@ -1438,7 +1447,8 @@ el'AnalyzeExpr
                                   "attr-shadow"
                                   "shadows the attribute defined in outer scope"
                                 -- record a reference to the shadowed attr
-                                let !attrRef = EL'AttrRef addr shadowedDef
+                                let !attrRef =
+                                      EL'AttrRef addr mwip shadowedDef
                                 recordCtxSym eac $ EL'RefSym attrRef
 
                       -- record as definition symbol
@@ -1447,7 +1457,7 @@ el'AnalyzeExpr
                     else case maybePrevDef of
                       Just !prevDef -> do
                         -- record as reference symbol
-                        let !attrRef = EL'AttrRef addr prevDef
+                        let !attrRef = EL'AttrRef addr mwip prevDef
                         recordCtxSym eac $ EL'RefSym attrRef
                         returnAsExpr easDone
                       Nothing -> do
@@ -1576,7 +1586,7 @@ el'AnalyzeExpr
                                         )
                                         attrAnno
                                         Nothing
-                                go rest $ (srcKey, attrDef) : kds
+                                go rest $ (tgtKey, attrDef) : kds
                     _ -> do
                       el'LogDiag
                         diags
@@ -1730,7 +1740,7 @@ el'AnalyzeExpr
                 _
               ] -> el'RunTx eas $
                 el'AnalyzeExpr Nothing clsExpr $
-                  \ !clsResult _eas -> case clsResult of
+                  \ !clsResult _eas -> case el'UltimateValue clsResult of
                     EL'ClsVal !clsVal ->
                       defDfAttrs (el'class'attrs clsVal) apkr analyzeBranch
                     _ -> defDfAttrs odEmpty apkr analyzeBranch
@@ -1758,7 +1768,7 @@ el'AnalyzeExpr
                 _
               ] -> el'RunTx eas $
                 el'AnalyzeExpr Nothing clsExpr $
-                  \ !clsResult _eas -> case clsResult of
+                  \ !clsResult _eas -> case el'UltimateValue clsResult of
                     EL'ClsVal !clsVal ->
                       defDfAttrs (el'class'attrs clsVal) apkr $ \ !dfs ->
                         el'ResolveAttrAddr eas instAddr >>= \case
@@ -1821,7 +1831,7 @@ el'AnalyzeExpr
                     el'AnalyzeExpr
                       Nothing
                       (ExprSrc (AttrExpr clsRef) (attrRefSpan clsRef))
-                      $ \ !clsResult _eas -> case clsResult of
+                      $ \ !clsResult _eas -> case el'UltimateValue clsResult of
                         EL'ClsVal !clsVal -> do
                           !anno <- newTVar Nothing
                           let !attrDef =
@@ -2190,8 +2200,12 @@ el'AnalyzeExpr
         "you want to insert a semicolon here, or it is procedure call making"
 
     el'RunTx eas $
-      el'AnalyzeExpr Nothing calleeExpr $ \_calleeVal -> el'PackArgs apkr $
-        \_apk -> el'ExitTx exit $ EL'Expr xsrc
+      el'AnalyzeExpr Nothing calleeExpr $ \ !calleeVal -> el'PackArgs apkr $
+        \_apk -> case el'UltimateValue calleeVal of
+          EL'ClsVal !cls ->
+            el'ExitTx exit $ EL'ObjVal cls
+          _ ->
+            el'ExitTx exit $ EL'Expr xsrc
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
@@ -2233,7 +2247,7 @@ el'AnalyzeExpr
       Just _intoExpr ->
         returnAsExpr -- TODO handle importing into some object
       Nothing -> case specExpr of
-        LitExpr (StringLiteral !litSpec) -> case el'ContextModule eac of
+        LitExpr (StringLiteral !litSpec) -> case el'ContextModule' eac of
           Nothing -> do
             el'LogDiag
               diags
@@ -2276,6 +2290,7 @@ el'AnalyzeExpr
                       !impRef =
                         EL'AttrRef
                           (AttrAddrSrc (QuaintAttr litSpec) spec'span)
+                          msImportee
                           impDef
                   recordCtxSym eac $ EL'RefSym impRef
 
@@ -2497,7 +2512,8 @@ el'AnalyzeExpr
                                   recordCtxSym eac $ EL'DefSym impDef
                                   -- record as referencing symbol
                                   recordCtxSym eac $
-                                    EL'RefSym $ EL'AttrRef localAddr impDef
+                                    EL'RefSym $
+                                      EL'AttrRef localAddr srcModu impDef
 
                                   -- register as local attribute
                                   iopdInsert localKey impDef localTgt
@@ -3614,6 +3630,7 @@ defArgArts ::
 defArgArts !eas !opSym !srcExpr !ars = go [] ars
   where
     !eac = el'context eas
+    !mwip = el'ContextModule eac
     diags = el'ctx'diags eac
 
     go ::
@@ -3649,7 +3666,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                       "arg-shadow"
                       "shadows the attribute defined in outer scope"
                     -- record a reference to the shadowed attr
-                    let !attrRef = EL'AttrRef argAddr shadowedDef
+                    let !attrRef = EL'AttrRef argAddr mwip shadowedDef
                     recordCtxSym eac $ EL'RefSym attrRef
 
               newTVar Nothing >>= \ !anno ->

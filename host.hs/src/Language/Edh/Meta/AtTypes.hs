@@ -84,8 +84,13 @@ el'SwitchBranch !bwip = \case
   EL'InitModule !ms !resolving !p ->
     EL'InitModule ms resolving p {el'scope'branch'wip = bwip}
 
-el'ContextModule :: EL'Context -> Maybe (EL'ModuSlot, EL'ResolvingModu)
-el'ContextModule !eac = go $ el'ctx'scope eac : el'ctx'outers eac
+el'ContextModule :: EL'Context -> EL'ModuSlot
+el'ContextModule !eac = case el'ContextModule' eac of
+  Nothing -> error "missing context module"
+  Just (!ms, _) -> ms
+
+el'ContextModule' :: EL'Context -> Maybe (EL'ModuSlot, EL'ResolvingModu)
+el'ContextModule' !eac = go $ el'ctx'scope eac : el'ctx'outers eac
   where
     go [] = Nothing
     go (scope : outers) = case scope of
@@ -213,7 +218,7 @@ el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
         "bad-attr-ref"
         "no such attribute defined"
       return Nothing
-    Just !def -> case el'UltimateValue def of
+    Just !def -> case el'UltimateValue $ el'attr'def'value def of
       EL'Const (EdhSymbol !symKey) -> return $ Just $ AttrBySym symKey
       EL'Const (EdhString !nameKey) -> return $ Just $ AttrByName nameKey
       _ -> do

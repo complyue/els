@@ -189,4 +189,4 @@ createMetaWorldClass !msClass !clsOuterScope =
             asModuleResolved elw ms $ \ !resolved _ets ->
               case locateSymbolRefInModule line char resolved of
                 Nothing -> exitEdh ets exit $ jsonArray []
-                Just !ref -> exitEdh ets exit $ toLSP (ms, ref)
+                Just !ref -> exitEdh ets exit $ toLSP ref
