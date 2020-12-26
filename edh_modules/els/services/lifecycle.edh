@@ -33,7 +33,7 @@ export method initialize(
 
         'completionProvider': {
           'triggerCharacters': [
-            ' ', '.',
+            '.',
           ]
         },
 
@@ -53,13 +53,15 @@ export method initialize(
         # 'documentSymbolProvider': true,
         # 'workspaceSymbolProvider': true,
 
-        # todo impl. these ?
-        # 'renameProvider': false,
-        # 'selectionRangeProvider': false,
+        # TODO watch for src file changes?
         # 'workspaceFolders': {
         #   'supported': false,
         #   'changeNotifications': false,
         # },
+
+        # todo impl. these ?
+        # 'renameProvider': false,
+        # 'selectionRangeProvider': false,
 
       },
       'serverInfo': {
