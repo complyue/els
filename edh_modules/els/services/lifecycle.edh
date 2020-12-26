@@ -18,38 +18,45 @@ export method initialize(
   # elsDebug.replHere()
 
   perform lspRespond( {
-      'capabilities' : {
+      'capabilities': {
 
-        'textDocumentSync' : {
-          'openClose' : true,
-          'change' : 1, # 0/1/2 None/Full/Incremental
-          'save' : { 'includeText': false, },
-          'willSave' : false,
-          'willSaveWaitUntil' : false,
+        'textDocumentSync': {
+          'openClose': true,
+          'change': 1, # 0/1/2 None/Full/Incremental
+          'save': { 'includeText': false, },
+          'willSave': false,
+          'willSaveWaitUntil': false,
         },
 
-        'definitionProvider' : true,
-        'hoverProvider' : true,
+        'definitionProvider': true,
+        'hoverProvider': true,
+
+        'completionProvider': {
+          'triggerCharacters': [
+            ' ', '.',
+          ]
+        },
 
         # TODO impl. them
-        # 'referencesProvider' : true,
-        # 'foldingRangeProvider' : false,
+        # 'signatureHelpProvider': true,
+        # 'referencesProvider': true,
+        # 'foldingRangeProvider': true,
 
-        # 'documentSymbolProvider' : false,
-        # 'workspaceSymbolProvider' : false,
+        # 'documentSymbolProvider': true,
+        # 'workspaceSymbolProvider': true,
 
         # todo impl. these ?
-        # 'renameProvider' : false,
-        # 'selectionRangeProvider' : false,
-        # 'workspaceFolders' : {
-        #   'supported' : false,
-        #   'changeNotifications' : false,
+        # 'renameProvider': false,
+        # 'selectionRangeProvider': false,
+        # 'workspaceFolders': {
+        #   'supported': false,
+        #   'changeNotifications': false,
         # },
 
       },
-      'serverInfo' : {
-        'name' : 'els',
-        'version' : '0.1.0.pre',
+      'serverInfo': {
+        'name': 'els',
+        'version': '0.1.0.pre',
       },
   } )
 

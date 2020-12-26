@@ -4,5 +4,6 @@ export {
   import * './docsync'
   import * './defi'
   import * './hover'
+  import * './completion'
 
 }

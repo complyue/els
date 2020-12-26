@@ -1,0 +1,132 @@
+
+import ( world, elsDebug, **_ ) 'els'
+
+import * './utils'
+
+
+data CompletionContext( triggerKind, triggerCharacter ) {
+
+  Invoked := 1
+  TriggerCharacter := 2
+  TriggerForIncompleteCompletions := 3
+
+  # this'll always match
+  method __match__( jsonRepr ) return CompletionContext (
+    jsonRepr[ 'triggerKind' ] or Invoked,
+    jsonRepr[ 'triggerCharacter' ] or None,
+  )
+
+}
+
+namespace CompletionItemKind() {
+  Text = 1
+  Method = 2
+  Function = 3
+  Constructor = 4
+  Field = 5
+  Variable = 6
+  Class = 7
+  Interface = 8
+  Module = 9
+  Property = 10
+  Unit = 11
+  Value = 12
+  Enum = 13
+  Keyword = 14
+  Snippet = 15
+  Color = 16
+  File = 17
+  Reference = 18
+  Folder = 19
+  EnumMember = 20
+  Constant = 21
+  Struct = 22
+  Event = 23
+  Operator = 24
+  TypeParameter = 25
+}
+
+namespace InsertTextFormat() {
+
+  PlainText = 1
+
+  {##
+   # The primary text to be inserted is treated as a snippet.
+   #
+   # A snippet can define tab stops and placeholders with `$1`, `$2`
+   # and `${3:foo}`. `$0` defines the final tab stop, it defaults to
+   # the end of the snippet. Placeholders with equal identifiers are linked,
+   # that is typing in one will update others too.
+   #}
+  Snippet = 2
+
+}
+
+namespace InsertTextMode() {
+  {##
+   # The insertion or replace strings is taken as it is. If the
+   # value is multi line the lines below the cursor will be
+   # inserted using the indentation defined in the string value.
+   # The client will not apply any kind of adjustments to the
+   # string.
+   #}
+  asIs = 1
+
+  {##
+   # The editor adjusts leading whitespace of new lines so that
+   # they match the indentation up to the cursor of the line for
+   # which the item is accepted.
+   #
+   # Consider a line like this: <2tabs><cursor><3tabs>foo. Accepting a
+   # multi line completion item is indented using 2 tabs and all
+   # following lines inserted will be indented using 2 tabs as well.
+   #}
+  adjustIndentation = 2
+}
+
+
+export method @'textDocument/completion' (
+  textDocument, position, context= {}, ***_
+) void {
+  # try parse & resolve then obtain completion asynchronously,
+  # to not block subsequent requests from the lsp client
+  case textDocument of { TxtDocFile( absFilePath ) } ->
+  case position of { Position( line, character ) } ->
+  case context of { CompletionContext( triggerKind, triggerCharacter ) } ->
+  { return { go {
+        modu = world.locateByFile( absFilePath )
+        # completionResult = world.completion( modu, line, character )
+        # debug and null( completionResult ) and elsDebug.replHere()
+        # perform lspRespond( completionResult )
+        perform lspRespond( {
+            'isIncomplete': false,
+            'items': [
+              {
+                'label': 'compl1-label',
+                'insertText': 'compl1-insert',
+                'insertTextFormat': InsertTextFormat.PlainText,
+                'insertTextMode': InsertTextMode.asIs,
+                'kind': CompletionItemKind.Text,
+                'detail': 'compl1-detail',
+                'documentation': 'compl1-doc',
+                'preselect': false,
+                'sortText': 'compl1-sort',
+                'filterText': 'compl1-filter',
+              },
+              {
+                'label': 'compl2-label',
+                'insertText': 'compl2-insert',
+                'insertTextFormat': InsertTextFormat.PlainText,
+                'insertTextMode': InsertTextMode.asIs,
+                'kind': CompletionItemKind.Text,
+                'detail': 'compl2-detail',
+                'documentation': 'compl2-doc',
+                'preselect': false,
+                'sortText': 'compl2-sort',
+                'filterText': 'compl2-filter',
+              },
+            ],
+        } )
+  } } }
+  error( 'unexpected lsp params' )
+}
