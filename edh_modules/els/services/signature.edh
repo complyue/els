@@ -1,0 +1,72 @@
+
+import ( world, elsDebug, **_ ) 'els'
+
+import * './utils'
+
+
+data SignatureHelpContext(
+  triggerKind, triggerCharacter, isRetrigger, activeSignatureHelp= None,
+) {
+
+  {##
+   # Signature help was invoked manually by the user or by a command.
+   #}
+  Invoked := 1
+  {##
+   # Signature help was triggered by a trigger character.
+   #}
+  TriggerCharacter := 2
+  {##
+   # Signature help was triggered by the cursor moving or by the document
+   # content changing.
+   #}
+  ContentChange := 3
+
+  # this'll always match
+  method __match__( jsonRepr ) return SignatureHelpContext (
+    jsonRepr[ 'triggerKind' ] or Invoked,
+    jsonRepr[ 'triggerCharacter' ] or None,
+    jsonRepr[ 'isRetrigger' ] or false,
+    jsonRepr[ 'activeSignatureHelp' ] or None,
+  )
+
+}
+
+
+export method @'textDocument/signatureHelp' (
+  textDocument, position, context= {}, ***_
+) void {
+  # try parse & resolve then obtain completion asynchronously,
+  # to not block subsequent requests from the lsp client
+  case textDocument of { TxtDocFile( absFilePath ) } ->
+  case position of { Position( line, character ) } ->
+  case context of { SignatureHelpContext(
+      triggerKind, triggerCharacter, isRetrigger, activeSignatureHelp,
+  ) } ->
+  { return { go {
+        modu = world.locateByFile( absFilePath )
+        # completionResult = world.completion( modu, line, character )
+        # debug and null( completionResult ) and elsDebug.replHere()
+        # perform lspRespond( completionResult )
+        perform lspRespond( {
+            'signatures': [
+              {
+                'label': 'sig1-label',
+                'documentation': 'sig1-doc',
+                'parameters': [
+                  {
+                    'label': 'arg1-label',
+                    'documentation': 'arg1-doc',
+                  },
+                  {
+                    'label': 'arg2-label',
+                    'documentation': 'arg2-doc',
+                  },
+                ],
+                'activeParameter': 0,
+              },
+            ],
+        } )
+  } } }
+  error( 'unexpected lsp params' )
+}

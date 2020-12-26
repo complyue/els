@@ -37,8 +37,16 @@ export method initialize(
           ]
         },
 
+        'signatureHelpProvider': {
+          'triggerCharacters': [
+            '(',
+          ],
+          'retriggerCharacters': [
+            ',',
+          ],
+        },
+
         # TODO impl. them
-        # 'signatureHelpProvider': true,
         # 'referencesProvider': true,
         # 'foldingRangeProvider': true,
 
