@@ -1421,6 +1421,26 @@ el'AnalyzeExpr
 
                   if "=" == opSym || ":=" == opSym
                     then do
+                      -- check if it shadows attr from outer scopes
+                      case swip of
+                        EL'InitObject {} -> pure () -- not eligible
+                        EL'DefineClass {} -> pure () -- not eligible
+                        EL'InitModule {} -> pure () -- need check?
+                        EL'ProcFlow {} ->
+                          el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
+                            >>= \case
+                              Nothing -> pure ()
+                              Just !shadowedDef -> do
+                                el'LogDiag
+                                  diags
+                                  el'Warning
+                                  addr'span
+                                  "attr-shadow"
+                                  "shadows the attribute defined in outer scope"
+                                -- record a reference to the shadowed attr
+                                let !attrRef = EL'AttrRef addr shadowedDef
+                                recordCtxSym eac $ EL'RefSym attrRef
+
                       -- record as definition symbol
                       recordCtxSym eac $ EL'DefSym attrDef
                       el'Exit easDone exit rhVal
@@ -2229,32 +2249,36 @@ el'AnalyzeExpr
                   el'LogDiag diags el'Error spec'span "err-import" err
                   el'Exit eas exit $ EL'Const nil
                 Right !msImportee -> do
-                  -- record as an attribute defined to reference the module
-                  let defImpSym =
-                        let !importeeDef =
-                              EL'AttrDef
-                                (AttrByName "this")
-                                Nothing
-                                "<module>"
-                                zeroSrcRange
-                                ( ExprSrc
-                                    (AttrExpr (ThisRef noSrcRange))
-                                    noSrcRange
-                                )
-                                (EL'ObjVal el'ModuleClass)
-                                maoAnnotation
-                                Nothing
-                            !impDef =
-                              EL'AttrDef
-                                (AttrByName litSpec)
-                                docCmt
-                                "<import>"
-                                spec'span
-                                xsrc
-                                (EL'External msImportee importeeDef)
-                                maoAnnotation
-                                Nothing
-                         in recordCtxSym eac $ EL'DefSym impDef
+                  -- record a reference to the src module
+                  let !importeeDef =
+                        EL'AttrDef
+                          (AttrByName "this")
+                          Nothing
+                          "<module>"
+                          zeroSrcRange
+                          ( ExprSrc
+                              (AttrExpr (ThisRef noSrcRange))
+                              noSrcRange
+                          )
+                          (EL'ObjVal el'ModuleClass)
+                          maoAnnotation
+                          Nothing
+                      !impDef =
+                        EL'AttrDef
+                          (AttrByName litSpec)
+                          docCmt
+                          "<import>"
+                          noSrcRange
+                          xsrc
+                          (EL'External msImportee importeeDef)
+                          maoAnnotation
+                          Nothing
+                      !impRef =
+                        EL'AttrRef
+                          (AttrAddrSrc (QuaintAttr litSpec) spec'span)
+                          impDef
+                  recordCtxSym eac $ EL'RefSym impRef
+
                   -- record as a dependency
                   modifyTVar' (el'modu'dependencies'wip resolvImporter) $
                     Map.insert msImportee True
@@ -2269,7 +2293,6 @@ el'AnalyzeExpr
                         -- do import
                         let !exps = el'modu'exports resolved
                         impIntoScope chkExp msImportee exps argsRcvr
-                        defImpSym
                         el'Exit eas exit $ EL'ModuVal msImportee
                       EL'ModuResolving !resolving _acts -> \_ets -> do
                         -- record importer as a dependant
@@ -2278,7 +2301,6 @@ el'AnalyzeExpr
                         -- do import
                         !exps <- iopdSnapshot $ el'modu'exps'wip resolving
                         impIntoScope chkExp msImportee exps argsRcvr
-                        defImpSym
                         el'Exit eas exit $ EL'ModuVal msImportee
         AttrExpr {} ->
           el'RunTx eas $ -- dynamic string or obj import
@@ -2423,56 +2445,66 @@ el'AnalyzeExpr
                           kwVal
                           artAnno
                           Nothing
+                  -- record as definition symbol
+                  recordCtxSym eac $ EL'DefSym attrDef
 
+                  -- register as local attribute
                   iopdInsert localKey attrDef localTgt
+                  -- export it if specified so
                   chkExp localKey attrDef
 
                   go odEmpty rest
             where
               processImp :: AttrAddrSrc -> AttrAddrSrc -> STM ()
-              processImp srcAddr@(AttrAddrSrc _ !src'span) !localAddr = do
-                el'ResolveAttrAddr eas localAddr >>= \case
-                  Nothing ->
-                    -- invalid attr addr, error should have been logged
-                    go srcArts rest
-                  Just !localKey ->
-                    el'ResolveAttrAddr eas srcAddr >>= \case
-                      Nothing ->
-                        -- invalid attr addr, error should have been logged
-                        go srcArts rest
-                      Just !srcKey ->
-                        let (!gotArt, !srcArts') = odTakeOut srcKey srcArts
-                         in case gotArt of
-                              Nothing -> do
-                                el'LogDiag
-                                  diags
-                                  el'Error
-                                  src'span
-                                  "missing-import"
-                                  $ "no such artifact to import: "
-                                    <> attrKeyStr srcKey
-                                go srcArts' rest
-                              Just !srcVal -> do
-                                !artAnno <-
-                                  newTVar =<< el'ResolveAnnotation swip localKey
-                                -- record as definition symbol
-                                let !attrDef =
-                                      EL'AttrDef
-                                        localKey
-                                        docCmt
-                                        "<import>"
-                                        src'span
-                                        xsrc
-                                        srcVal
-                                        artAnno
-                                        Nothing
-                                recordCtxSym eac $ EL'DefSym attrDef
-                                -- register as local attribute
-                                iopdInsert localKey attrDef localTgt
-                                -- export it if specified so
-                                chkExp localKey attrDef
+              processImp
+                srcAddr@(AttrAddrSrc _ !src'span)
+                localAddr@(AttrAddrSrc _ !local'span) = do
+                  el'ResolveAttrAddr eas localAddr >>= \case
+                    Nothing ->
+                      -- invalid attr addr, error should have been logged
+                      go srcArts rest
+                    Just !localKey ->
+                      el'ResolveAttrAddr eas srcAddr >>= \case
+                        Nothing ->
+                          -- invalid attr addr, error should have been logged
+                          go srcArts rest
+                        Just !srcKey ->
+                          let (!gotArt, !srcArts') = odTakeOut srcKey srcArts
+                           in case gotArt of
+                                Nothing -> do
+                                  el'LogDiag
+                                    diags
+                                    el'Error
+                                    src'span
+                                    "missing-import"
+                                    $ "no such artifact to import: "
+                                      <> attrKeyStr srcKey
+                                  go srcArts' rest
+                                Just !srcVal -> do
+                                  !artAnno <-
+                                    newTVar =<< el'ResolveAnnotation swip localKey
+                                  let !impDef =
+                                        EL'AttrDef
+                                          localKey
+                                          docCmt
+                                          "<import>"
+                                          local'span
+                                          xsrc
+                                          srcVal
+                                          artAnno
+                                          Nothing
+                                  -- record as definition symbol
+                                  recordCtxSym eac $ EL'DefSym impDef
+                                  -- record as referencing symbol
+                                  recordCtxSym eac $
+                                    EL'RefSym $ EL'AttrRef localAddr impDef
 
-                                go srcArts' rest
+                                  -- register as local attribute
+                                  iopdInsert localKey impDef localTgt
+                                  -- export it if specified so
+                                  chkExp localKey impDef
+
+                                  go srcArts' rest
 --
 
 -- defining a class
@@ -2543,7 +2575,7 @@ el'AnalyzeExpr
         -- define artifacts from arguments (i.e. data fields) for a data
         -- class
         defDataArts :: [ArgReceiver] -> STM ()
-        defDataArts !ars = flip iopdUpdate clsAttrs =<< go [] ars
+        defDataArts !ars = flip iopdUpdate instAttrs =<< go [] ars
           where
             go ::
               [(AttrKey, EL'AttrDef)] ->
@@ -3358,56 +3390,6 @@ el'DefineMethod
       !outerBranch = el'scope'branch'wip outerProc
       -- diags = el'ctx'diags eac
 
-      -- define artifacts from arguments for a procedure
-      defArgArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
-      -- TODO special treatments for interpreter and 3-arg operator:
-      -- - 1st `callerScope` be of scope object type
-      -- - rest args be of expr type
-      defArgArts !ars = go [] ars
-        where
-          go ::
-            [(AttrKey, EL'AttrDef)] ->
-            [ArgReceiver] ->
-            STM [(AttrKey, EL'AttrDef)]
-          go !args [] = return $ reverse args
-          go !args (ar : rest) = case ar of
-            RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
-              Nothing -> defArgArt argAddr maybeDef
-              Just (DirectRef !argAddr') -> defArgArt argAddr' Nothing
-              Just _otherRename -> go args rest -- TODO elaborate?
-            RecvRestPkArgs !argAddr -> defArgArt argAddr Nothing
-            RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
-            RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
-            where
-              defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
-              defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
-                el'ResolveAttrAddr eas argAddr >>= \case
-                  Nothing -> go args rest
-                  Just !argKey ->
-                    newTVar Nothing >>= \ !anno ->
-                      go
-                        ( ( argKey,
-                            EL'AttrDef
-                              argKey
-                              Nothing
-                              "<procedure-argument>"
-                              arg'name'span
-                              xsrc
-                              ( EL'Expr $
-                                  fromMaybe
-                                    ( ExprSrc
-                                        (AttrExpr (DirectRef argAddr))
-                                        arg'name'span
-                                    )
-                                    knownExpr
-                              )
-                              anno
-                              Nothing
-                          ) :
-                          args
-                        )
-                        rest
-
       analyzeMthCall :: STM () -> STM ()
       analyzeMthCall !doneMthCall = do
         !mthAttrs <- iopdEmpty
@@ -3452,8 +3434,8 @@ el'DefineMethod
 
         !argArts <- case argsRcvr of
           WildReceiver -> return []
-          PackReceiver !ars -> defArgArts ars
-          SingleReceiver !ar -> defArgArts [ar]
+          PackReceiver !ars -> defArgArts eas "<method-arg>" xsrc ars
+          SingleReceiver !ar -> defArgArts eas "<method-arg>" xsrc [ar]
         iopdUpdate argArts mthAttrs
 
         el'RunTx easMth $
@@ -3531,53 +3513,6 @@ el'DefineArrowProc
         -- return the procedure value
         el'Exit eas exit $ EL'ProcVal $ EL'Proc mthName argsRcvr
 
-      -- define artifacts from arguments for an arrow procedure
-      defArgArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
-      defArgArts !ars = go [] ars
-        where
-          go ::
-            [(AttrKey, EL'AttrDef)] ->
-            [ArgReceiver] ->
-            STM [(AttrKey, EL'AttrDef)]
-          go !args [] = return $ reverse args
-          go !args (ar : rest) = case ar of
-            RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
-              Nothing -> defArgArt argAddr maybeDef
-              Just (DirectRef !argAddr') -> defArgArt argAddr' Nothing
-              Just _otherRename -> go args rest -- TODO elaborate?
-            RecvRestPkArgs !argAddr -> defArgArt argAddr Nothing
-            RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
-            RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
-            where
-              defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
-              defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
-                el'ResolveAttrAddr eas argAddr >>= \case
-                  Nothing -> go args rest
-                  Just !argKey ->
-                    newTVar Nothing >>= \ !anno ->
-                      go
-                        ( ( argKey,
-                            EL'AttrDef
-                              argKey
-                              Nothing
-                              "<arrow-argument>"
-                              arg'name'span
-                              lhExpr
-                              ( EL'Expr $
-                                  fromMaybe
-                                    ( ExprSrc
-                                        (AttrExpr (DirectRef argAddr))
-                                        arg'name'span
-                                    )
-                                    knownExpr
-                              )
-                              anno
-                              Nothing
-                          ) :
-                          args
-                        )
-                        rest
-
       analyzeMthCall :: ArgsReceiver -> STM () -> STM ()
       analyzeMthCall !argsRcvr !doneMthCall = do
         !mthAttrs <- iopdEmpty
@@ -3620,8 +3555,8 @@ el'DefineArrowProc
 
         !argArts <- case argsRcvr of
           WildReceiver -> return []
-          PackReceiver !ars -> defArgArts ars
-          SingleReceiver !ar -> defArgArts [ar]
+          PackReceiver !ars -> defArgArts eas "<arrow-arg>" lhExpr ars
+          SingleReceiver !ar -> defArgArts eas "<arrow-arg>" lhExpr [ar]
         iopdUpdate argArts mthAttrs
 
         el'RunTx easMth $
@@ -3665,3 +3600,78 @@ el'DefineArrowProc
             doneMthCall
 
 --
+
+-- define artifacts from arguments for a procedure
+defArgArts ::
+  EL'AnalysisState ->
+  OpSymbol ->
+  ExprSrc ->
+  [ArgReceiver] ->
+  STM [(AttrKey, EL'AttrDef)]
+-- TODO special treatments for interpreter and 3-arg operator:
+-- - 1st `callerScope` be of scope object type
+-- - rest args be of expr type
+defArgArts !eas !opSym !srcExpr !ars = go [] ars
+  where
+    !eac = el'context eas
+    diags = el'ctx'diags eac
+
+    go ::
+      [(AttrKey, EL'AttrDef)] ->
+      [ArgReceiver] ->
+      STM [(AttrKey, EL'AttrDef)]
+    go !args [] = return $ reverse args
+    go !args (ar : rest) = case ar of
+      RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
+        Nothing -> defArgArt argAddr maybeDef
+        Just (DirectRef !argAddr') -> defArgArt argAddr' Nothing
+        Just _otherRename -> go args rest -- TODO elaborate?
+      RecvRestPkArgs !argAddr -> defArgArt argAddr Nothing
+      RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
+      RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
+      where
+        defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
+        defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
+          el'ResolveAttrAddr eas argAddr >>= \case
+            Nothing -> go args rest
+            Just !argKey -> do
+              -- check if it shadows attr from outer scopes
+              el'ResolveLexicalAttr
+                (el'ctx'scope eac : el'ctx'outers eac)
+                argKey
+                >>= \case
+                  Nothing -> pure ()
+                  Just !shadowedDef -> do
+                    el'LogDiag
+                      diags
+                      el'Warning
+                      arg'name'span
+                      "arg-shadow"
+                      "shadows the attribute defined in outer scope"
+                    -- record a reference to the shadowed attr
+                    let !attrRef = EL'AttrRef argAddr shadowedDef
+                    recordCtxSym eac $ EL'RefSym attrRef
+
+              newTVar Nothing >>= \ !anno ->
+                go
+                  ( ( argKey,
+                      EL'AttrDef
+                        argKey
+                        Nothing
+                        opSym
+                        arg'name'span
+                        srcExpr
+                        ( EL'Expr $
+                            fromMaybe
+                              ( ExprSrc
+                                  (AttrExpr (DirectRef argAddr))
+                                  arg'name'span
+                              )
+                              knownExpr
+                        )
+                        anno
+                        Nothing
+                    ) :
+                    args
+                  )
+                  rest

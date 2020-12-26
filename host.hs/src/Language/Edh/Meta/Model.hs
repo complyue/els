@@ -537,3 +537,21 @@ locateSymbolInModule !line !char !modu =
               EQ -> Just $ EL'RefSym ref
               LT -> Nothing
               GT -> locateSym rest
+
+locateSymbolRefInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrRef
+locateSymbolRefInModule !line !char !modu =
+  locateRef $ -- TODO use binary search for performance with large modules
+    V.toList $ el'modu'symbols modu
+  where
+    !p = SrcPos line char
+
+    locateRef :: [EL'AttrSym] -> Maybe EL'AttrRef
+    locateRef [] = Nothing
+    locateRef (x : rest) = case x of
+      EL'DefSym {} -> locateRef rest
+      EL'RefSym !ref ->
+        let AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
+         in case srcPosCmp2Range p ref'span of
+              EQ -> Just ref
+              LT -> Nothing
+              GT -> locateRef rest

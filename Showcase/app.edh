@@ -1,12 +1,14 @@
 
 
-import ( x, **_ ) './lib'
+import ( x as x', **otherStuff ) './lib'
 
 import * './framework'
 
 
 k = 5
 
-y = f( x ) - g( k )
+y = f( x' ) - g( k )
 
-z = x + y / k
+z = x' + y / k
+
+len( otherStuff )
