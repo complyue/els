@@ -188,7 +188,7 @@ createMetaWorldClass !msClass !clsOuterScope =
         withThisHostObj ets $ \ !elw ->
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
-              case locateSymbolRefInModule line char resolved of
+              case locateAttrRefInModule line char resolved of
                 Nothing -> exitEdh ets exit $ jsonArray []
                 Just !ref -> exitEdh ets exit $ toLSP ref
 
@@ -206,6 +206,6 @@ createMetaWorldClass !msClass !clsOuterScope =
         withThisHostObj ets $ \ !elw ->
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
-              case el'AttrDoc <$> locateSymbolRefInModule line char resolved of
+              case el'AttrDoc <$> locateAttrRefInModule line char resolved of
                 Nothing -> exitEdh ets exit $ jsonArray []
                 Just !doc -> exitEdh ets exit $ toLSP doc

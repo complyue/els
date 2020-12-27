@@ -566,6 +566,7 @@ asModuleResolving !world !ms !exit !ets =
                 )
                 odEmpty
                 V.empty
+                V.empty
                 [ el'Diag
                     el'Error
                     noSrcRange
@@ -639,7 +640,8 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
         odFromList $
           (\ !def -> (el'attr'def'key def, def))
             <$> [name'def, file'def, path'def]
-  !ctxSyms <- newTVar []
+  !ctxDefs <- newTVar []
+  !ctxRefs <- newTVar []
   !branchAttrs <- iopdFromList $ odToList builtinAttrs
   !moduAttrs <- iopdClone branchAttrs
   !moduEffs <- iopdEmpty
@@ -668,7 +670,8 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
             el'ctx'pure = False,
             el'ctx'exporting = False,
             el'ctx'eff'defining = False,
-            el'ctx'symbols = ctxSyms,
+            el'ctx'attr'defs = ctxDefs,
+            el'ctx'attr'refs = ctxRefs,
             el'ctx'diags = el'resolving'diags resolving
           }
       !eas =
@@ -697,7 +700,8 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !regions <-
         (regions'wip ++)
           <$> readTVar (el'scope'regions'wip pwipDone)
-      !modu'symbols <- sortOn attrSymKey <$> readTVar ctxSyms
+      !modu'attr'defs <- sortOn attrDefKey <$> readTVar ctxDefs
+      !modu'attr'refs <- sortOn attrRefKey <$> readTVar ctxRefs
 
       !diags <- readTVar $ el'resolving'diags resolving
       !moduExps <- iopdSnapshot $ el'modu'exps'wip resolving
@@ -712,7 +716,8 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
         EL'ResolvedModule
           el'scope
           moduExps
-          (V.fromList modu'symbols)
+          (V.fromList modu'attr'defs)
+          (V.fromList modu'attr'refs)
           (reverse diags)
           dependencies
           (el'resolving'dependants resolving)
@@ -930,7 +935,7 @@ el'AnalyzeStmt
                 attrAnno
                 prevDef
         -- record as definition symbol
-        recordCtxSym eac $ EL'DefSym attrDef
+        recordAttrDef eac attrDef
         if el'ctx'eff'defining eac
           then do
             let !effs = el'branch'effs'wip bwip
@@ -1178,7 +1183,7 @@ el'AnalyzeExpr
           Just !attrDef -> do
             -- record as referencing symbol of outer scope
             let !attrRef = EL'AttrRef addr mwip attrDef
-            recordCtxSym eac $ EL'RefSym attrRef
+            recordAttrRef eac attrRef
 
             el'Exit eas exit $ el'attr'def'value attrDef
     where
@@ -1217,14 +1222,14 @@ el'AnalyzeExpr
                   -- record as referencing symbol of outer scope
                   let (!origModu, !origDef) = el'UltimateDefi objModu attrDef
                       !attrRef = EL'AttrRef addr origModu origDef
-                  recordCtxSym eac $ EL'RefSym attrRef
+                  recordAttrRef eac attrRef
 
                   el'Exit eas exit $ el'attr'def'value attrDef
               Just !attrDef -> do
                 -- record as referencing symbol of outer scope
                 let (!origModu, !origDef) = el'UltimateDefi objModu attrDef
                     !attrRef = EL'AttrRef addr origModu origDef
-                recordCtxSym eac $ EL'RefSym attrRef
+                recordAttrRef eac attrRef
 
                 el'Exit eas exit $ el'attr'def'value attrDef
           --
@@ -1244,7 +1249,7 @@ el'AnalyzeExpr
                 -- record as referencing symbol of outer scope
                 let (!origModu, !origDef) = el'UltimateDefi clsModu attrDef
                     !attrRef = EL'AttrRef addr origModu origDef
-                recordCtxSym eac $ EL'RefSym attrRef
+                recordAttrRef eac attrRef
 
                 el'Exit eas exit $ el'attr'def'value attrDef
           --
@@ -1449,20 +1454,20 @@ el'AnalyzeExpr
                                 -- record a reference to the shadowed attr
                                 let !attrRef =
                                       EL'AttrRef addr mwip shadowedDef
-                                recordCtxSym eac $ EL'RefSym attrRef
+                                recordAttrRef eac attrRef
 
                       -- record as definition symbol
-                      recordCtxSym eac $ EL'DefSym attrDef
+                      recordAttrDef eac attrDef
                       el'Exit easDone exit rhVal
                     else case maybePrevDef of
                       Just !prevDef -> do
                         -- record as reference symbol
                         let !attrRef = EL'AttrRef addr mwip prevDef
-                        recordCtxSym eac $ EL'RefSym attrRef
+                        recordAttrRef eac attrRef
                         returnAsExpr easDone
                       Nothing -> do
                         -- record as definition symbol
-                        recordCtxSym eac $ EL'DefSym attrDef
+                        recordAttrDef eac attrDef
                         returnAsExpr easDone
             ExprSrc (AttrExpr (IndirectRef !tgtExpr !addr)) _expr'span ->
               el'RunTx easDone $
@@ -2292,7 +2297,7 @@ el'AnalyzeExpr
                           (AttrAddrSrc (QuaintAttr litSpec) spec'span)
                           msImportee
                           impDef
-                  recordCtxSym eac $ EL'RefSym impRef
+                  recordAttrRef eac impRef
 
                   -- record as a dependency
                   modifyTVar' (el'modu'dependencies'wip resolvImporter) $
@@ -2461,7 +2466,7 @@ el'AnalyzeExpr
                           artAnno
                           Nothing
                   -- record as definition symbol
-                  recordCtxSym eac $ EL'DefSym attrDef
+                  recordAttrDef eac attrDef
 
                   -- register as local attribute
                   iopdInsert localKey attrDef localTgt
@@ -2509,11 +2514,10 @@ el'AnalyzeExpr
                                           artAnno
                                           Nothing
                                   -- record as definition symbol
-                                  recordCtxSym eac $ EL'DefSym impDef
+                                  recordAttrDef eac impDef
                                   -- record as referencing symbol
-                                  recordCtxSym eac $
-                                    EL'RefSym $
-                                      EL'AttrRef localAddr srcModu impDef
+                                  recordAttrRef eac $
+                                    EL'AttrRef localAddr srcModu impDef
 
                                   -- register as local attribute
                                   iopdInsert localKey impDef localTgt
@@ -2583,7 +2587,8 @@ el'AnalyzeExpr
               el'ctx'pure = False,
               el'ctx'exporting = False,
               el'ctx'eff'defining = False,
-              el'ctx'symbols = el'ctx'symbols eac,
+              el'ctx'attr'defs = el'ctx'attr'defs eac,
+              el'ctx'attr'refs = el'ctx'attr'refs eac,
               el'ctx'diags = el'ctx'diags eac
             }
         !easCls = eas {el'context = eacCls}
@@ -2745,7 +2750,7 @@ el'AnalyzeExpr
                     clsAnno
                     Nothing
             -- record as definition symbol of outer scope
-            recordCtxSym eac $ EL'DefSym clsDef
+            recordAttrDef eac clsDef
             --
 
             -- record as artifact of outer scope
@@ -2855,7 +2860,8 @@ el'AnalyzeExpr
                 el'ctx'pure = False,
                 el'ctx'exporting = False,
                 el'ctx'eff'defining = False,
-                el'ctx'symbols = el'ctx'symbols eac,
+                el'ctx'attr'defs = el'ctx'attr'defs eac,
+                el'ctx'attr'refs = el'ctx'attr'refs eac,
                 el'ctx'diags = el'ctx'diags eac
               }
           !easNs = eas {el'context = eacNs}
@@ -2929,7 +2935,7 @@ el'AnalyzeExpr
                       nsAnno
                       Nothing
               -- record as definition symbol of outer scope
-              recordCtxSym eac $ EL'DefSym nsDef
+              recordAttrDef eac nsDef
               --
 
               -- record as artifact of outer scope
@@ -3307,7 +3313,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
             Nothing
 
     -- record as definition symbol
-    recordCtxSym eac $ EL'DefSym symDef
+    recordAttrDef eac symDef
 
     -- record as artifact of current scope
     unless (el'ctx'pure eac) $ do
@@ -3378,7 +3384,7 @@ el'DefineMethod
                 mthAnno
                 Nothing
         -- record as definition symbol of outer scope
-        recordCtxSym eac $ EL'DefSym mthDef
+        recordAttrDef eac mthDef
         --
 
         -- record as artifact of outer scope
@@ -3443,7 +3449,8 @@ el'DefineMethod
                   el'ctx'pure = False,
                   el'ctx'exporting = False,
                   el'ctx'eff'defining = False,
-                  el'ctx'symbols = el'ctx'symbols eac,
+                  el'ctx'attr'defs = el'ctx'attr'defs eac,
+                  el'ctx'attr'refs = el'ctx'attr'refs eac,
                   el'ctx'diags = el'ctx'diags eac
                 }
             !easMth = eas {el'context = eacMth}
@@ -3564,7 +3571,8 @@ el'DefineArrowProc
                   el'ctx'pure = False,
                   el'ctx'exporting = False,
                   el'ctx'eff'defining = False,
-                  el'ctx'symbols = el'ctx'symbols eac,
+                  el'ctx'attr'defs = el'ctx'attr'defs eac,
+                  el'ctx'attr'refs = el'ctx'attr'refs eac,
                   el'ctx'diags = el'ctx'diags eac
                 }
             !easMth = eas {el'context = eacMth}
@@ -3667,7 +3675,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                       "shadows the attribute defined in outer scope"
                     -- record a reference to the shadowed attr
                     let !attrRef = EL'AttrRef argAddr mwip shadowedDef
-                    recordCtxSym eac $ EL'RefSym attrRef
+                    recordAttrRef eac attrRef
 
               newTVar Nothing >>= \ !anno ->
                 go

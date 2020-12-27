@@ -55,8 +55,10 @@ data EL'Context = EL'Context
     el'ctx'eff'defining :: !Bool,
     --
 
-    -- | accumulated symbols
-    el'ctx'symbols :: !(TVar [EL'AttrSym]),
+    -- | attribute definitions collected for current module
+    el'ctx'attr'defs :: !(TVar [EL'AttrDef]),
+    -- | attribute references collected for current module
+    el'ctx'attr'refs :: !(TVar [EL'AttrRef]),
     -- | diagnostics collector in context
     el'ctx'diags :: !(TVar [EL'Diagnostic])
   }
@@ -184,8 +186,11 @@ data EL'RegionWIP = EL'RegionWIP
     el'region'attrs'wip :: !EL'Artifacts
   }
 
-recordCtxSym :: EL'Context -> EL'AttrSym -> STM ()
-recordCtxSym !eac !sym = modifyTVar' (el'ctx'symbols eac) (sym :)
+recordAttrDef :: EL'Context -> EL'AttrDef -> STM ()
+recordAttrDef !eac !sym = modifyTVar' (el'ctx'attr'defs eac) (sym :)
+
+recordAttrRef :: EL'Context -> EL'AttrRef -> STM ()
+recordAttrRef !eac !sym = modifyTVar' (el'ctx'attr'refs eac) (sym :)
 
 el'ResolveLexicalAttr :: [EL'ScopeWIP] -> AttrKey -> STM (Maybe EL'AttrDef)
 el'ResolveLexicalAttr [] _ = return Nothing

@@ -195,8 +195,12 @@ data EL'ResolvedModule = EL'ResolvedModule
     el'modu'scope :: !EL'Scope,
     -- | finalized exports from this module
     el'modu'exports :: !EL'Artifacts,
-    -- | all symbols in this module, sorted so as they appear in source code
-    el'modu'symbols :: !(Vector EL'AttrSym),
+    -- | all attribute definitions in this module
+    -- sorted so as they appear in source code
+    el'modu'attr'defs :: !(Vector EL'AttrDef),
+    -- | all attribute references in this module
+    -- sorted so as they appear in source code
+    el'modu'attr'refs :: !(Vector EL'AttrRef),
     -- | diagnostics generated during resolution
     el'resolution'diags :: ![EL'Diagnostic],
     -- | other modules this module depends on
@@ -534,53 +538,40 @@ type EL'Artifacts = OrderedDict AttrKey EL'AttrDef
 instance Show EL'Artifacts where
   show _arts = "<artifacts>"
 
--- | a symbol at source level is, an attribute definitions or attribute
--- reference, the order of symbols in this vector reflects the order each
--- symbol appears in src code reading order
-data EL'AttrSym = EL'DefSym !EL'AttrDef | EL'RefSym !EL'AttrRef
-  deriving (Show)
+attrDefKey :: EL'AttrDef -> SrcPos
+attrDefKey !def = src'end $ el'attr'def'focus def
 
-attrSymKey :: EL'AttrSym -> SrcPos
-attrSymKey (EL'DefSym !def) = src'end $ el'attr'def'focus def
-attrSymKey (EL'RefSym !ref) = src'end ref'span
+attrRefKey :: EL'AttrRef -> SrcPos
+attrRefKey !ref = src'end ref'span
   where
     AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
 
-locateSymbolInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrSym
-locateSymbolInModule !line !char !modu =
+locateAttrDefInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrDef
+locateAttrDefInModule !line !char !modu =
   locateSym $ -- TODO use binary search for performance with large modules
-    V.toList $ el'modu'symbols modu
+    V.toList $ el'modu'attr'defs modu
   where
     !p = SrcPos line char
 
-    locateSym :: [EL'AttrSym] -> Maybe EL'AttrSym
+    locateSym :: [EL'AttrDef] -> Maybe EL'AttrDef
     locateSym [] = Nothing
-    locateSym (x : rest) = case x of
-      EL'DefSym !def -> case srcPosCmp2Range p $ el'attr'def'focus def of
-        EQ -> Just $ EL'DefSym def
-        LT -> Nothing
-        GT -> locateSym rest
-      EL'RefSym !ref ->
-        let AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
-         in case srcPosCmp2Range p ref'span of
-              EQ -> Just $ EL'RefSym ref
-              LT -> Nothing
-              GT -> locateSym rest
+    locateSym (def : rest) = case srcPosCmp2Range p $ el'attr'def'focus def of
+      EQ -> Just def
+      LT -> Nothing
+      GT -> locateSym rest
 
-locateSymbolRefInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrRef
-locateSymbolRefInModule !line !char !modu =
+locateAttrRefInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrRef
+locateAttrRefInModule !line !char !modu =
   locateRef $ -- TODO use binary search for performance with large modules
-    V.toList $ el'modu'symbols modu
+    V.toList $ el'modu'attr'refs modu
   where
     !p = SrcPos line char
 
-    locateRef :: [EL'AttrSym] -> Maybe EL'AttrRef
+    locateRef :: [EL'AttrRef] -> Maybe EL'AttrRef
     locateRef [] = Nothing
-    locateRef (x : rest) = case x of
-      EL'DefSym {} -> locateRef rest
-      EL'RefSym !ref ->
-        let AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
-         in case srcPosCmp2Range p ref'span of
-              EQ -> Just ref
-              LT -> Nothing
-              GT -> locateRef rest
+    locateRef (ref : rest) =
+      let AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
+       in case srcPosCmp2Range p ref'span of
+            EQ -> Just ref
+            LT -> Nothing
+            GT -> locateRef rest
