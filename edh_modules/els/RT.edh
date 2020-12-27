@@ -1,7 +1,7 @@
 {##
  # shared Đ (Edh) language server
  #
- # LSP up to 3.15, assumes that one server serves one tool. No support in the
+ # LSP up to 3.16, assumes that one server serves one tool. No support in the
  # protocol to share one server between different tools.
  # Such a sharing would require additional protocol e.g. to lock a document to
  # support concurrent editing.
@@ -21,6 +21,53 @@
 # interpreter is used to run the program.
 error( 'Missing host module: ' ++ __name__ )
 
-# TODO mockups of procedures and other artifacts can be written in
-#      this source file, to give meaningful information to IDEs and/or
-#      other tools, for purpose of, e.g. auto completion.
+export {
+
+  {##
+   # write the specified txt to the specified fd, then close the fd
+   #}
+  method sendTextToFd( fd, txt ) pass
+
+  class MetaModule {
+
+    method invalidate() pass
+
+    method fill( src ) pass
+
+    property$ method home() pass
+
+    property$ method doc() pass
+
+  }
+
+  class MetaWorld {
+
+    locate :: ( StringType ) -> MetaModule
+    method locate( moduSpec ) pass
+
+    locateByFile :: ( StringType ) -> MetaModule
+    method locateByFile( absFilePath ) pass
+
+    diags :: ( MetaModule ) -> json![ json!DictType ]
+    method diags( modu ) pass
+
+    defi :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
+    -> json!DictType
+    method defi( modu, line, char ) pass
+
+    hover :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
+    -> json!DictType
+    method hover( modu, line, char ) pass
+
+  }
+
+  class LangServer {
+
+    method addrs() pass
+    method eol() pass
+    method join() pass
+    method stop() pass
+
+  }
+
+}

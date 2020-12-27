@@ -33,7 +33,11 @@ installLanguageServerBatteries !world =
                   sequence $
                     [ (AttrByName nm,) <$> mkHostProc moduScope mc nm hp
                       | (nm, mc, hp) <-
-                          [("sendTextToFd", EdhMethod, wrapHostProc sendTextToFd)]
+                          [ ( "sendTextToFd",
+                              EdhMethod,
+                              wrapHostProc sendTextToFd
+                            )
+                          ]
                     ]
 
                 let !moduArts =

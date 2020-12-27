@@ -963,14 +963,14 @@ el'AnalyzeStmt (StmtSrc (EffectStmt !effs !docCmt) _stmt'span) !exit !eas =
 el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr Nothing superExpr $ \case
-      EL'ObjVal !superObj -> \_eas -> do
+      EL'ObjVal _superModu !superObj -> \_eas -> do
         modifyTVar' (el'scope'exts'wip pwip) (++ [superObj])
         el'Exit eas exit $ EL'Const nil
       EL'Apk (EL'ArgsPack !superVals !kwargs) | odNull kwargs -> \_eas -> do
         !superObjs <- (catMaybes <$>) $
           sequence $
             flip fmap superVals $ \case
-              EL'ObjVal !superObj -> return $ Just superObj
+              EL'ObjVal _superModu !superObj -> return $ Just superObj
               !badSuperVal -> do
                 el'LogDiag
                   diags
@@ -1181,7 +1181,7 @@ el'AnalyzeExpr
               "possible misspelled reference"
             returnAsExpr
           Just !attrDef -> do
-            -- record as referencing symbol of outer scope
+            -- record as referencing symbol
             let !attrRef = EL'AttrRef addr mwip attrDef
             recordAttrRef eac attrRef
 
@@ -1207,7 +1207,7 @@ el'AnalyzeExpr
         Nothing -> returnAsExpr
         Just !refKey -> case el'UltimateValue' mwip tgtVal of
           -- object instance attribute addressing
-          (!objModu, EL'ObjVal !cls) ->
+          (_valModu, EL'ObjVal !clsModu !cls) ->
             case odLookup refKey $ el'inst'attrs cls of
               Nothing -> case odLookup refKey $ el'class'attrs cls of
                 Nothing -> do
@@ -1219,15 +1219,15 @@ el'AnalyzeExpr
                     "no such object attribute"
                   returnAsExpr
                 Just !attrDef -> do
-                  -- record as referencing symbol of outer scope
-                  let (!origModu, !origDef) = el'UltimateDefi objModu attrDef
+                  -- record as referencing symbol
+                  let (!origModu, !origDef) = el'UltimateDefi clsModu attrDef
                       !attrRef = EL'AttrRef addr origModu origDef
                   recordAttrRef eac attrRef
 
                   el'Exit eas exit $ el'attr'def'value attrDef
               Just !attrDef -> do
-                -- record as referencing symbol of outer scope
-                let (!origModu, !origDef) = el'UltimateDefi objModu attrDef
+                -- record as referencing symbol
+                let (!origModu, !origDef) = el'UltimateDefi clsModu attrDef
                     !attrRef = EL'AttrRef addr origModu origDef
                 recordAttrRef eac attrRef
 
@@ -1235,7 +1235,7 @@ el'AnalyzeExpr
           --
 
           -- static class attribute addressing
-          (!clsModu, EL'ClsVal !cls) ->
+          (_valModu, EL'ClsVal !clsModu !cls) ->
             case odLookup refKey (el'class'attrs cls) of
               Nothing -> do
                 el'LogDiag
@@ -1246,7 +1246,7 @@ el'AnalyzeExpr
                   "no such class attribute"
                 returnAsExpr
               Just !attrDef -> do
-                -- record as referencing symbol of outer scope
+                -- record as referencing symbol
                 let (!origModu, !origDef) = el'UltimateDefi clsModu attrDef
                     !attrRef = EL'AttrRef addr origModu origDef
                 recordAttrRef eac attrRef
@@ -1529,13 +1529,14 @@ el'AnalyzeExpr
                   go rest ((attrKey, attrDef) : kds)
 
             defDfAttrs ::
+              EL'ModuSlot ->
               EL'Artifacts ->
               [ArgSender] ->
               ( [(AttrKey, EL'AttrDef)] ->
                 STM ()
               ) ->
               STM ()
-            defDfAttrs !arts !sndrs !daExit = go sndrs []
+            defDfAttrs !clsModu !arts !sndrs !daExit = go sndrs []
               where
                 go :: [ArgSender] -> [(AttrKey, EL'AttrDef)] -> STM ()
                 go [] !kds = daExit kds
@@ -1550,6 +1551,19 @@ el'AnalyzeExpr
                         el'ResolveAttrAddr eas rcvAttr >>= \case
                           Nothing -> go rest kds
                           Just !key -> do
+                            !attrVal <- case odLookup key arts of
+                              Nothing -> do
+                                el'LogDiag
+                                  diags
+                                  el'Error
+                                  arg'span
+                                  "missing-data-field"
+                                  "no such data class field"
+                                return $ EL'Expr attrExpr
+                              Just !def -> do
+                                recordAttrRef eac $
+                                  EL'AttrRef rcvAttr clsModu def
+                                return $ el'attr'def'value def
                             let !attrDef =
                                   EL'AttrDef
                                     key
@@ -1557,16 +1571,12 @@ el'AnalyzeExpr
                                     opSym
                                     arg'span
                                     xsrc
-                                    ( maybe
-                                        (EL'Expr attrExpr)
-                                        el'attr'def'value
-                                        $ odLookup key arts
-                                    )
+                                    attrVal
                                     attrAnno
                                     Nothing
                             go rest $ (key, attrDef) : kds
                     SendKwArg
-                      !srcAttr
+                      srcAttr@(AttrAddrSrc _ !src'span)
                       attrExpr@( ExprSrc
                                    (AttrExpr (DirectRef !tgtAttr))
                                    !arg'span
@@ -1577,6 +1587,19 @@ el'AnalyzeExpr
                             el'ResolveAttrAddr eas tgtAttr >>= \case
                               Nothing -> go rest kds
                               Just !tgtKey -> do
+                                !attrVal <- case odLookup srcKey arts of
+                                  Nothing -> do
+                                    el'LogDiag
+                                      diags
+                                      el'Error
+                                      src'span
+                                      "missing-data-field"
+                                      "no such data class field"
+                                    return $ EL'Expr attrExpr
+                                  Just !def -> do
+                                    recordAttrRef eac $
+                                      EL'AttrRef srcAttr clsModu def
+                                    return $ el'attr'def'value def
                                 let !attrDef =
                                       EL'AttrDef
                                         tgtKey
@@ -1584,11 +1607,7 @@ el'AnalyzeExpr
                                         opSym
                                         arg'span
                                         xsrc
-                                        ( maybe
-                                            (EL'Expr attrExpr)
-                                            el'attr'def'value
-                                            $ odLookup srcKey arts
-                                        )
+                                        attrVal
                                         attrAnno
                                         Nothing
                                 go rest $ (tgtKey, attrDef) : kds
@@ -1746,9 +1765,13 @@ el'AnalyzeExpr
               ] -> el'RunTx eas $
                 el'AnalyzeExpr Nothing clsExpr $
                   \ !clsResult _eas -> case el'UltimateValue clsResult of
-                    EL'ClsVal !clsVal ->
-                      defDfAttrs (el'class'attrs clsVal) apkr analyzeBranch
-                    _ -> defDfAttrs odEmpty apkr analyzeBranch
+                    EL'ClsVal !clsModu !cls ->
+                      let !dfArts =
+                            odFromList $
+                              odToList (el'class'attrs cls)
+                                ++ odToList (el'inst'attrs cls)
+                       in defDfAttrs clsModu dfArts apkr analyzeBranch
+                    _ -> defDfAttrs mwip odEmpty apkr analyzeBranch
             -- { class( field1, field2, ... ) = instAddr } -- fields by
             -- class again, but receive the matched object as well
             -- __match__ magic from the class works here
@@ -1774,24 +1797,28 @@ el'AnalyzeExpr
               ] -> el'RunTx eas $
                 el'AnalyzeExpr Nothing clsExpr $
                   \ !clsResult _eas -> case el'UltimateValue clsResult of
-                    EL'ClsVal !clsVal ->
-                      defDfAttrs (el'class'attrs clsVal) apkr $ \ !dfs ->
-                        el'ResolveAttrAddr eas instAddr >>= \case
-                          Nothing -> analyzeBranch dfs
-                          Just !instKey -> do
-                            !anno <- newTVar Nothing
-                            let !attrDef =
-                                  EL'AttrDef
-                                    instKey
-                                    Nothing
-                                    opSym
-                                    inst'span
-                                    instExpr
-                                    (EL'ObjVal clsVal)
-                                    anno
-                                    Nothing
-                            analyzeBranch $ dfs ++ [(instKey, attrDef)]
-                    _ -> defDfAttrs odEmpty apkr $ \ !dfs ->
+                    EL'ClsVal !clsModu !cls ->
+                      let !dfArts =
+                            odFromList $
+                              odToList (el'class'attrs cls)
+                                ++ odToList (el'inst'attrs cls)
+                       in defDfAttrs clsModu dfArts apkr $ \ !dfs ->
+                            el'ResolveAttrAddr eas instAddr >>= \case
+                              Nothing -> analyzeBranch dfs
+                              Just !instKey -> do
+                                !anno <- newTVar Nothing
+                                let !attrDef =
+                                      EL'AttrDef
+                                        instKey
+                                        Nothing
+                                        opSym
+                                        inst'span
+                                        instExpr
+                                        (EL'ObjVal clsModu cls)
+                                        anno
+                                        Nothing
+                                analyzeBranch $ dfs ++ [(instKey, attrDef)]
+                    _ -> defDfAttrs mwip odEmpty apkr $ \ !dfs ->
                       el'ResolveAttrAddr eas instAddr >>= \case
                         Nothing -> analyzeBranch dfs
                         Just !instKey -> do
@@ -1837,7 +1864,7 @@ el'AnalyzeExpr
                       Nothing
                       (ExprSrc (AttrExpr clsRef) (attrRefSpan clsRef))
                       $ \ !clsResult _eas -> case el'UltimateValue clsResult of
-                        EL'ClsVal !clsVal -> do
+                        EL'ClsVal !clsModu !clsVal -> do
                           !anno <- newTVar Nothing
                           let !attrDef =
                                 EL'AttrDef
@@ -1846,7 +1873,7 @@ el'AnalyzeExpr
                                   opSym
                                   inst'span
                                   instExpr
-                                  (EL'ObjVal clsVal)
+                                  (EL'ObjVal clsModu clsVal)
                                   anno
                                   Nothing
                           analyzeBranch [(instKey, attrDef)]
@@ -2039,7 +2066,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 (ExprStmt (ArgsPackExpr (ArgsPacker !argSenders _)) _docCmt)
                 _
-              ] -> defDfAttrs odEmpty argSenders analyzeBranch
+              ] -> defDfAttrs mwip odEmpty argSenders analyzeBranch
             --
 
             -- {( x:y:z:... )} -- pair pattern
@@ -2207,8 +2234,8 @@ el'AnalyzeExpr
     el'RunTx eas $
       el'AnalyzeExpr Nothing calleeExpr $ \ !calleeVal -> el'PackArgs apkr $
         \_apk -> case el'UltimateValue calleeVal of
-          EL'ClsVal !cls ->
-            el'ExitTx exit $ EL'ObjVal cls
+          EL'ClsVal !clsModu !cls ->
+            el'ExitTx exit $ EL'ObjVal clsModu cls
           _ ->
             el'ExitTx exit $ EL'Expr xsrc
     where
@@ -2279,7 +2306,7 @@ el'AnalyzeExpr
                               (AttrExpr (ThisRef noSrcRange))
                               noSrcRange
                           )
-                          (EL'ObjVal el'ModuleClass)
+                          (EL'ObjVal msImportee el'ModuleClass)
                           maoAnnotation
                           Nothing
                       !impDef =
@@ -2362,11 +2389,10 @@ el'AnalyzeExpr
         ArgsReceiver ->
         STM ()
       impIntoScope !chkExp !srcModu !srcExps !asr = do
-        let !srcArts = odMap (EL'External srcModu) srcExps
         case asr of
-          WildReceiver -> forM_ (odToList srcArts) wildImp
-          PackReceiver !ars -> go srcArts ars
-          SingleReceiver !ar -> go srcArts [ar]
+          WildReceiver -> forM_ (odToList srcExps) wildImp
+          PackReceiver !ars -> go srcExps ars
+          SingleReceiver !ar -> go srcExps [ar]
         -- record a region after this import, for current scope
         iopdSnapshot (el'branch'attrs'wip bwip)
           >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
@@ -2377,8 +2403,8 @@ el'AnalyzeExpr
               then el'branch'effs'wip bwip
               else el'branch'attrs'wip bwip
 
-          wildImp :: (AttrKey, EL'Value) -> STM ()
-          wildImp (!k, !v) = do
+          wildImp :: (AttrKey, EL'AttrDef) -> STM ()
+          wildImp (!k, !def) = do
             !artAnno <- newTVar =<< el'ResolveAnnotation swip k
             let !attrDef =
                   EL'AttrDef
@@ -2387,13 +2413,13 @@ el'AnalyzeExpr
                     "<import>"
                     expr'span
                     xsrc
-                    v
+                    (EL'External srcModu def)
                     artAnno
                     Nothing
             iopdInsert k attrDef localTgt
             chkExp k attrDef
 
-          go :: OrderedDict AttrKey EL'Value -> [ArgReceiver] -> STM ()
+          go :: OrderedDict AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
           go !srcArts [] =
             if odNull srcArts
               then return () -- very well expected
@@ -2454,7 +2480,10 @@ el'AnalyzeExpr
                 Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
                 Just !localKey -> do
                   !artAnno <- newTVar =<< el'ResolveAnnotation swip localKey
-                  let !kwVal = EL'Apk $ EL'ArgsPack [] srcArts
+                  let !kwVal =
+                        EL'Apk $
+                          EL'ArgsPack [] $
+                            odMap (EL'External srcModu) srcArts
                       !attrDef =
                         EL'AttrDef
                           localKey
@@ -2500,7 +2529,7 @@ el'AnalyzeExpr
                                     $ "no such artifact to import: "
                                       <> attrKeyStr srcKey
                                   go srcArts' rest
-                                Just !srcVal -> do
+                                Just !srcDef -> do
                                   !artAnno <-
                                     newTVar =<< el'ResolveAnnotation swip localKey
                                   let !impDef =
@@ -2510,14 +2539,14 @@ el'AnalyzeExpr
                                           "<import>"
                                           local'span
                                           xsrc
-                                          srcVal
+                                          (EL'External srcModu srcDef)
                                           artAnno
                                           Nothing
                                   -- record as definition symbol
                                   recordAttrDef eac impDef
                                   -- record as referencing symbol
                                   recordAttrRef eac $
-                                    EL'AttrRef localAddr srcModu impDef
+                                    EL'AttrRef localAddr srcModu srcDef
 
                                   -- register as local attribute
                                   iopdInsert localKey impDef localTgt
@@ -2595,8 +2624,8 @@ el'AnalyzeExpr
 
         -- define artifacts from arguments (i.e. data fields) for a data
         -- class
-        defDataArts :: [ArgReceiver] -> STM ()
-        defDataArts !ars = flip iopdUpdate instAttrs =<< go [] ars
+        defDataArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
+        defDataArts !ars = go [] ars
           where
             go ::
               [(AttrKey, EL'AttrDef)] ->
@@ -2628,6 +2657,7 @@ el'AnalyzeExpr
                   el'ResolveAttrAddr eas dfAddr >>= \case
                     Nothing -> go dfs rest
                     Just !dfKey -> do
+                      -- TODO clsAnnos is empty now, try use it later
                       !dfAnno <- newTVar =<< iopdLookup dfKey clsAnnos
                       go
                         ( ( dfKey,
@@ -2669,6 +2699,7 @@ el'AnalyzeExpr
                 cls'name'span
                 xsrc
                 ( EL'ProcVal
+                    mwip
                     ( EL'Proc
                         (AttrByName mthName)
                         WildReceiver -- todo elaborate actual args
@@ -2678,14 +2709,13 @@ el'AnalyzeExpr
                 Nothing
             )
 
-    -- define data fields as class attributes
-    -- TODO this correct?
+    -- define data fields as instance attributes
     case argsRcvr of
       -- a normal class
       WildReceiver -> pure ()
       -- a data class (ADT)
-      SingleReceiver !ar -> defDataArts [ar]
-      PackReceiver !ars -> defDataArts ars
+      SingleReceiver !ar -> defDataArts [ar] >>= flip iopdUpdate instAttrs
+      PackReceiver !ars -> defDataArts ars >>= flip iopdUpdate instAttrs
 
     el'RunTx easCls $
       el'AnalyzeStmts [cls'body] $ \_ !easDone -> do
@@ -2738,7 +2768,7 @@ el'AnalyzeExpr
                     inst'attrs
                     inst'exts
                     inst'exps
-                !clsVal = EL'ClsVal cls
+                !clsVal = EL'ClsVal mwip cls
                 !clsDef =
                   EL'AttrDef
                     clsName
@@ -2773,6 +2803,7 @@ el'AnalyzeExpr
             el'Exit eas exit clsVal
     where
       !eac = el'context eas
+      !mwip = el'ContextModule eac
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
       !outerBranch = el'scope'branch'wip outerProc
@@ -2923,7 +2954,7 @@ el'AnalyzeExpr
                         el'inst'exts = ns'exts,
                         el'inst'exps = ns'exps
                       }
-                  !nsVal = EL'ObjVal nsCls
+                  !nsVal = EL'ObjVal mwip nsCls
                   !nsDef =
                     EL'AttrDef
                       nsName
@@ -2959,6 +2990,7 @@ el'AnalyzeExpr
               el'Exit eas exit nsVal
     where
       !eac = el'context eas
+      !mwip = el'ContextModule eac
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
       !outerBranch = el'scope'branch'wip outerProc
@@ -3372,7 +3404,7 @@ el'DefineMethod
       Just !mthName -> do
         !mthAnno <- newTVar =<< el'ResolveAnnotation outerScope mthName
         let !mth = EL'Proc mthName argsRcvr
-            !mthVal = EL'ProcVal mth
+            !mthVal = EL'ProcVal mwip mth
             !mthDef =
               EL'AttrDef
                 mthName
@@ -3407,6 +3439,7 @@ el'DefineMethod
         el'Exit eas exit mthVal
     where
       !eac = el'context eas
+      !mwip = el'ContextModule eac
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
       !outerBranch = el'scope'branch'wip outerProc
@@ -3522,6 +3555,7 @@ el'DefineArrowProc
       Right !argsRcvr -> withArgsRcvr argsRcvr
     where
       !eac = el'context eas
+      !mwip = el'ContextModule eac
       !outerScope = el'ctx'scope eac
       !outerProc = el'ProcWIP outerScope
       !outerBranch = el'scope'branch'wip outerProc
@@ -3534,7 +3568,7 @@ el'DefineArrowProc
         el'PostAnalysis eas (analyzeMthCall argsRcvr)
 
         -- return the procedure value
-        el'Exit eas exit $ EL'ProcVal $ EL'Proc mthName argsRcvr
+        el'Exit eas exit $ EL'ProcVal mwip $ EL'Proc mthName argsRcvr
 
       analyzeMthCall :: ArgsReceiver -> STM () -> STM ()
       analyzeMthCall !argsRcvr !doneMthCall = do

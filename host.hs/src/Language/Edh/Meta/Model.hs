@@ -352,15 +352,15 @@ data EL'Value
   | -- | dict at analyze time
     EL'Dict !(TVar [(EL'Value, EL'Value)])
   | -- | an object
-    EL'ObjVal !EL'Class
+    EL'ObjVal !EL'ModuSlot !EL'Class
   | -- | a class
-    EL'ClsVal !EL'Class
+    EL'ClsVal !EL'ModuSlot !EL'Class
   | -- | a module object
     EL'ModuVal !EL'ModuSlot
   | -- | a procedure
-    EL'ProcVal !EL'Proc
+    EL'ProcVal !EL'ModuSlot !EL'Proc
   | -- | a property
-    EL'PropVal !EL'Class !AttrKey
+    EL'PropVal !EL'ModuSlot !EL'Class !AttrKey
   | -- | result from a return stmt
     EL'Return !EL'Value
   | -- | result from a throw stmt
@@ -379,11 +379,11 @@ instance Show EL'Value where
   show (EL'Apk !apk) = show apk
   show (EL'List _lv) = "<list>" -- TODO avoid TVar then showable here?
   show (EL'Dict _dv) = "<dict>" -- TODO avoid TVar then showable here?
-  show (EL'ObjVal !obj) = show obj
-  show (EL'ClsVal !cls) = show cls
+  show (EL'ObjVal _ms !obj) = show obj
+  show (EL'ClsVal _ms !cls) = show cls
   show (EL'ModuVal !modu) = show modu
-  show (EL'ProcVal !p) = show p
-  show (EL'PropVal !cls !prop) = show cls <> "." <> show prop
+  show (EL'ProcVal _ms !p) = show p
+  show (EL'PropVal _ms !cls !prop) = show cls <> "." <> show prop
   show (EL'Return !x) = show x
   show (EL'Throw !x) = show x
   show EL'Rethrow = "<rethrow>"
