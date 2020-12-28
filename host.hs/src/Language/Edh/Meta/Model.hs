@@ -331,7 +331,7 @@ maoAnnotation = unsafePerformIO $ newTVarIO Nothing
 -- | an attribute reference, links a local addressor to its oritinal definition
 data EL'AttrRef = EL'AttrRef
   { -- | the referencing addressor
-    el'attr'ref'addr :: !AttrAddrSrc,
+    el'attr'ref'addr :: !AttrRef,
     -- | the original module of the attribute definition
     el'attr'ref'modu :: !EL'ModuSlot,
     -- | the original definition of the attribute value
@@ -339,17 +339,17 @@ data EL'AttrRef = EL'AttrRef
   }
 
 instance Show EL'AttrRef where
-  show (EL'AttrRef (AttrAddrSrc !addr _span) !orig'modu _adef) =
-    "<ref: " <> show addr <> ":" <> T.unpack (el'modu'name orig'modu) <> ">"
+  show (EL'AttrRef !attr !orig'modu _adef) =
+    "<ref: " <> show attr <> ":" <> T.unpack (el'modu'name orig'modu) <> ">"
 
 instance ToLSP EL'AttrRef where
-  toLSP (EL'AttrRef (AttrAddrSrc _ !addr'span) !originModu !def) =
+  toLSP (EL'AttrRef !attr !originModu !def) =
     if src'line (src'start $ el'attr'def'focus def) < 0
       then case el'attr'def'value def of -- hidden definition
         EL'External !fromModu !fromDef ->
           jsonArray $
             jsonObject
-              [ ("originSelectionRange", toLSP addr'span),
+              [ ("originSelectionRange", toLSP $ attrRefSpan attr),
                 ("targetUri", toLSP $ el'modu'doc fromModu),
                 ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
                 ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
@@ -359,7 +359,7 @@ instance ToLSP EL'AttrRef where
       else
         jsonArray $
           jsonObject
-            [ ("originSelectionRange", toLSP addr'span),
+            [ ("originSelectionRange", toLSP $ attrRefSpan attr),
               ("targetUri", toLSP $ el'modu'doc originModu),
               ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
               ("targetSelectionRange", toLSP $ el'attr'def'focus def)
@@ -382,12 +382,12 @@ attrUpLinkChain !def = case el'attr'def'value def of
   _ -> []
 
 -- | doc-comments for an attribute encountered at all definition sites
-data EL'AttrDoc = EL'AttrDoc !AttrAddrSrc ![DocComment]
+data EL'AttrDoc = EL'AttrDoc !SrcRange ![DocComment]
 
 instance ToLSP EL'AttrDoc where
-  toLSP (EL'AttrDoc (AttrAddrSrc _ !addr'span) !docs) =
+  toLSP (EL'AttrDoc !attr'span !docs) =
     jsonObject
-      [ ("range", toLSP addr'span),
+      [ ("range", toLSP attr'span),
         ( "contents",
           jsonObject
             [ ("kind", EdhString "markdown"),
@@ -400,7 +400,7 @@ instance ToLSP EL'AttrDoc where
 
 -- | collect all doc-comments from an attribute reference
 el'AttrDoc :: EL'AttrRef -> EL'AttrDoc
-el'AttrDoc (EL'AttrRef !addr _ms !tip) = go [] tip
+el'AttrDoc (EL'AttrRef !attr _ms !tip) = go [] tip
   where
     go !docs !def = case el'attr'def'doc def of
       Nothing -> go' docs
@@ -408,7 +408,7 @@ el'AttrDoc (EL'AttrRef !addr _ms !tip) = go [] tip
       where
         go' !docs' = case el'attr'def'value def of
           EL'External _ms !def' -> go docs' def'
-          _ -> EL'AttrDoc addr $! reverse docs'
+          _ -> EL'AttrDoc (attrRefSpan attr) $! reverse docs'
 
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
 
@@ -625,9 +625,7 @@ attrDefKey :: EL'AttrDef -> SrcPos
 attrDefKey !def = src'end $ el'attr'def'focus def
 
 attrRefKey :: EL'AttrRef -> SrcPos
-attrRefKey !ref = src'end ref'span
-  where
-    AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
+attrRefKey !ref = src'end $ attrRefSpan $ el'attr'ref'addr ref
 
 locateAttrDefInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrDef
 locateAttrDefInModule !line !char !modu =
@@ -653,7 +651,7 @@ locateAttrRefInModule !line !char !modu =
     locateRef :: [EL'AttrRef] -> Maybe EL'AttrRef
     locateRef [] = Nothing
     locateRef (ref : rest) =
-      let AttrAddrSrc _ !ref'span = el'attr'ref'addr ref
+      let !ref'span = attrRefSpan $ el'attr'ref'addr ref
        in case srcPosCmp2Range p ref'span of
             EQ -> Just ref
             LT -> Nothing
@@ -671,11 +669,11 @@ locatePrefixRefInModule !line !char !modu =
     locatePrefix _prev (ref : rest)
       | p >= ref'end = locatePrefix (Just ref) rest
       where
-        AttrAddrSrc _ (SrcRange _ref'start !ref'end) = el'attr'ref'addr ref
+        (SrcRange _ref'start !ref'end) = attrRefSpan $ el'attr'ref'addr ref
     locatePrefix !prev (ref : _)
       | p <= ref'start = prev
       where
-        AttrAddrSrc _ (SrcRange !ref'start _ref'end) = el'attr'ref'addr ref
+        (SrcRange !ref'start _ref'end) = attrRefSpan $ el'attr'ref'addr ref
     locatePrefix _ _ = Nothing
 
 data EL'CompleteItem = EL'CompleteItem
