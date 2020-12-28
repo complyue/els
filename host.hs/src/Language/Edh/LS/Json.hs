@@ -1,11 +1,9 @@
 module Language.Edh.LS.Json where
 
-import qualified Data.Text as T
 import Language.Edh.EHI
-import Language.Edh.Meta.Model
 import Prelude
 
--- * helper functions converting to json native `EdhValue`s
+-- * helper functions converting arbitrary value to json native `EdhValue`
 
 jsonArray :: [EdhValue] -> EdhValue
 jsonArray !xs = EdhArgsPack $ ArgsPack xs odEmpty
@@ -46,83 +44,3 @@ instance ToLSP SrcDoc where
 instance ToLSP SrcLoc where
   toLSP (SrcLoc !doc !rng) =
     jsonObject [("uri", toLSP doc), ("range", toLSP rng)]
-
-instance ToLSP EL'Diagnostic where
-  toLSP
-    ( EL'Diagnostic
-        !rng
-        !severity
-        !code
-        !source
-        !msg
-        !tags
-      ) =
-      jsonObject
-        [ ("range", toLSP rng),
-          ("severity", jsonInt severity),
-          ( "code",
-            case code of
-              Left !i -> jsonInt i
-              Right !s -> EdhString s
-          ),
-          ("source", EdhString source),
-          ("message", EdhString msg),
-          ( "tags",
-            if null tags
-              then nil
-              else jsonArray' (EdhDecimal . fromIntegral) tags
-          )
-        ]
-
-attrUpLinkChain :: EL'AttrDef -> [EdhValue]
-attrUpLinkChain !def = case el'attr'def'value def of
-  EL'External !fromModu !fromDef ->
-    if src'line (src'start $ el'attr'def'focus def) < 0
-      then attrUpLinkChain fromDef -- hidden definition
-      else
-        jsonObject
-          [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
-            ("targetUri", toLSP $ el'modu'doc fromModu),
-            ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
-            ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
-          ] :
-        attrUpLinkChain fromDef
-  _ -> []
-
-instance ToLSP EL'AttrRef where
-  toLSP (EL'AttrRef (AttrAddrSrc _ !addr'span) !originModu !def) =
-    if src'line (src'start $ el'attr'def'focus def) < 0
-      then case el'attr'def'value def of -- hidden definition
-        EL'External !fromModu !fromDef ->
-          jsonArray $
-            jsonObject
-              [ ("originSelectionRange", toLSP addr'span),
-                ("targetUri", toLSP $ el'modu'doc fromModu),
-                ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
-                ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
-              ] :
-            attrUpLinkChain fromDef
-        _ -> jsonArray [] -- hidden yet not pointing to external value
-      else
-        jsonArray $
-          jsonObject
-            [ ("originSelectionRange", toLSP addr'span),
-              ("targetUri", toLSP $ el'modu'doc originModu),
-              ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
-              ("targetSelectionRange", toLSP $ el'attr'def'focus def)
-            ] :
-          attrUpLinkChain def
-
-instance ToLSP EL'AttrDoc where
-  toLSP (EL'AttrDoc (AttrAddrSrc _ !addr'span) !docs) =
-    jsonObject
-      [ ("range", toLSP addr'span),
-        ( "contents",
-          jsonObject
-            [ ("kind", EdhString "markdown"),
-              ("value", EdhString mdContents)
-            ]
-        )
-      ]
-    where
-      !mdContents = T.intercalate "\n***\n" $ T.intercalate "\n" <$> docs

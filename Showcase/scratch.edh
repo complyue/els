@@ -41,3 +41,5 @@ namespace ns ( x=3, z=5 ) {
 ns.f(
   ns.y + ns.x
 )
+
+ns

@@ -59,6 +59,10 @@ export {
     -> json!DictType
     method hover( modu, line, char ) pass
 
+    dotNota :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
+    -> json!DictType
+    method dotNota( modu, line, char ) pass
+
   }
 
   class LangServer {

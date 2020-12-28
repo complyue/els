@@ -1193,6 +1193,48 @@ el'AnalyzeExpr
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
 --
 
+-- attribute addressing (dot-notation) against this object
+el'AnalyzeExpr
+  _docCmt
+  xsrc@( ExprSrc
+           ( AttrExpr
+               ( IndirectRef
+                   (ExprSrc (AttrExpr ThisRef {}) _)
+                   addr@(AttrAddrSrc _ !addr'span)
+                 )
+             )
+           _expr'span
+         )
+  !exit
+  !eas =
+    el'ResolveAttrAddr eas addr >>= \case
+      Nothing -> returnAsExpr
+      Just !refKey ->
+        iopdLookup refKey thisArts >>= \case
+          Nothing -> do
+            el'LogDiag
+              diags
+              el'Error
+              addr'span
+              "no-this-attr"
+              "no such attribute from this object"
+            returnAsExpr
+          Just !attrDef -> do
+            -- record as referencing symbol
+            let (!origModu, !origDef) = el'UltimateDefi mwip attrDef
+                !attrRef = EL'AttrRef addr origModu origDef
+            recordAttrRef eac attrRef
+
+            el'Exit eas exit $ el'attr'def'value attrDef
+    where
+      !eac = el'context eas
+      !thisArts = el'ContextInstance eac
+      !mwip = el'ContextModule eac
+      diags = el'ctx'diags eac
+
+      returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+--
+
 -- indirect attribute addressing (dot-notation)
 el'AnalyzeExpr
   _docCmt
@@ -1254,13 +1296,46 @@ el'AnalyzeExpr
                 el'Exit eas exit $ el'attr'def'value attrDef
           --
 
+          -- apk addressing
+          (_valModu, EL'Apk (EL'ArgsPack _args !kwargs)) ->
+            case odLookup refKey kwargs of
+              Nothing -> do
+                el'LogDiag
+                  diags
+                  el'Error
+                  addr'span
+                  "no-apk-attr"
+                  "no such named argument"
+                returnAsExpr
+              Just !attrVal -> case attrVal of
+                EL'External !valModu !valDef -> do
+                  -- record as referencing symbol
+                  let (!origModu, !origDef) = el'UltimateDefi valModu valDef
+                      !attrRef = EL'AttrRef addr origModu origDef
+                  recordAttrRef eac attrRef
+
+                  el'Exit eas exit attrVal
+                _ -> el'Exit eas exit attrVal
+          --
+
           -- EL'Const (EdhObject _obj) -> undefined -- TODO this possible ?
-          -- EL'External _ms _attrDef -> undefined -- TODO this possible ?
           -- EL'ModuVal !ms -> undefined -- TODO handle this
           -- EL'ProcVal !p -> undefined -- TODO handle this
           -- EL'Const (EdhDict (Dict _ _ds)) -> undefined -- TODO handle this
-          -- EL'Const (EdhList (List _ _ls)) -> undefined -- TODO handle this
-          _ -> returnAsExpr -- unrecognized value
+          _ ->
+            -- TODO handle these:
+            --  * virtual properties
+            --  * procedure arg with known type, such as `callerScope`
+            --  * tgt with annotated type
+            -- then warn otherwise not resolvable
+            -- do
+            -- el'LogDiag
+            --   diags
+            --   el'Warning
+            --   addr'span
+            --   "unknown-attr"
+            --   "possible misspelled attribute"
+            returnAsExpr -- unrecognized value
     where
       !eac = el'context eas
       !mwip = el'ContextModule eac
@@ -3078,6 +3153,7 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
         !pwip =
           outerProc -- inherit exts/exps from outer scope
             { el'scope'branch'wip = bwip,
+              el'scope'attrs'wip = blkAttrs,
               el'scope'inner'scopes'wip = blkScopes,
               el'scope'regions'wip = blkRegions
             }

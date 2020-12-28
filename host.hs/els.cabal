@@ -26,6 +26,7 @@ source-repository head
 library
   exposed-modules:
     Language.Edh.LS
+    Language.Edh.LS.CompletionItemKind
     Language.Edh.Meta.Model
 
   other-modules:

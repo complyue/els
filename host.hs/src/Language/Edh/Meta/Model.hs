@@ -11,6 +11,9 @@ import Data.Vector (Vector)
 import qualified Data.Vector as V
 import GHC.IO (unsafePerformIO)
 import Language.Edh.EHI
+import Language.Edh.LS.CompletionItemKind (CompletionItemKind)
+import qualified Language.Edh.LS.CompletionItemKind as CompletionItemKind
+import Language.Edh.LS.Json
 import Prelude
 
 -- diagnostic data structures per LSP specification 3.15
@@ -44,6 +47,33 @@ data EL'Diagnostic = EL'Diagnostic
     el'diag'message :: !Text,
     el'diag'tags :: ![EL'DiagnosticTag]
   }
+
+instance ToLSP EL'Diagnostic where
+  toLSP
+    ( EL'Diagnostic
+        !rng
+        !severity
+        !code
+        !source
+        !msg
+        !tags
+      ) =
+      jsonObject
+        [ ("range", toLSP rng),
+          ("severity", jsonInt severity),
+          ( "code",
+            case code of
+              Left !i -> jsonInt i
+              Right !s -> EdhString s
+          ),
+          ("source", EdhString source),
+          ("message", EdhString msg),
+          ( "tags",
+            if null tags
+              then nil
+              else jsonArray' (EdhDecimal . fromIntegral) tags
+          )
+        ]
 
 type EL'DiagSeverity = Int
 
@@ -312,8 +342,61 @@ instance Show EL'AttrRef where
   show (EL'AttrRef (AttrAddrSrc !addr _span) !orig'modu _adef) =
     "<ref: " <> show addr <> ":" <> T.unpack (el'modu'name orig'modu) <> ">"
 
+instance ToLSP EL'AttrRef where
+  toLSP (EL'AttrRef (AttrAddrSrc _ !addr'span) !originModu !def) =
+    if src'line (src'start $ el'attr'def'focus def) < 0
+      then case el'attr'def'value def of -- hidden definition
+        EL'External !fromModu !fromDef ->
+          jsonArray $
+            jsonObject
+              [ ("originSelectionRange", toLSP addr'span),
+                ("targetUri", toLSP $ el'modu'doc fromModu),
+                ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
+                ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
+              ] :
+            attrUpLinkChain fromDef
+        _ -> jsonArray [] -- hidden yet not pointing to external value
+      else
+        jsonArray $
+          jsonObject
+            [ ("originSelectionRange", toLSP addr'span),
+              ("targetUri", toLSP $ el'modu'doc originModu),
+              ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
+              ("targetSelectionRange", toLSP $ el'attr'def'focus def)
+            ] :
+          attrUpLinkChain def
+
+attrUpLinkChain :: EL'AttrDef -> [EdhValue]
+attrUpLinkChain !def = case el'attr'def'value def of
+  EL'External !fromModu !fromDef ->
+    if src'line (src'start $ el'attr'def'focus def) < 0
+      then attrUpLinkChain fromDef -- hidden definition
+      else
+        jsonObject
+          [ ("originSelectionRange", toLSP $ el'attr'def'focus def),
+            ("targetUri", toLSP $ el'modu'doc fromModu),
+            ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
+            ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
+          ] :
+        attrUpLinkChain fromDef
+  _ -> []
+
 -- | doc-comments for an attribute encountered at all definition sites
 data EL'AttrDoc = EL'AttrDoc !AttrAddrSrc ![DocComment]
+
+instance ToLSP EL'AttrDoc where
+  toLSP (EL'AttrDoc (AttrAddrSrc _ !addr'span) !docs) =
+    jsonObject
+      [ ("range", toLSP addr'span),
+        ( "contents",
+          jsonObject
+            [ ("kind", EdhString "markdown"),
+              ("value", EdhString mdContents)
+            ]
+        )
+      ]
+    where
+      !mdContents = T.intercalate "\n***\n" $ T.intercalate "\n" <$> docs
 
 -- | collect all doc-comments from an attribute reference
 el'AttrDoc :: EL'AttrRef -> EL'AttrDoc
@@ -575,3 +658,51 @@ locateAttrRefInModule !line !char !modu =
             EQ -> Just ref
             LT -> Nothing
             GT -> locateRef rest
+
+locatePrefixRefInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrRef
+locatePrefixRefInModule !line !char !modu =
+  -- TODO use binary search for performance with large modules
+  locatePrefix Nothing $ V.toList $ el'modu'attr'refs modu
+  where
+    !p = SrcPos line char
+
+    locatePrefix :: Maybe EL'AttrRef -> [EL'AttrRef] -> Maybe EL'AttrRef
+    locatePrefix !prev [] = prev
+    locatePrefix _prev (ref : rest)
+      | p >= ref'end = locatePrefix (Just ref) rest
+      where
+        AttrAddrSrc _ (SrcRange _ref'start !ref'end) = el'attr'ref'addr ref
+    locatePrefix !prev (ref : _)
+      | p <= ref'start = prev
+      where
+        AttrAddrSrc _ (SrcRange !ref'start _ref'end) = el'attr'ref'addr ref
+    locatePrefix _ _ = Nothing
+
+data EL'CompleteItem = EL'CompleteItem
+  { el'cmpl'label :: !Text,
+    el'cmpl'kind :: !CompletionItemKind,
+    el'cmpl'detail :: !Text,
+    el'cmpl'documentation :: !Text, -- in markdown format
+    el'cmpl'preselect :: !Bool
+  }
+
+instance ToLSP EL'CompleteItem where
+  toLSP (EL'CompleteItem !label !kind !detail !doc !presel) =
+    jsonObject
+      [ ("label", EdhString label),
+        ("kind", toLSP kind),
+        ("detail", EdhString detail),
+        ("documentation", EdhString doc),
+        ("preselect", EdhBool presel)
+      ]
+
+el'CompleteItem :: EL'CompleteItem
+el'CompleteItem = EL'CompleteItem "" CompletionItemKind.Text "" "" False
+
+completeDotNotation :: EL'AttrRef -> STM [EL'CompleteItem]
+completeDotNotation = \case
+  _ ->
+    return
+      [ el'CompleteItem {el'cmpl'label = "xxx"},
+        el'CompleteItem {el'cmpl'label = "yyy"}
+      ]

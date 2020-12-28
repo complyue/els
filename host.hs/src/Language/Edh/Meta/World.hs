@@ -80,7 +80,8 @@ createMetaWorldClass !msClass !clsOuterScope =
                   ("locateByFile", EdhMethod, wrapHostProc locateByFileProc),
                   ("diags", EdhMethod, wrapHostProc diagsProc),
                   ("defi", EdhMethod, wrapHostProc defiProc),
-                  ("hover", EdhMethod, wrapHostProc hoverProc)
+                  ("hover", EdhMethod, wrapHostProc hoverProc),
+                  ("dotNota", EdhMethod, wrapHostProc dotNotaProc)
                 ]
           ]
             ++ [ (AttrByName nm,)
@@ -209,3 +210,27 @@ createMetaWorldClass !msClass !clsOuterScope =
               case el'AttrDoc <$> locateAttrRefInModule line char resolved of
                 Nothing -> exitEdh ets exit $ jsonArray []
                 Just !doc -> exitEdh ets exit $ toLSP doc
+
+    dotNotaProc ::
+      "modu" !: EL'ModuSlot ->
+      "line" !: Int ->
+      "char" !: Int ->
+      EdhHostProc
+    dotNotaProc
+      (mandatoryArg -> !ms)
+      (mandatoryArg -> !line)
+      (mandatoryArg -> !char)
+      !exit
+      !ets =
+        withThisHostObj ets $ \ !elw ->
+          runEdhTx ets $
+            asModuleResolved elw ms $ \ !resolved _ets ->
+              case locatePrefixRefInModule line char resolved of
+                Nothing -> exitEdh ets exit edhNone
+                Just !prefixRef -> do
+                  !items <- completeDotNotation prefixRef
+                  exitEdh ets exit $
+                    jsonObject
+                      [ ("isIncomplete", EdhBool False),
+                        ("items", jsonArray $ toLSP <$> items)
+                      ]

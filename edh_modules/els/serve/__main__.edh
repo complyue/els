@@ -58,11 +58,11 @@ defer {
   {##
    # for a service method to post a lsp notification
    #}
-  effect method lspNotify( mth, *arrayParams, **objectParams ) {
+  effect method lspNotify( notifMthName, *arrayParams, **objectParams ) {
     objectParams and arrayParams and ( console.warn<|
       'positional args ignored with keyword args present' )
     outDict = {
-      'method': mth,
+      'method': notifMthName,
       'params': objectParams or arrayParams or nil, # note nil deletes the entry
     }
     postOnePkt( json$ outDict )
@@ -143,7 +143,7 @@ while eol() is false {
               } $=> { exc } -> {
                 console.warn<| 'LSP response listener failed: ' ++ desc( exc )
                 # uninstall the failing one
-                ai if esponseListeners[ idReq ] is listener
+                ai if responseListeners[ idReq ] is listener
                 then responseListeners[ idReq ] = nil
             } }
             # console.warn<| (
@@ -156,7 +156,7 @@ while eol() is false {
     }
 
     # in case of success response
-    case rpcIn[ 'result' ] of { rpcResult } -> {
+    case rpcIn[ 'result' ] of { rpcResult } -> {@
       case rpcIn[ 'id' ] of {
         nil -> error( 'lsp response without id' )
         { idReq } -> {
@@ -169,7 +169,7 @@ while eol() is false {
               } $=> { exc } -> {
                 console.warn<| 'LSP response listener failed: ' ++ desc( exc )
                 # uninstall the failing one
-                ai if esponseListeners[ idReq ] is listener
+                ai if responseListeners[ idReq ] is listener
                 then responseListeners[ idReq ] = nil
             } }
             # console.warn<| (
@@ -179,7 +179,7 @@ while eol() is false {
         }
       }
       continue # done with this response
-    }
+    @}
 
     # in case of request or notification
     case rpcIn[ 'method' ] of {
@@ -213,10 +213,10 @@ while eol() is false {
         } )
         continue
       }
-      { mth } | type( mth ) ?<= [
+      { mth } -> if type( mth ) ?<= [
         MethodType, HostMethodType,
-      ] -> { pass }
-      _ -> error( 'bug: bad service method type ' ++ type( mth ), rpc=rpcIn )
+      ] then pass
+      else error( 'bug: bad service method type ' ++ type( mth ), rpc=rpcIn )
     }
 
     # effectful value of original request
