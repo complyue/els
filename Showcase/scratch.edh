@@ -38,8 +38,10 @@ namespace ns ( x=3, z=5 ) {
   method f( n ) n * x + 1
 }
 
+ns.
+
+ns@
+
 ns.f(
   ns.y + ns.x
 )
-
-ns

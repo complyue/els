@@ -238,6 +238,22 @@ el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
   where
     eac = el'context eas
     diags = el'ctx'diags eac
+el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrName !addr'span) = do
+  el'LogDiag
+    (el'ctx'diags $ el'context eas)
+    el'Error
+    addr'span
+    "missing-attr"
+    "missing attribute name"
+  return Nothing
+el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrSymbol !addr'span) = do
+  el'LogDiag
+    (el'ctx'diags $ el'context eas)
+    el'Error
+    addr'span
+    "missing-sym"
+    "missing symbolic attribute name"
+  return Nothing
 
 el'ResolveAnnotation :: EL'ScopeWIP -> AttrKey -> STM (Maybe EL'AttrAnno)
 el'ResolveAnnotation !swip !key =
