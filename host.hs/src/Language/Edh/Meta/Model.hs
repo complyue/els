@@ -551,7 +551,7 @@ el'ResolveObjAttr' !cls !key = go $ cls : el'class'mro cls
           Nothing -> go rest
 
 _EmptyArts :: EL'ArtsWIP
-_EmptyArts = unsafePerformIO $ atomically iopdEmpty
+_EmptyArts = unsafePerformIO iopdEmptyIO
 {-# NOINLINE _EmptyArts #-}
 
 _EmptyExts :: TVar [EL'Value]
