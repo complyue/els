@@ -28,6 +28,9 @@ class ToLSP t where
 
 -- * instances converting various types to LSP representation
 
+instance ToLSP a => ToLSP [a] where
+  toLSP = jsonArray . fmap toLSP
+
 instance ToLSP SrcPos where
   toLSP (SrcPos !line !char) =
     jsonObject'

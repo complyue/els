@@ -81,7 +81,7 @@ createMetaWorldClass !msClass !clsOuterScope =
                   ("diags", EdhMethod, wrapHostProc diagsProc),
                   ("defi", EdhMethod, wrapHostProc defiProc),
                   ("hover", EdhMethod, wrapHostProc hoverProc),
-                  ("dotNota", EdhMethod, wrapHostProc dotNotaProc)
+                  ("suggest", EdhMethod, wrapHostProc suggestProc)
                 ]
           ]
             ++ [ (AttrByName nm,)
@@ -211,12 +211,12 @@ createMetaWorldClass !msClass !clsOuterScope =
                 Nothing -> exitEdh ets exit $ jsonArray []
                 Just !doc -> exitEdh ets exit $ toLSP doc
 
-    dotNotaProc ::
+    suggestProc ::
       "modu" !: EL'ModuSlot ->
       "line" !: Int ->
       "char" !: Int ->
       EdhHostProc
-    dotNotaProc
+    suggestProc
       (mandatoryArg -> !ms)
       (mandatoryArg -> !line)
       (mandatoryArg -> !char)
@@ -225,12 +225,6 @@ createMetaWorldClass !msClass !clsOuterScope =
         withThisHostObj ets $ \ !elw ->
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
-              case locatePrefixRefInModule line char resolved of
-                Nothing -> exitEdh ets exit edhNone
-                Just !prefixRef -> do
-                  !items <- completeDotNotation prefixRef
-                  exitEdh ets exit $
-                    jsonObject
-                      [ ("isIncomplete", EdhBool False),
-                        ("items", jsonArray $ toLSP <$> items)
-                      ]
+              exitEdh ets exit $
+                toLSP $
+                  suggestCompletions line char resolved

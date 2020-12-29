@@ -38,6 +38,11 @@ namespace ns ( x=3, z=5 ) {
   method f( n ) n * x + 1
 }
 
+this
+that
+super
+
+
 ns.
 
 ns@

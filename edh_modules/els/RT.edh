@@ -74,9 +74,12 @@ export {
      #}
     method hover( modu, line, char ) pass
 
-    dotNota :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
+    suggest :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
     -> json!DictType
-    method dotNota( modu, line, char ) pass
+    {##
+     # obtain suggestions (autocompletion) at the specified location
+     #}
+    method suggest( modu, line, char ) pass
 
   }
 

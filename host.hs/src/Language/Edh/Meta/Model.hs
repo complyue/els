@@ -11,8 +11,6 @@ import Data.Vector (Vector)
 import qualified Data.Vector as V
 import GHC.IO (unsafePerformIO)
 import Language.Edh.EHI
-import Language.Edh.LS.CompletionItemKind (CompletionItemKind)
-import qualified Language.Edh.LS.CompletionItemKind as CompletionItemKind
 import Language.Edh.LS.Json
 import Prelude
 
@@ -204,7 +202,7 @@ data EL'ParsedModule = EL'ParsedModule
 data EL'ResolvingModu = EL'ResolvingModu
   { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
     -- super modules), up to time of analysis
-    el'modu'exts'wip :: !(TVar [EL'Class]),
+    el'modu'exts'wip :: !(TVar [EL'Value]),
     -- | exports from this module up-to-time of analysis
     el'modu'exps'wip :: !EL'ArtsWIP,
     -- | other modules this module depends on
@@ -328,28 +326,25 @@ maoAnnotation :: TVar (Maybe a)
 maoAnnotation = unsafePerformIO $ newTVarIO Nothing
 {-# NOINLINE maoAnnotation #-}
 
--- | an attribute reference, links a local addressor to its oritinal definition
-data EL'AttrRef = EL'AttrRef
-  { -- | the referencing addressor
-    el'attr'ref'addr :: !AttrRef,
-    -- | the original module of the attribute definition
-    el'attr'ref'modu :: !EL'ModuSlot,
-    -- | the original definition of the attribute value
-    el'attr'ref'defi :: !EL'AttrDef
-  }
+-- | an attribute reference, links a local addressor to its original definition
+data EL'AttrRef
+  = EL'UnsolvedRef !(Maybe EL'Value) !SrcRange
+  | EL'AttrRef !(Maybe EL'Value) !AttrAddrSrc !EL'ModuSlot !EL'AttrDef
+  deriving (Show)
 
-instance Show EL'AttrRef where
-  show (EL'AttrRef !attr !orig'modu _adef) =
-    "<ref: " <> show attr <> ":" <> T.unpack (el'modu'name orig'modu) <> ">"
+el'AttrRefSpan :: EL'AttrRef -> SrcRange
+el'AttrRefSpan (EL'UnsolvedRef _ !ref'span) = ref'span
+el'AttrRefSpan (EL'AttrRef _ (AttrAddrSrc _ !ref'span) _ _) = ref'span
 
 instance ToLSP EL'AttrRef where
-  toLSP (EL'AttrRef !attr !originModu !def) =
+  toLSP (EL'UnsolvedRef _ _) = jsonArray []
+  toLSP ref@(EL'AttrRef _maybeTgtVal _attr !originModu !def) =
     if src'line (src'start $ el'attr'def'focus def) < 0
       then case el'attr'def'value def of -- hidden definition
         EL'External !fromModu !fromDef ->
           jsonArray $
             jsonObject
-              [ ("originSelectionRange", toLSP $ attrRefSpan attr),
+              [ ("originSelectionRange", toLSP $ el'AttrRefSpan ref),
                 ("targetUri", toLSP $ el'modu'doc fromModu),
                 ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr fromDef),
                 ("targetSelectionRange", toLSP $ el'attr'def'focus fromDef)
@@ -359,7 +354,7 @@ instance ToLSP EL'AttrRef where
       else
         jsonArray $
           jsonObject
-            [ ("originSelectionRange", toLSP $ attrRefSpan attr),
+            [ ("originSelectionRange", toLSP $ el'AttrRefSpan ref),
               ("targetUri", toLSP $ el'modu'doc originModu),
               ("targetRange", toLSP $ exprSrcSpan $ el'attr'def'expr def),
               ("targetSelectionRange", toLSP $ el'attr'def'focus def)
@@ -400,7 +395,8 @@ instance ToLSP EL'AttrDoc where
 
 -- | collect all doc-comments from an attribute reference
 el'AttrDoc :: EL'AttrRef -> EL'AttrDoc
-el'AttrDoc (EL'AttrRef !attr _ms !tip) = go [] tip
+el'AttrDoc ref@EL'UnsolvedRef {} = EL'AttrDoc (el'AttrRefSpan ref) []
+el'AttrDoc ref@(EL'AttrRef _maybeTgtRef _attr _ms !tip) = go [] tip
   where
     go !docs !def = case el'attr'def'doc def of
       Nothing -> go' docs
@@ -408,7 +404,7 @@ el'AttrDoc (EL'AttrRef !attr _ms !tip) = go [] tip
       where
         go' !docs' = case el'attr'def'value def of
           EL'External _ms !def' -> go docs' def'
-          _ -> EL'AttrDoc (attrRefSpan attr) $! reverse docs'
+          _ -> EL'AttrDoc (el'AttrRefSpan ref) $! reverse docs'
 
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
 
@@ -435,7 +431,7 @@ data EL'Value
   | -- | dict at analyze time
     EL'Dict !(TVar [(EL'Value, EL'Value)])
   | -- | an object
-    EL'ObjVal !EL'ModuSlot !EL'Class
+    EL'ObjVal !EL'ModuSlot !EL'Object
   | -- | a class
     EL'ClsVal !EL'ModuSlot !EL'Class
   | -- | a module object
@@ -462,8 +458,8 @@ instance Show EL'Value where
   show (EL'Apk !apk) = show apk
   show (EL'List _lv) = "<list>" -- TODO avoid TVar then showable here?
   show (EL'Dict _dv) = "<dict>" -- TODO avoid TVar then showable here?
-  show (EL'ObjVal _ms !obj) = show obj
-  show (EL'ClsVal _ms !cls) = show cls
+  show (EL'ObjVal _ms !obj) = "<object: " <> show (el'obj'class obj) <> ">"
+  show (EL'ClsVal _ms !cls) = "<class: " <> show cls <> ">"
   show (EL'ModuVal !modu) = show modu
   show (EL'ProcVal _ms !p) = show p
   show (EL'PropVal _ms !cls !prop) = show cls <> "." <> show prop
@@ -483,21 +479,39 @@ data EL'Proc = EL'Proc
   }
   deriving (Show)
 
+-- | an object
+--
+-- objects are intrinsically mutable, it has to be kept open during analysis,
+-- and unfortunately has to even remain so after the analysis is done
+data EL'Object = EL'Object
+  { el'obj'class :: !EL'Class,
+    el'obj'attrs :: !EL'ArtsWIP,
+    el'obj'exts :: !(TVar [EL'Value]),
+    el'obj'exps :: !EL'ArtsWIP
+  }
+
+el'ObjNew :: EL'Class -> STM EL'Object
+el'ObjNew !cls = do
+  !objAttrs <- iopdClone $ el'inst'attrs cls
+  !objExts <- newTVar []
+  !objExps <- iopdEmpty
+  return $ EL'Object cls objAttrs objExts objExps
+
 -- | a class
 --
 -- note the `supers` list of an object at runtime is instances created
 -- according to its class' `mro` list, plus more super objects appended
--- by `extends` statements (usually from within the `__init__()` method
--- but dynamic `extends` from arbitrary methods whenever called is also
+-- by `extends` statements, usually from within the `__init__()` method
+-- (though dynamic `extends` from arbitrary methods whenever called is also
 -- allowed)
 data EL'Class = EL'Class
   { -- | class name
     el'class'name :: !AttrKey,
     -- | meta class
-    -- not this field can not be strict
+    -- note this field can not be strict
     el'class'meta :: EL'Class,
     -- | super classes installed via @extends@ from class defining procedure
-    el'class'exts :: ![EL'Class],
+    el'class'exts :: ![EL'Value],
     -- | C3 linearized mro list
     el'class'mro :: ![EL'Class],
     -- | scope of the class defining procedure
@@ -507,15 +521,42 @@ data EL'Class = EL'Class
     -- | attributes exported from the class defining procedure
     el'class'exps :: !EL'Artifacts,
     -- | instance attributes ever assigned via @this.xxx@ from methods (esp.
-    -- @__init__()@)
-    el'inst'attrs :: !EL'Artifacts,
+    -- @__init__()@), also include data fields for data classes
+    el'inst'attrs :: !EL'ArtsWIP,
     -- | super instances ever installed via @extends@ from methods (esp.
     -- @__init__()@)
-    el'inst'exts :: ![EL'Class],
+    el'inst'exts :: !(TVar [EL'Value]),
     -- | attributes ever exported from methods (esp. @__init__()@)
-    el'inst'exps :: !EL'Artifacts
+    el'inst'exps :: !EL'ArtsWIP
   }
-  deriving (Show)
+
+instance Show EL'Class where
+  show !cls = show $ el'class'name cls
+
+el'ResolveObjAttr :: EL'Object -> AttrKey -> STM (Maybe EL'AttrDef)
+el'ResolveObjAttr !obj !key =
+  iopdLookup key (el'obj'attrs obj) >>= \case
+    result@Just {} -> return result
+    Nothing -> el'ResolveObjAttr' (el'obj'class obj) key
+
+el'ResolveObjAttr' :: EL'Class -> AttrKey -> STM (Maybe EL'AttrDef)
+el'ResolveObjAttr' !cls !key = go $ cls : el'class'mro cls
+  where
+    go [] = return Nothing
+    go (c : rest) =
+      iopdLookup key (el'inst'attrs c) >>= \case
+        Just !def -> return $ Just def
+        Nothing -> case odLookup key $ el'class'attrs c of
+          Just !def -> return $ Just def
+          Nothing -> go rest
+
+_EmptyArts :: EL'ArtsWIP
+_EmptyArts = unsafePerformIO $ atomically iopdEmpty
+{-# NOINLINE _EmptyArts #-}
+
+_EmptyExts :: TVar [EL'Value]
+_EmptyExts = unsafePerformIO $ newTVarIO []
+{-# NOINLINE _EmptyExts #-}
 
 el'MetaClass :: EL'Class
 el'MetaClass = mc
@@ -533,9 +574,9 @@ el'MetaClass = mc
         )
         odEmpty
         odEmpty
-        odEmpty
-        []
-        odEmpty
+        _EmptyArts
+        _EmptyExts
+        _EmptyArts
 
 el'NamespaceClass :: EL'Class
 el'NamespaceClass =
@@ -547,9 +588,9 @@ el'NamespaceClass =
     maoScope
     odEmpty
     odEmpty
-    odEmpty
-    []
-    odEmpty
+    _EmptyArts
+    _EmptyExts
+    _EmptyArts
 
 el'ModuleClass :: EL'Class
 el'ModuleClass =
@@ -561,9 +602,9 @@ el'ModuleClass =
     maoScope
     odEmpty
     odEmpty
-    odEmpty
-    []
-    odEmpty
+    _EmptyArts
+    _EmptyExts
+    _EmptyArts
 
 el'ScopeClass :: EL'Class
 el'ScopeClass =
@@ -575,9 +616,9 @@ el'ScopeClass =
     maoScope
     odEmpty
     odEmpty
-    odEmpty
-    []
-    odEmpty
+    _EmptyArts
+    _EmptyExts
+    _EmptyArts
 
 -- | a scope is backed by an entity with arbitrary attributes, as Edh allows
 -- very straight forward sharing of lexical scopes to goroutines spawned from
@@ -625,7 +666,7 @@ attrDefKey :: EL'AttrDef -> SrcPos
 attrDefKey !def = src'end $ el'attr'def'focus def
 
 attrRefKey :: EL'AttrRef -> SrcPos
-attrRefKey !ref = src'end $ attrRefSpan $ el'attr'ref'addr ref
+attrRefKey !ref = src'end $ el'AttrRefSpan ref
 
 locateAttrDefInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrDef
 locateAttrDefInModule !line !char !modu =
@@ -651,56 +692,38 @@ locateAttrRefInModule !line !char !modu =
     locateRef :: [EL'AttrRef] -> Maybe EL'AttrRef
     locateRef [] = Nothing
     locateRef (ref : rest) =
-      let !ref'span = attrRefSpan $ el'attr'ref'addr ref
+      let !ref'span = el'AttrRefSpan ref
        in case srcPosCmp2Range p ref'span of
             EQ -> Just ref
             LT -> Nothing
             GT -> locateRef rest
 
-locatePrefixRefInModule :: Int -> Int -> EL'ResolvedModule -> Maybe EL'AttrRef
-locatePrefixRefInModule !line !char !modu =
-  -- TODO use binary search for performance with large modules
-  locatePrefix Nothing $ V.toList $ el'modu'attr'refs modu
-  where
-    !p = SrcPos line char
-
-    locatePrefix :: Maybe EL'AttrRef -> [EL'AttrRef] -> Maybe EL'AttrRef
-    locatePrefix !prev [] = prev
-    locatePrefix _prev (ref : rest)
-      | p >= ref'end = locatePrefix (Just ref) rest
-      where
-        (SrcRange _ref'start !ref'end) = attrRefSpan $ el'attr'ref'addr ref
-    locatePrefix !prev (ref : _)
-      | p <= ref'start = prev
-      where
-        (SrcRange !ref'start _ref'end) = attrRefSpan $ el'attr'ref'addr ref
-    locatePrefix _ _ = Nothing
-
-data EL'CompleteItem = EL'CompleteItem
-  { el'cmpl'label :: !Text,
-    el'cmpl'kind :: !CompletionItemKind,
-    el'cmpl'detail :: !Text,
-    el'cmpl'documentation :: !Text, -- in markdown format
-    el'cmpl'preselect :: !Bool
+data TextEdit = TextEdit
+  { el'te'range :: !SrcRange,
+    el'te'newText :: !Text
   }
 
-instance ToLSP EL'CompleteItem where
-  toLSP (EL'CompleteItem !label !kind !detail !doc !presel) =
+instance ToLSP TextEdit where
+  toLSP (TextEdit !range !newText) =
     jsonObject
-      [ ("label", EdhString label),
-        ("kind", toLSP kind),
-        ("detail", EdhString detail),
-        ("documentation", EdhString doc),
-        ("preselect", EdhBool presel)
+      [ ("range", toLSP range),
+        ("newText", EdhString newText)
       ]
 
-el'CompleteItem :: EL'CompleteItem
-el'CompleteItem = EL'CompleteItem "" CompletionItemKind.Text "" "" False
+data CompletionItem = CompletionItem
+  { el'cmpl'label :: !Text,
+    el'cmpl'detail :: !Text,
+    el'cmpl'documentation :: !Text, -- in markdown format
+    el'cmpl'preselect :: !Bool,
+    el'cmpl'textEdit :: !TextEdit
+  }
 
-completeDotNotation :: EL'AttrRef -> STM [EL'CompleteItem]
-completeDotNotation = \case
-  _ ->
-    return
-      [ el'CompleteItem {el'cmpl'label = "xxx"},
-        el'CompleteItem {el'cmpl'label = "yyy"}
+instance ToLSP CompletionItem where
+  toLSP (CompletionItem !label !detail !doc !presel !te) =
+    jsonObject
+      [ ("label", EdhString label),
+        ("detail", EdhString detail),
+        ("documentation", EdhString doc),
+        ("preselect", EdhBool presel),
+        ("textEdit", toLSP te)
       ]

@@ -6,9 +6,9 @@ import * './utils'
 
 data CompletionContext( triggerKind, triggerCharacter ) {
 
-  Invoked := 1
-  TriggerCharacter := 2
-  TriggerForIncompleteCompletions := 3
+  Invoked = 1
+  TriggerCharacter = 2
+  TriggerForIncompleteCompletions = 3
 
   # this'll always match
   method __match__( jsonRepr ) return CompletionContext (
@@ -29,41 +29,37 @@ export method @'textDocument/completion' (
   case context of { CompletionContext( triggerKind, triggerCharacter ) } ->
   { return { go {
         modu = world.locateByFile( absFilePath )
-        if triggerKind == CompletionContext.TriggerCharacter
         # elsDebug.replHere()
-        then perform lspRespond( case triggerCharacter of {
-            # '.' -> world.dotNota( modu, line, character )
-            '.' -> {
-              cr = world.dotNota( modu, line, character )
+
+        case triggerKind of {
+          CompletionContext.TriggerCharacter -> case triggerCharacter of {
+            # '.' -> perform lspRespond(
+            #   world.suggest( modu, line, character )
+            # )
+            '.' -> perform lspRespond( {
+                cr = world.suggest( modu, line, character )
+                ; -1<|'cr: ' ++ cr
+                cr
+            } )
+            '@' -> perform lspRespond(
+              world.suggest( modu, line, character )
+            )
+            error( 'unexpected trigger char: ' ++ triggerCharacter )
+          }
+
+          CompletionContext.Invoked -> perform lspRespond( {
+              cr = world.suggest( modu, line, character )
               ; -1<|'cr: ' ++ cr
               cr
-            }
-            '@' -> None
-            error( 'unexpected trigger char: ' ++ triggerCharacter )
-        } )
-        else perform lspRespond( {
-            'isIncomplete': false,
-            'items': [
-              {
-                'label': 'compl1-label',
-                'insertText': 'compl1-insert',
-                'detail': 'compl1-detail',
-                'documentation': 'compl1-doc',
-                'preselect': false,
-                'sortText': 'compl1-sort',
-                'filterText': 'compl1-filter',
-              },
-              {
-                'label': 'compl2-label',
-                'insertText': 'compl2-insert',
-                'detail': 'compl2-detail',
-                'documentation': 'compl2-doc',
-                'preselect': false,
-                'sortText': 'compl2-sort',
-                'filterText': 'compl2-filter',
-              },
-            ],
-        } )
+          } )
+
+          CompletionContext.TriggerForIncompleteCompletions -> {
+            # todo err out instead?
+            perform lspRespond( world.suggest( modu, line, character ) )
+          }
+
+          error( 'unexpected trigger kind: ' ++ triggerKind )
+        }
   } } }
   error( 'unexpected lsp params' )
 }
