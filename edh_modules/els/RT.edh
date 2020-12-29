@@ -43,20 +43,35 @@ export {
   class MetaWorld {
 
     locate :: ( StringType ) -> MetaModule
+    {##
+     # locate the meta module by import specification
+     #}
     method locate( moduSpec ) pass
 
     locateByFile :: ( StringType ) -> MetaModule
+    {##
+     # locate the meta module by absolute path
+     #}
     method locateByFile( absFilePath ) pass
 
     diags :: ( MetaModule ) -> json![ json!DictType ]
+    {##
+     # obtain diagnostics generated during parsing and resolution of the module
+     #}
     method diags( modu ) pass
 
     defi :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
     -> json!DictType
+    {##
+     # obtain symbol definition at the specified location
+     #}
     method defi( modu, line, char ) pass
 
     hover :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
     -> json!DictType
+    {##
+     # obtain symbol documentation at the specified location
+     #}
     method hover( modu, line, char ) pass
 
     dotNota :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
