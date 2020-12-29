@@ -43,10 +43,10 @@ that
 super
 
 
-ns.
-
-ns@
+ns
 
 ns.f(
   ns.y + ns.x
 )
+
+ns

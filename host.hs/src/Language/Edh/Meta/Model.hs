@@ -394,9 +394,16 @@ instance ToLSP EL'AttrDoc where
       !mdContents = T.intercalate "\n***\n" $ T.intercalate "\n" <$> docs
 
 -- | collect all doc-comments from an attribute reference
-el'AttrDoc :: EL'AttrRef -> EL'AttrDoc
-el'AttrDoc ref@EL'UnsolvedRef {} = EL'AttrDoc (el'AttrRefSpan ref) []
-el'AttrDoc ref@(EL'AttrRef _maybeTgtRef _attr _ms !tip) = go [] tip
+el'AttrRefDoc :: EL'AttrRef -> EL'AttrDoc
+el'AttrRefDoc ref@EL'UnsolvedRef {} = EL'AttrDoc (el'AttrRefSpan ref) []
+el'AttrRefDoc ref@(EL'AttrRef _maybeTgtRef _attr _ms !tip) =
+  EL'AttrDoc (el'AttrRefSpan ref) $ el'AttrDoc tip
+
+el'AttrDefDoc :: EL'AttrDef -> EL'AttrDoc
+el'AttrDefDoc !tip = EL'AttrDoc (el'attr'def'focus tip) $ el'AttrDoc tip
+
+el'AttrDoc :: EL'AttrDef -> [DocComment]
+el'AttrDoc = go []
   where
     go !docs !def = case el'attr'def'doc def of
       Nothing -> go' docs
@@ -404,7 +411,7 @@ el'AttrDoc ref@(EL'AttrRef _maybeTgtRef _attr _ms !tip) = go [] tip
       where
         go' !docs' = case el'attr'def'value def of
           EL'External _ms !def' -> go docs' def'
-          _ -> EL'AttrDoc (el'AttrRefSpan ref) $! reverse docs'
+          _ -> reverse docs'
 
 data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
 

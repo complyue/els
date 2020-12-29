@@ -1252,7 +1252,9 @@ el'AnalyzeExpr
   !eas = el'RunTx eas $
     el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal _eas ->
       el'ResolveAttrAddr eas addr >>= \case
-        Nothing -> returnAsExpr
+        Nothing -> do
+          recordAttrRef eac $ EL'UnsolvedRef (Just tgtVal) addr'span
+          returnAsExpr
         Just !refKey -> case el'UltimateValue' mwip tgtVal of
           -- object instance attribute addressing
           (_valModu, srcVal@(EL'ObjVal !objModu !obj)) ->
@@ -1266,6 +1268,7 @@ el'AnalyzeExpr
                       addr'span
                       "no-obj-attr"
                       "no such object attribute"
+                    recordAttrRef eac $ EL'UnsolvedRef (Just srcVal) addr'span
                     returnAsExpr
                   Just !attrDef -> do
                     -- record as referencing symbol
@@ -1293,6 +1296,7 @@ el'AnalyzeExpr
                   addr'span
                   "no-cls-attr"
                   "no such class attribute"
+                recordAttrRef eac $ EL'UnsolvedRef (Just srcVal) addr'span
                 returnAsExpr
               Just !attrDef -> do
                 -- record as referencing symbol
@@ -1313,6 +1317,7 @@ el'AnalyzeExpr
                   addr'span
                   "no-apk-attr"
                   "no such named argument"
+                recordAttrRef eac $ EL'UnsolvedRef (Just srcVal) addr'span
                 returnAsExpr
               Just !attrVal -> case attrVal of
                 EL'External !valModu !valDef -> do
@@ -1322,9 +1327,10 @@ el'AnalyzeExpr
                     EL'AttrRef (Just srcVal) addr origModu origDef
 
                   el'Exit eas exit attrVal
-                _ ->
+                _ -> do
                   -- TODO should apk.kwargs store definitions instead? so here
                   -- a reference can be recorded
+                  recordAttrRef eac $ EL'UnsolvedRef (Just srcVal) addr'span
                   el'Exit eas exit attrVal
           --
 
@@ -3465,6 +3471,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
     !bwip = el'scope'branch'wip pwip
 
     !symName = AttrByName attr
+
 --
 
 -- the rest of expressions not analyzed
@@ -3843,68 +3850,107 @@ suggestCompletions ::
   Int ->
   Int ->
   EL'ResolvedModule ->
-  [CompletionItem]
+  STM [CompletionItem]
 suggestCompletions !line !char !modu =
   case locateAttrRefInModule line char modu of
     Just (EL'UnsolvedRef !maybeTgtVal !addr'span) -> case maybeTgtVal of
       Nothing ->
-        [ CompletionItem
-            "xxx"
-            "xxx xxx"
-            "go xxx"
-            False -- preselect
-            (TextEdit addr'span "xxx")
-        ]
-      Just !tgtVal ->
-        [ CompletionItem
-            "uuu"
-            "uuu uuu"
-            "go uuu"
-            False -- preselect
-            (TextEdit addr'span "uuu")
-        ]
+        return
+          [ CompletionItem
+              "xxx"
+              "xxx xxx"
+              "go xxx"
+              False -- preselect
+              (TextEdit addr'span "xxx")
+          ]
+      Just !tgtVal -> case tgtVal of
+        EL'ObjVal _ms !obj -> suggestObjArts obj addr'span
+        _ ->
+          return
+            [ CompletionItem
+                "uuu"
+                "uuu uuu"
+                "go uuu"
+                False -- preselect
+                (TextEdit addr'span "uuu")
+            ]
     Just (EL'AttrRef !maybeTgtVal (AttrAddrSrc _addr !addr'span) _ms _def) ->
       case maybeTgtVal of
         Nothing ->
-          [ CompletionItem
-              "zzz"
-              "zzz zzz"
-              "go zzz"
-              False -- preselect
-              (TextEdit addr'span "zzz")
-          ]
-        Just !tgtVal ->
-          [ CompletionItem
-              "uuu"
-              "uuu uuu"
-              "go uuu"
-              False -- preselect
-              (TextEdit addr'span "uuu")
-          ]
+          return
+            [ CompletionItem
+                "zzz"
+                "zzz zzz"
+                "go zzz"
+                False -- preselect
+                (TextEdit addr'span "zzz")
+            ]
+        Just !tgtVal -> case tgtVal of
+          EL'ObjVal _ms !obj -> suggestObjArts obj addr'span
+          _ ->
+            return
+              [ CompletionItem
+                  "uuu"
+                  "uuu uuu"
+                  "go uuu"
+                  False -- preselect
+                  (TextEdit addr'span "uuu")
+              ]
     --
 
     Nothing ->
-      [ CompletionItem
-          "this"
-          "this reference"
-          "address the contextual instance of current object"
-          False -- preselect
-          (TextEdit cursorInsertRng "this"),
-        CompletionItem
-          "that"
-          "that reference"
-          "address the end instance of current object"
-          False -- preselect
-          (TextEdit cursorInsertRng "that"),
-        CompletionItem
-          "super"
-          "super reference"
-          "to address super methods from current object"
-          False -- preselect
-          (TextEdit cursorInsertRng "super")
-      ]
+      return
+        [ CompletionItem
+            "this"
+            "this reference"
+            "address the contextual instance of current object"
+            False -- preselect
+            (TextEdit cursorInsertRng "this"),
+          CompletionItem
+            "that"
+            "that reference"
+            "address the end instance of current object"
+            False -- preselect
+            (TextEdit cursorInsertRng "that"),
+          CompletionItem
+            "super"
+            "super reference"
+            "to address super methods from current object"
+            False -- preselect
+            (TextEdit cursorInsertRng "super")
+        ]
   where
     !cursorPos = SrcPos line char
     !cursorInsertRng = SrcRange cursorPos cursorPos
+
+    suggestObjArts :: EL'Object -> SrcRange -> STM [CompletionItem]
+    suggestObjArts !obj (SrcRange !addr'start !addr'end) = do
+      !instAttrs <- iopdToList (el'obj'attrs obj)
+      let !clsAttrs = odToList (el'class'attrs cls)
+      -- TODO include mro
+      return $ suggestArt <$> instAttrs ++ clsAttrs
+      where
+        !cls = el'obj'class obj
+        !replace'span =
+          SrcRange addr'start $ -- LSP requires the TextEdit not span lines
+            if src'line addr'end /= src'line addr'start
+              then addr'start
+              else addr'end
+
+        suggestArt :: (AttrKey, EL'AttrDef) -> CompletionItem
+        suggestArt (!key, !def) =
+          CompletionItem
+            label
+            detail
+            mdContents
+            False -- preselect
+            (TextEdit replace'span label)
+          where
+            !label = attrKeyStr key
+            !detail = attrKeyStr $ el'attr'def'key def -- use better text
+            !mdContents =
+              T.intercalate "\n***\n" $
+                T.intercalate "\n"
+                  <$> el'AttrDoc def
 
 --

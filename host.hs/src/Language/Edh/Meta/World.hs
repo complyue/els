@@ -207,7 +207,7 @@ createMetaWorldClass !msClass !clsOuterScope =
         withThisHostObj ets $ \ !elw ->
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
-              case el'AttrDoc <$> locateAttrRefInModule line char resolved of
+              case el'AttrRefDoc <$> locateAttrRefInModule line char resolved of
                 Nothing -> exitEdh ets exit $ jsonArray []
                 Just !doc -> exitEdh ets exit $ toLSP doc
 
@@ -225,6 +225,5 @@ createMetaWorldClass !msClass !clsOuterScope =
         withThisHostObj ets $ \ !elw ->
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
-              exitEdh ets exit $
-                toLSP $
-                  suggestCompletions line char resolved
+              exitEdh ets exit . toLSP
+                =<< suggestCompletions line char resolved
