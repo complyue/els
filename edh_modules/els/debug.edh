@@ -4,4 +4,4 @@ import * 'net/repl'
 {##
  # the shared `WebRepl` instance for debugging of els
  #}
-export elsDebug = WebRepl( useSandbox= null$debug )
+export elsDebug = WebRepl()
