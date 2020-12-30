@@ -29,37 +29,31 @@ export method @'textDocument/completion' (
   case context of { CompletionContext( triggerKind, triggerCharacter ) } ->
   { return { go {
         modu = world.locateByFile( absFilePath )
-        # elsDebug.replHere()
+        perform lspRespond(
+          world.suggest( modu, line, character )
+        )
+        # case triggerKind of {
+        #   CompletionContext.TriggerCharacter -> case triggerCharacter of {
+        #     '.' -> perform lspRespond(
+        #       world.suggest( modu, line, character )
+        #     )
+        #     '@' -> perform lspRespond(
+        #       world.suggest( modu, line, character )
+        #     )
+        #     error( 'unexpected trigger char: ' ++ triggerCharacter )
+        #   }
 
-        case triggerKind of {
-          CompletionContext.TriggerCharacter -> case triggerCharacter of {
-            # '.' -> perform lspRespond(
-            #   world.suggest( modu, line, character )
-            # )
-            '.' -> perform lspRespond( {
-                cr = world.suggest( modu, line, character )
-                ; -1<|'cr: ' ++ cr
-                cr
-            } )
-            '@' -> perform lspRespond(
-              world.suggest( modu, line, character )
-            )
-            error( 'unexpected trigger char: ' ++ triggerCharacter )
-          }
+        #   CompletionContext.Invoked -> perform lspRespond(
+        #     world.suggest( modu, line, character )
+        #   )
 
-          CompletionContext.Invoked -> perform lspRespond( {
-              cr = world.suggest( modu, line, character )
-              ; -1<|'cr: ' ++ cr
-              cr
-          } )
+        #   CompletionContext.TriggerForIncompleteCompletions -> {
+        #  # todo err out instead?
+        #     perform lspRespond( world.suggest( modu, line, character ) )
+        #   }
 
-          CompletionContext.TriggerForIncompleteCompletions -> {
-            # todo err out instead?
-            perform lspRespond( world.suggest( modu, line, character ) )
-          }
-
-          error( 'unexpected trigger kind: ' ++ triggerKind )
-        }
+        #   error( 'unexpected trigger kind: ' ++ triggerKind )
+        # }
   } } }
   error( 'unexpected lsp params' )
 }
