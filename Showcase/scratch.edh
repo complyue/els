@@ -25,7 +25,13 @@ data D( x, y ) {
   }
 }
 
+
 d = D()
+
+d.
+p = 7
+
+p.s
 
 D.z
 
@@ -49,15 +55,7 @@ namespace ns ( x=3, z=5 ) {
 
 }
 
-this
-that
-super
-
-
-ns.@qqq ( 7 )
 
 ns.f(
   ns.y + ns.x
 )
-
-ns.y

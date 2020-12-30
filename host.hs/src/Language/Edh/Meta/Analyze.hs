@@ -1578,26 +1578,36 @@ el'AnalyzeExpr
                                         EL'AttrRef Nothing addr mwip shadowedDef
                                   recordAttrRef eac attrRef
 
+                        -- record as reference symbol, for completion
+                        recordAttrRef eac $
+                          EL'UnsolvedRef Nothing addr'span
                         -- record as definition symbol
                         recordAttrDef eac attrDef
                         el'Exit easDone exit rhVal
                       else case maybePrevDef of
                         Just !prevDef -> do
                           -- record as reference symbol
-                          let !attrRef = EL'AttrRef Nothing addr mwip prevDef
-                          recordAttrRef eac attrRef
+                          recordAttrRef eac $
+                            EL'AttrRef Nothing addr mwip prevDef
                           returnAsExpr easDone
                         Nothing -> do
                           -- record as definition symbol
                           recordAttrDef eac attrDef
                           returnAsExpr easDone
-            ExprSrc (AttrExpr (IndirectRef !tgtExpr !addr)) _expr'span ->
-              el'RunTx easDone $
-                el'AnalyzeExpr Nothing tgtExpr $ \_tgtVal !easDone' -> do
-                  -- TODO add to lh obj (esp. this) attrs for (=)
-                  --      other cases ?
-                  void $ el'ResolveAttrAddr easDone' addr
-                  returnAsExpr easDone'
+            ExprSrc
+              ( AttrExpr
+                  (IndirectRef !tgtExpr addr@(AttrAddrSrc _ !addr'span))
+                )
+              _expr'span ->
+                el'RunTx easDone $
+                  el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal !easDone' -> do
+                    -- record as reference symbol, for completion
+                    recordAttrRef eac $
+                      EL'UnsolvedRef (Just tgtVal) addr'span
+                    -- TODO add to lh obj (esp. this) attrs for (=)
+                    --      other cases ?
+                    void $ el'ResolveAttrAddr easDone' addr
+                    returnAsExpr easDone'
             ExprSrc (IndexExpr !idxExpr !tgtExpr) _expr'span ->
               el'RunTx easDone $
                 el'AnalyzeExpr Nothing idxExpr $
@@ -3871,103 +3881,95 @@ suggestCompletions ::
 suggestCompletions !line !char !modu =
   case locateAttrRefInModule line char modu of
     Just (EL'UnsolvedRef !maybeTgtVal !addr'span) -> case maybeTgtVal of
-      Nothing ->
-        return
-          [ CompletionItem
-              "xxx"
-              "xxx xxx"
-              "go xxx"
-              False -- preselect
-              (TextEdit addr'span "xxx")
-          ]
+      Nothing -> suggestArtsInScope addr'span
       Just !tgtVal -> case tgtVal of
         EL'ObjVal _ms !obj -> suggestObjArts obj addr'span
-        _ ->
-          return
-            [ CompletionItem
-                "uuu"
-                "uuu uuu"
-                "go uuu"
-                False -- preselect
-                (TextEdit addr'span "uuu")
-            ]
+        EL'ClsVal _ms !cls -> suggestClsArts cls addr'span
+        -- TODO support more
+        _ -> return []
     Just (EL'AttrRef !maybeTgtVal (AttrAddrSrc _addr !addr'span) _ms _def) ->
       case maybeTgtVal of
-        Nothing ->
-          return
-            [ CompletionItem
-                "zzz"
-                "zzz zzz"
-                "go zzz"
-                False -- preselect
-                (TextEdit addr'span "zzz")
-            ]
+        Nothing -> suggestArtsInScope addr'span
         Just !tgtVal -> case tgtVal of
           EL'ObjVal _ms !obj -> suggestObjArts obj addr'span
-          _ ->
-            return
-              [ CompletionItem
-                  "uuu"
-                  "uuu uuu"
-                  "go uuu"
-                  False -- preselect
-                  (TextEdit addr'span "uuu")
-              ]
+          EL'ClsVal _ms !cls -> suggestClsArts cls addr'span
+          -- TODO support more
+          _ -> return []
     --
 
-    Nothing ->
+    Nothing -> suggestArtsInScope cursorInsertRng
+  where
+    !cursorPos = SrcPos line char
+    !cursorInsertRng = SrcRange cursorPos cursorPos
+
+    -- LSP requires the TextEdit to not span multiple lines
+    replaceSpan :: SrcRange -> SrcRange
+    replaceSpan (SrcRange !addr'start !addr'end) =
+      SrcRange addr'start $
+        if src'line addr'end == src'line addr'start
+          then addr'end
+          else addr'start
+
+    suggestArtsInScope :: SrcRange -> STM [CompletionItem]
+    suggestArtsInScope !addr'span =
       return
         [ CompletionItem
             "this"
             "this reference"
             "address the contextual instance of current object"
             False -- preselect
-            (TextEdit cursorInsertRng "this"),
+            "this"
+            (TextEdit addr'span "this"),
           CompletionItem
             "that"
             "that reference"
             "address the end instance of current object"
             False -- preselect
-            (TextEdit cursorInsertRng "that"),
+            "that"
+            (TextEdit addr'span "that"),
           CompletionItem
             "super"
             "super reference"
             "to address super methods from current object"
             False -- preselect
-            (TextEdit cursorInsertRng "super")
+            "super"
+            (TextEdit addr'span "super")
         ]
-  where
-    !cursorPos = SrcPos line char
-    !cursorInsertRng = SrcRange cursorPos cursorPos
 
+    suggestMemberArt :: SrcRange -> (AttrKey, EL'AttrDef) -> CompletionItem
+    suggestMemberArt !replace'span (!key, !def) =
+      CompletionItem
+        label
+        detail
+        mdContents
+        False -- preselect
+        sortText
+        (TextEdit replace'span label)
+      where
+        !label = attrKeyStr key
+        !detail = attrKeyStr $ el'attr'def'key def -- use better text
+        !mdContents =
+          T.intercalate "\n***\n" $ T.intercalate "\n" <$> el'AttrDoc def
+        !sortText = case True of
+          True
+            | "__" `T.isPrefixOf` label ->
+              -- magic names, should seldom be written out
+              "999:" <> label
+          -- TODO more to categorize wrt sorting
+          _ -> "000:" <> label -- vanilla artifacts
     suggestObjArts :: EL'Object -> SrcRange -> STM [CompletionItem]
-    suggestObjArts !obj (SrcRange !addr'start !addr'end) = do
+    suggestObjArts !obj !addr'span = do
       !instAttrs <- iopdToList (el'obj'attrs obj)
       let !clsAttrs = odToList (el'class'attrs cls)
-      -- TODO include mro
-      return $ suggestArt <$> instAttrs ++ clsAttrs
+      -- TODO include mro, dedup
+      return $ suggestMemberArt (replaceSpan addr'span) <$> instAttrs ++ clsAttrs
       where
         !cls = el'obj'class obj
-        !replace'span =
-          SrcRange addr'start $ -- LSP requires the TextEdit not span lines
-            if src'line addr'end == src'line addr'start
-              then addr'end
-              else addr'start
 
-        suggestArt :: (AttrKey, EL'AttrDef) -> CompletionItem
-        suggestArt (!key, !def) =
-          CompletionItem
-            label
-            detail
-            mdContents
-            False -- preselect
-            (TextEdit replace'span label)
-          where
-            !label = attrKeyStr key
-            !detail = attrKeyStr $ el'attr'def'key def -- use better text
-            !mdContents =
-              T.intercalate "\n***\n" $
-                T.intercalate "\n"
-                  <$> el'AttrDoc def
+    suggestClsArts :: EL'Class -> SrcRange -> STM [CompletionItem]
+    suggestClsArts !cls !addr'span = do
+      let !clsAttrs = odToList (el'class'attrs cls)
+      -- TODO include mro, dedup
+      return $ suggestMemberArt (replaceSpan addr'span) <$> clsAttrs
 
 --

@@ -725,15 +725,17 @@ data CompletionItem = CompletionItem
     el'cmpl'detail :: !Text,
     el'cmpl'documentation :: !Text, -- in markdown format
     el'cmpl'preselect :: !Bool,
+    el'cmpl'sortText :: Text,
     el'cmpl'textEdit :: !TextEdit
   }
 
 instance ToLSP CompletionItem where
-  toLSP (CompletionItem !label !detail !doc !presel !te) =
+  toLSP (CompletionItem !label !detail !doc !presel !st !te) =
     jsonObject
       [ ("label", EdhString label),
         ("detail", EdhString detail),
         ("documentation", EdhString doc),
         ("preselect", EdhBool presel),
+        ("sortText", EdhString st),
         ("textEdit", toLSP te)
       ]
