@@ -2,6 +2,7 @@ module Language.Edh.Meta.Model where
 
 -- import           Debug.Trace
 
+import Control.Concurrent
 import Control.Concurrent.STM
 import Data.HashMap.Strict (HashMap)
 import Data.Hashable
@@ -200,7 +201,9 @@ data EL'ParsedModule = EL'ParsedModule
   }
 
 data EL'ResolvingModu = EL'ResolvingModu
-  { -- | all `extends` appeared in the direct scope and nested scopes (i.e.
+  { -- | the thread doing the resolving
+    el'resolving'thread :: !ThreadId,
+    -- | all `extends` appeared in the direct scope and nested scopes (i.e.
     -- super modules), up to time of analysis
     el'modu'exts'wip :: !(TVar [EL'Value]),
     -- | exports from this module up-to-time of analysis

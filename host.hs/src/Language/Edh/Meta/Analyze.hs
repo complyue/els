@@ -2,6 +2,7 @@ module Language.Edh.Meta.Analyze where
 
 -- import Debug.Trace
 
+import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
@@ -509,8 +510,16 @@ asModuleResolved !world !ms !exit =
     EL'ModuResolved !resolved -> exitEdhTx exit resolved
 
 asModuleResolving :: EL'World -> EL'ModuSlot -> EdhProc EL'ModuResolution
-asModuleResolving !world !ms !exit !ets =
+asModuleResolving !world !ms !exit !ets = do
+  !thId <- unsafeIOToSTM myThreadId
   tryReadTMVar resoVar >>= \case
+    Just reso@(EL'ModuResolving !resolving !resolvedVar) ->
+      if thId == el'resolving'thread resolving
+        then -- resolving synchronously by this thread, to wait is to deadlock
+          exitEdh ets exit reso
+        else -- resolving by another thread, let's wait its result
+          readTMVar resolvedVar >>= exitEdh ets exit . EL'ModuResolved
+    Just !reso -> exitEdh ets exit reso
     Nothing -> do
       !resolvedVar <- newEmptyTMVar
       !exts <- newTVar []
@@ -520,6 +529,7 @@ asModuleResolving !world !ms !exit !ets =
       !dependants <- newTVar Map.empty
       let !resolving =
             EL'ResolvingModu
+              thId
               exts
               exps
               dependencies
@@ -549,7 +559,6 @@ asModuleResolving !world !ms !exit !ets =
 
         -- return from this procedure
         exitEdh ets exit $ EL'ModuResolved resolved
-    Just !reso -> exitEdh ets exit reso
   where
     !resoVar = el'modu'resolution ms
 
