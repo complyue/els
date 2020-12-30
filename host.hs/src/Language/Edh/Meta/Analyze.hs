@@ -422,7 +422,7 @@ parseModuleOnDisk moduDoc@(SrcDoc !moduFile) !exit !ets =
 -- | fill in module source on the fly, usually pending save from an IDE editor
 --
 -- todo track document version to cancel parsing attempts for old versions
-el'FillModuleSource :: Text -> EL'ModuSlot -> EdhProc EL'ParsedModule
+el'FillModuleSource :: Text -> EL'ModuSlot -> EdhProc ()
 el'FillModuleSource !moduSource !ms !exit !ets =
   -- invalidate parsing/resolution results of this module and all dependants
   runEdhTx ets $
@@ -435,46 +435,54 @@ el'FillModuleSource !moduSource !ms !exit !ets =
       -- concurrently, so no duplicate effort would incur here
       putTMVar parsingVar (EL'ModuParsing parsedVar)
 
-      -- parse & install the result
-      doParseModule $ \ !parsed -> do
-        putTMVar parsedVar parsed
-        tryTakeTMVar parsingVar >>= \case
-          Just (EL'ModuParsing parsedVar')
-            | parsedVar' == parsedVar ->
-              -- the most expected scenario
-              putTMVar parsingVar $ EL'ModuParsed parsed
-          -- invalidated & new analysation wip
-          Just !other -> putTMVar parsingVar other
-          -- invalidated meanwhile
-          _ -> return ()
+      let installResult !parsed = do
+            putTMVar parsedVar parsed
+            tryTakeTMVar parsingVar >>= \case
+              Just (EL'ModuParsing parsedVar')
+                | parsedVar' == parsedVar ->
+                  -- the most expected scenario
+                  putTMVar parsingVar $ EL'ModuParsed parsed
+              Just !other ->
+                -- invalidated & new analysation wip
+                putTMVar parsingVar other
+              _ ->
+                -- invalidated meanwhile
+                return ()
 
-        -- return from this procedure
-        exitEdh ets exit parsed
+          doParseModule :: EdhTx
+          doParseModule !etsParse = do
+            -- parse & install the result
+            -- catch any exception for the parsing, wrap as diagnostics
+            edhCatch
+              etsParse
+              (parseModuleSource moduSource $ el'modu'doc ms)
+              installResult
+              $ \ !etsCatching !exv !recover !rethrow -> case exv of
+                EdhNil -> rethrow nil
+                _ -> edhValueDesc etsCatching exv $ \ !exDesc ->
+                  recover $
+                    EL'ParsedModule
+                      Nothing
+                      []
+                      [ el'Diag
+                          el'Error
+                          noSrcRange
+                          "err-parse"
+                          exDesc
+                      ]
+
+      -- perform the parsing in a separate thread, return as soon as the target
+      -- module is invalidated, and we have initiated the parsing.
+      -- it is essential for us to return only after the parsing placeholder
+      -- (i.e. putting into @parsingVar@) is installed, or subsequent lsp
+      -- request may cause another parsing initiated against the file on disk.
+      forkEdh id doParseModule exit ets
   where
     !parsingVar = el'modu'parsing ms
 
-    doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
-    doParseModule !exit' = edhCatch
-      ets
-      (parseModuleSource moduSource $ el'modu'doc ms)
-      exit'
-      $ \ !etsCatching !exv !recover !rethrow -> case exv of
-        EdhNil -> rethrow nil
-        _ -> edhValueDesc etsCatching exv $ \ !exDesc ->
-          recover $
-            EL'ParsedModule
-              Nothing
-              []
-              [ el'Diag
-                  el'Error
-                  noSrcRange
-                  "err-parse"
-                  exDesc
-              ]
-
 parseModuleSource :: Text -> SrcDoc -> EdhProc EL'ParsedModule
 parseModuleSource !moduSource (SrcDoc !moduFile) !exit !ets =
-  -- TODO use partial parser, and gather diags
+  -- TODO perform partial parsing, and gather diags
   parseEdh world moduFile moduSource >>= \case
     Left !err -> do
       let !msg = T.pack $ errorBundlePretty err

@@ -41,6 +41,10 @@ export {
 
     {##
      # fill some source on-the-fly
+     #
+     # this procedure returns immediately after this module is invalidated and
+     # parsing against the supplied source initiated, it forks a separate
+     # thread (goroutine) to perform the actual parsing.
      #}
     method fill( srcOTF ) pass
 

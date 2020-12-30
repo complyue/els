@@ -35,17 +35,17 @@ export method @'textDocument/didChange' (
     error( 'too many changes' )
   }
 
-  # try parse & resolve then publish the diagnostics asynchronously,
-  # to not block subsequent requests from the lsp client
-  case textDocument of { TxtDocFile ( absFilePath ) } -> { go {
-      moduChgd = world.locateByFile( absFilePath )
-      moduChgd.fill( fullTxt )
-      perform lspNotify( 'textDocument/publishDiagnostics',
+  case textDocument of { TxtDocFile ( absFilePath ) } -> {
+    moduChgd = world.locateByFile( absFilePath )
+    moduChgd.fill( fullTxt ) # this returns immediately after it's invalidated
+    # then obtain and publish the diags in a separate thread (goroutine)
+    # to not block subsequent requests from the lsp client
+    go { perform lspNotify( 'textDocument/publishDiagnostics',
         uri= textDocument[ 'uri' ],
         version= textDocument[ 'version' ],
         diagnostics= world.diags( moduChgd ),
-      )
-  } }
+    ) }
+  }
 }
 
 
