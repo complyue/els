@@ -1364,12 +1364,12 @@ el'AnalyzeExpr
             --  * tgt with annotated type
             --
             -- then warn otherwise not resolvable
-            -- el'LogDiag
-            --   diags
-            --   el'Warning
-            --   addr'span
-            --   "unknown-attr"
-            --   "possible misspelled attribute"
+            el'LogDiag
+              diags
+              el'Warning
+              addr'span
+              "unknown-member"
+              "possible misspelled member reference"
             --
 
             -- record as unsolved referencing symbol, or completion will list
