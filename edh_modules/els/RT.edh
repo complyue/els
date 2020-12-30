@@ -28,18 +28,37 @@ export {
    #}
   method sendTextToFd( fd, txt ) pass
 
+  {##
+   # an Edh module at analyze time
+   #}
   class MetaModule {
 
-    method invalidate() pass
+    {##
+     # invalidate the module resolution
+     # also invalidate the parsing result if `srcChanged` is true
+     #}
+    method invalidate( srcChanged= false ) pass
 
-    method fill( src ) pass
+    {##
+     # fill some source on-the-fly
+     #}
+    method fill( srcOTF ) pass
 
+    {##
+     # EPM home this moduel belongs to
+     #}
     property$ method home() pass
 
+    {##
+     # absolute path of the module's source file
+     #}
     property$ method doc() pass
 
   }
 
+  {##
+   # an Edh world at analyze time
+   #}
   class MetaWorld {
 
     locate :: ( StringType ) -> MetaModule
@@ -83,7 +102,15 @@ export {
 
   }
 
+  {##
+   # the networked language server
+   #}
   class LangServer {
+
+    method __init__(
+      port= 1707, port'max= port, addr= '127.0.0.1',
+      modu= 'els/serve', init= None,
+    ) pass
 
     method addrs() pass
     method eol() pass
