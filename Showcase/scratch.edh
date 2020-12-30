@@ -1,61 +1,39 @@
 
 symbol @qqq
 
-case 5 of { i } -> i
+# ; @qqq = 5
 
 x = 1
 
-x += 2
 
-x *= 5
+x + z
 
-f = () => {
-  x = 9
-  y = g( x )
-  return y - 3
+
+; @qqq = 5
+
+namespace ns () {
+
+  gg = 7
+
 }
 
-g = ( x ) => {
-  return x + i
-}
+let ( y, z ) = ( 3, 2 )
 
-data D( x, y ) {
-  method z() {
-    this.x + this.y
-  }
-}
+method f( x ) {
 
+  d = 5
 
-d = D()
+  # d += x
 
-d.
-p = 7
-
-p.s
-
-D.z
-
-d.x * d.y - d.z()
-
-case d of { D( x= x', y= y' ) = d' } -> {
-  x' + y' - d'.z()
-}
-
-namespace ns ( x=3, z=5 ) {
-  {## the y is sth ...   #}
-  y = x * z
-
-  {## f() takes a number ... #}
-  method f( n ) n * x + 1
-
-  {## qqq is ...
-   #
-   #}
-  ; @qqq = x => x - 5
+  uu = 3
 
 }
 
 
-ns.f(
-  ns.y + ns.x
-)
+# ; @qqq = 5
+
+ns.gg
+
+; @qqq
+
+; @qqq = 5

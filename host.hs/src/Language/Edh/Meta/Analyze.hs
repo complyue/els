@@ -663,7 +663,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
   !moduAttrs <- iopdClone branchAttrs
   !moduEffs <- iopdEmpty
   !moduAnnos <- iopdEmpty
-  !branchRegions <- newTVar [EL'RegionWIP beginningSrcPos builtinAttrs]
+  !branchRegions <- newTVar [EL'Region beginningSrcPos builtinAttrs]
   !moduScopes <- newTVar []
   !moduRegions <- newTVar []
   let !moduObj =
@@ -710,14 +710,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
           !swipDone = el'ctx'scope eacDone
           !pwipDone = el'ProcWIP swipDone
           !bwipDone = el'scope'branch'wip pwipDone
-      !regions'wip <-
-        fmap
-          ( \(EL'RegionWIP !reg'start !reg'arts) ->
-              EL'Region
-                (SrcRange reg'start moduEnd)
-                reg'arts
-          )
-          <$> readTVar (el'branch'regions'wip bwipDone)
+      !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
       !innerScopes <- readTVar moduScopes
       !regions <-
         (regions'wip ++)
@@ -730,9 +723,9 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !dependencies <- readTVar $ el'modu'dependencies'wip resolving
       let !el'scope =
             EL'Scope
-              { el'scope'span = SrcRange beginningSrcPos moduEnd,
+              { el'scope'span = SrcRange beginningSrcPos (SrcPos (-1) (-1)),
                 el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                el'scope'regions = V.fromList $! reverse regions
+                el'scope'regions = V.fromList $ sortOn regionKey regions
               }
       exitEdh ets exit $
         EL'ResolvedModule
@@ -743,13 +736,6 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
           (reverse diags)
           dependencies
           (el'resolving'dependants resolving)
-  where
-    moduEnd :: SrcPos
-    moduEnd = go body
-      where
-        go [] = beginningSrcPos
-        go [StmtSrc _ !last'stmt'span] = src'end last'stmt'span
-        go (_ : rest'stmts) = go rest'stmts
 
 -- | pack arguments
 el'PackArgs :: ArgsPacker -> EL'Analysis EL'ArgsPack
@@ -834,7 +820,7 @@ el'AnalyzeStmt
             -- record a region after this let statement, for current branch
             iopdSnapshot (el'branch'attrs'wip bwip)
               >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-                . EL'RegionWIP (src'end stmt'span)
+                . EL'Region (src'end stmt'span)
 
             el'Exit eas exit $ EL'Const nil
     where
@@ -859,7 +845,7 @@ el'AnalyzeStmt
           -- record a region after this let statement, for current scope
           iopdSnapshot (el'branch'attrs'wip bwip)
             >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-              . EL'RegionWIP (src'end stmt'span)
+              . EL'Region (src'end stmt'span)
 
           el'Exit eas exit $ EL'Const nil
 
@@ -1133,14 +1119,7 @@ el'AnalyzeExpr _docCmt (ExprSrc (BlockExpr !stmts) !blk'span) !exit !eas =
                 !pwipDone = el'ProcWIP swipDone
                 !bwipDone = el'scope'branch'wip pwipDone
             -- close all pending regions
-            !regions'wip <-
-              fmap
-                ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                    EL'Region
-                      (SrcRange reg'start (src'end blk'span))
-                      reg'arts
-                )
-                <$> swapTVar (el'branch'regions'wip bwipDone) []
+            !regions'wip <- swapTVar (el'branch'regions'wip bwipDone) []
             modifyTVar' (el'scope'regions'wip pwipDone) (regions'wip ++)
 
             el'Exit eas exit blkResult
@@ -1165,7 +1144,7 @@ el'AnalyzeExpr _docCmt (ExprSrc (BlockExpr !stmts) !blk'span) !exit !eas =
             !attrs <- iopdSnapshot branch'attrs
             modifyTVar'
               (el'branch'regions'wip bwipDone)
-              (EL'RegionWIP (src'end blk'span) attrs :)
+              (EL'Region (src'end blk'span) attrs :)
 
           el'Exit easDone exit blkResult
 --
@@ -1390,11 +1369,7 @@ el'AnalyzeExpr
 el'AnalyzeExpr
   !docCmt
   xsrc@( ExprSrc
-           ( InfixExpr
-               !opSym
-               lhExpr@(ExprSrc !lhx !lh'span)
-               rhExpr@(ExprSrc _rhx !rh'span)
-             )
+           (InfixExpr !opSym lhExpr@(ExprSrc !lhx !lh'span) !rhExpr)
            !expr'span
          )
   !exit
@@ -1537,7 +1512,7 @@ el'AnalyzeExpr
                             iopdDelete attrKey attrs
                             iopdSnapshot attrs
                               >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-                                . EL'RegionWIP (src'end expr'span)
+                                . EL'Region (src'end expr'span)
                           else do
                             iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
                             iopdInsert attrKey attrDef attrs
@@ -1548,7 +1523,7 @@ el'AnalyzeExpr
                                 iopdSnapshot attrs
                                   >>= modifyTVar' (el'branch'regions'wip bwip)
                                     . (:)
-                                    . EL'RegionWIP (src'end expr'span)
+                                    . EL'Region (src'end expr'span)
                               _ -> pure ()
                     when (el'ctx'exporting eac) $
                       iopdInsert attrKey attrDef $
@@ -1787,14 +1762,7 @@ el'AnalyzeExpr
                             el'Exit easDone exit $ EL'Expr xsrc
                           _ -> do
                             -- this branch closes
-                            !regions <-
-                              fmap
-                                ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                                    EL'Region
-                                      (SrcRange reg'start (src'end rh'span))
-                                      reg'arts
-                                )
-                                <$> readTVar branchRegions
+                            !regions <- readTVar branchRegions
                             modifyTVar' (el'scope'regions'wip pwip) (regions ++)
                             el'Exit eas exit $ EL'Expr xsrc
 
@@ -2529,7 +2497,7 @@ el'AnalyzeExpr
         -- record a region after this import, for current scope
         iopdSnapshot (el'branch'attrs'wip bwip)
           >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-            . EL'RegionWIP (src'end expr'span)
+            . EL'Region (src'end expr'span)
         where
           !localTgt =
             if el'ctx'eff'defining eac
@@ -2854,14 +2822,7 @@ el'AnalyzeExpr
             !swipDone = el'ctx'scope eacDone
             !pwipDone = el'ProcWIP swipDone
             !bwipDone = el'scope'branch'wip pwipDone
-        !regions'wip <-
-          fmap
-            ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                EL'Region
-                  (SrcRange reg'start (src'end body'span))
-                  reg'arts
-            )
-            <$> readTVar (el'branch'regions'wip bwipDone)
+        !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
         !innerScopes <- readTVar clsScopes
         !regions <-
           (regions'wip ++)
@@ -2922,7 +2883,7 @@ el'AnalyzeExpr
                   -- record a region after this definition for current scope
                   iopdSnapshot attrs
                     >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
-                      . EL'RegionWIP (src'end expr'span)
+                      . EL'Region (src'end expr'span)
 
               when (el'ctx'exporting eac) $
                 iopdInsert clsName clsDef $
@@ -3029,7 +2990,7 @@ el'AnalyzeExpr
       -- record a region starting from beginning of the body
       iopdSnapshot nsAttrs
         >>= modifyTVar' branchRegions . (:)
-          . EL'RegionWIP (src'start body'span)
+          . EL'Region (src'start body'span)
 
       el'RunTx easNs $
         el'AnalyzeStmts [ns'body] $ \_ !easDone -> do
@@ -3037,14 +2998,7 @@ el'AnalyzeExpr
               !swipDone = el'ctx'scope eacDone
               !pwipDone = el'ProcWIP swipDone
               !bwipDone = el'scope'branch'wip pwipDone
-          !regions'wip <-
-            fmap
-              ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                  EL'Region
-                    (SrcRange reg'start (src'end body'span))
-                    reg'arts
-              )
-              <$> readTVar (el'branch'regions'wip bwipDone)
+          !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
 
           -- update annotations for arguments from body
           forM_ argArts $ \(!argName, !argDef) ->
@@ -3108,7 +3062,7 @@ el'AnalyzeExpr
                     iopdSnapshot attrs
                       >>= modifyTVar' (el'branch'regions'wip outerBranch)
                         . (:)
-                        . EL'RegionWIP (src'end expr'span)
+                        . EL'Region (src'end expr'span)
 
                 when (el'ctx'exporting eac) $
                   iopdInsert nsName nsDef $
@@ -3223,14 +3177,7 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
             !swipDone = el'ctx'scope eacDone
             !pwipDone = el'ProcWIP swipDone
             !bwipDone = el'scope'branch'wip pwipDone
-        !regions'wip <-
-          fmap
-            ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                EL'Region
-                  (SrcRange reg'start (src'end blk'span))
-                  reg'arts
-            )
-            <$> readTVar (el'branch'regions'wip bwipDone)
+        !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
         !innerScopes <- readTVar blkScopes
         !regions <-
           (regions'wip ++)
@@ -3310,7 +3257,7 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas0 =
             !attrs <- iopdSnapshot branch'attrs
             modifyTVar'
               (el'branch'regions'wip bwip)
-              (EL'RegionWIP (src'end expr'span) attrs :)
+              (EL'Region (src'end expr'span) attrs :)
 
           el'Exit eas exit $ EL'Expr x
 --
@@ -3331,7 +3278,7 @@ el'AnalyzeExpr
       -- record a region before the loop body for current scope
       iopdSnapshot attrs
         >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-          . EL'RegionWIP (src'start body'span)
+          . EL'Region (src'start body'span)
 
     el'RunTx eas $
       el'AnalyzeExpr Nothing it $
@@ -3342,7 +3289,7 @@ el'AnalyzeExpr
             !scope'attrs <- iopdSnapshot (el'scope'attrs'wip pwip)
             modifyTVar'
               (el'branch'regions'wip bwip)
-              (EL'RegionWIP (src'end body'span) scope'attrs :)
+              (EL'Region (src'end body'span) scope'attrs :)
 
             el'Exit eas exit $ EL'Expr x
     where
@@ -3484,7 +3431,7 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
       -- record a region after this definition for current scope
       iopdSnapshot attrs
         >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-          . EL'RegionWIP (src'end expr'span)
+          . EL'Region (src'end expr'span)
 
       when (el'ctx'exporting eac) $
         iopdInsert symName symDef $ el'obj'exps $ el'scope'this'obj pwip
@@ -3560,7 +3507,7 @@ el'DefineMethod
               -- record a region after this definition for current scope
               iopdSnapshot attrs
                 >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
-                  . EL'RegionWIP (src'end body'span)
+                  . EL'Region (src'end body'span)
 
           when (el'ctx'exporting eac) $
             iopdInsert mthName mthDef $
@@ -3630,14 +3577,7 @@ el'DefineMethod
                 !swipDone = el'ctx'scope eacDone
                 !pwipDone = el'ProcWIP swipDone
                 !bwipDone = el'scope'branch'wip pwipDone
-            !regions'wip <-
-              fmap
-                ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                    EL'Region
-                      (SrcRange reg'start (src'end body'span))
-                      reg'arts
-                )
-                <$> readTVar (el'branch'regions'wip bwipDone)
+            !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
             !innerScopes <- readTVar mthScopes
             !regions <-
               (regions'wip ++)
@@ -3752,14 +3692,7 @@ el'DefineArrowProc
                 !swipDone = el'ctx'scope eacDone
                 !pwipDone = el'ProcWIP swipDone
                 !bwipDone = el'scope'branch'wip pwipDone
-            !regions'wip <-
-              fmap
-                ( \(EL'RegionWIP !reg'start !reg'arts) ->
-                    EL'Region
-                      (SrcRange reg'start (src'end body'span))
-                      reg'arts
-                )
-                <$> readTVar (el'branch'regions'wip bwipDone)
+            !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
             !innerScopes <- readTVar mthScopes
             !regions <-
               (regions'wip ++)
@@ -3912,32 +3845,38 @@ suggestCompletions !line !char !modu =
 
     suggestArtsInScope :: SrcRange -> STM [CompletionItem]
     suggestArtsInScope !addr'span =
-      return
-        [ CompletionItem
-            "this"
-            "this reference"
-            "address the contextual instance of current object"
-            False -- preselect
-            "this"
-            (TextEdit addr'span "this"),
-          CompletionItem
-            "that"
-            "that reference"
-            "address the end instance of current object"
-            False -- preselect
-            "that"
-            (TextEdit addr'span "that"),
-          CompletionItem
-            "super"
-            "super reference"
-            "to address super methods from current object"
-            False -- preselect
-            "super"
-            (TextEdit addr'span "super")
-        ]
+      return $
+        (++ intrinsicSuggestions) $
+          suggestScopeArt replace'span
+            <$> collectArtsInScopeAt cursorPos (el'modu'scope modu)
+      where
+        !replace'span = replaceSpan addr'span
+        !intrinsicSuggestions =
+          [ CompletionItem
+              "this"
+              "this reference"
+              "address the contextual instance of current object"
+              False -- preselect
+              "100:this" -- sort text
+              (TextEdit replace'span "this"),
+            CompletionItem
+              "that"
+              "that reference"
+              "address the end instance of current object"
+              False -- preselect
+              "100:that" -- sort text
+              (TextEdit replace'span "that"),
+            CompletionItem
+              "super"
+              "super reference"
+              "to address super methods from current object"
+              False -- preselect
+              "100:super" -- sort text
+              (TextEdit replace'span "super")
+          ]
 
-    suggestMemberArt :: SrcRange -> (AttrKey, EL'AttrDef) -> CompletionItem
-    suggestMemberArt !replace'span (!key, !def) =
+    suggestScopeArt :: SrcRange -> (AttrKey, EL'AttrDef) -> CompletionItem
+    suggestScopeArt !replace'span (!key, !def) =
       CompletionItem
         label
         detail
@@ -3957,19 +3896,52 @@ suggestCompletions !line !char !modu =
               "999:" <> label
           -- TODO more to categorize wrt sorting
           _ -> "000:" <> label -- vanilla artifacts
+          --
+
+    --
+    suggestMemberArt :: Text -> SrcRange -> (AttrKey, EL'AttrDef) -> CompletionItem
+    suggestMemberArt !typeName !replace'span (!key, !def) =
+      CompletionItem
+        label
+        detail
+        mdContents
+        False -- preselect
+        sortText
+        (TextEdit replace'span label)
+      where
+        !label = attrKeyStr key
+        !detail = typeName <> "." <> attrKeyStr (el'attr'def'key def)
+        !mdContents =
+          T.intercalate "\n***\n" $ T.intercalate "\n" <$> el'AttrDoc def
+        !sortText = case True of
+          True
+            | "__" `T.isPrefixOf` label ->
+              -- magic names, should seldom be written out
+              "999:" <> label
+          -- TODO more to categorize wrt sorting
+          _ -> "000:" <> label -- vanilla artifacts
+
+    --
     suggestObjArts :: EL'Object -> SrcRange -> STM [CompletionItem]
     suggestObjArts !obj !addr'span = do
       !instAttrs <- iopdToList (el'obj'attrs obj)
       let !clsAttrs = odToList (el'class'attrs cls)
       -- TODO include mro, dedup
-      return $ suggestMemberArt (replaceSpan addr'span) <$> instAttrs ++ clsAttrs
+      return $
+        suggestMemberArt typeName (replaceSpan addr'span)
+          <$> instAttrs ++ clsAttrs
       where
         !cls = el'obj'class obj
+        !typeName = attrKeyStr $ el'class'name cls
 
     suggestClsArts :: EL'Class -> SrcRange -> STM [CompletionItem]
     suggestClsArts !cls !addr'span = do
       let !clsAttrs = odToList (el'class'attrs cls)
       -- TODO include mro, dedup
-      return $ suggestMemberArt (replaceSpan addr'span) <$> clsAttrs
+      return $
+        suggestMemberArt typeName (replaceSpan addr'span)
+          <$> clsAttrs
+      where
+        !typeName = attrKeyStr $ el'class'name cls
 
 --

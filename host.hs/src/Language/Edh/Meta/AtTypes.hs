@@ -143,14 +143,7 @@ data EL'BranchWIP = EL'BranchWIP
     -- up to time of analysis
     el'branch'annos'wip :: !(IOPD AttrKey EL'AttrAnno),
     -- | open regions lately
-    el'branch'regions'wip :: !(TVar [EL'RegionWIP])
-  }
-
-data EL'RegionWIP = EL'RegionWIP
-  { -- | start position of the region
-    el'region'wip'start :: !SrcPos,
-    -- | artifacts available in the region
-    el'region'attrs'wip :: !EL'Artifacts
+    el'branch'regions'wip :: !(TVar [EL'Region])
   }
 
 recordAttrDef :: EL'Context -> EL'AttrDef -> STM ()

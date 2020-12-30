@@ -1,6 +1,6 @@
 module Language.Edh.Meta.Model where
 
--- import           Debug.Trace
+-- import Debug.Trace
 
 import Control.Concurrent
 import Control.Concurrent.STM
@@ -659,13 +659,54 @@ el'ScopeAttrs =
     . V.toList
     . el'scope'regions
 
+collectArtsInScopeAt :: SrcPos -> EL'Scope -> [(AttrKey, EL'AttrDef)]
+collectArtsInScopeAt !pos !tip = case go [] tip of
+  Left !outers ->
+    concat $
+      odToList . el'ScopeAttrs <$> outers
+  Right (!outers, EL'Region _ !reg'arts) ->
+    concat $
+      odToList reg'arts :
+      (odToList . el'ScopeAttrs <$> outers)
+  where
+    go :: [EL'Scope] -> EL'Scope -> Either [EL'Scope] ([EL'Scope], EL'Region)
+    go !outers scope@(EL'Scope !scope'span !inners !regions) =
+      case srcPosCmp2Range pos scope'span of
+        LT -> Left outers
+        GT -> Left outers
+        EQ -> case searchInners (V.toList inners) of
+          Just !region -> Right (scope : outers, region)
+          Nothing -> case locateRegion Nothing (V.toList regions) of
+            Nothing -> Left outers
+            Just !region -> Right (outers, region)
+
+    -- TODO use binary search for performance
+    locateRegion :: Maybe EL'Region -> [EL'Region] -> Maybe EL'Region
+    locateRegion !prev [] = prev
+    locateRegion !prev (r : rest) = case compare pos $ el'region'start r of
+      LT -> prev
+      EQ -> locateRegion (Just r) rest
+      GT -> locateRegion (Just r) rest
+
+    -- TODO use binary search for performance
+    searchInners :: [EL'Scope] -> Maybe EL'Region
+    searchInners [] = Nothing
+    searchInners (s : rest) =
+      case srcPosCmp2Range pos $ el'scope'span s of
+        LT -> Nothing
+        EQ -> locateRegion Nothing (V.toList $ el'scope'regions s)
+        GT -> searchInners rest
+
 -- | a region records attributes available within it
 data EL'Region = EL'Region
-  { el'region'span :: !SrcRange,
+  { el'region'start :: !SrcPos,
     -- | available attributes defined in this region
     el'region'attrs :: !EL'Artifacts
   }
   deriving (Show)
+
+regionKey :: EL'Region -> SrcPos
+regionKey = el'region'start
 
 type EL'Artifacts = OrderedDict AttrKey EL'AttrDef
 
