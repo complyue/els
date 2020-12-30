@@ -3933,9 +3933,9 @@ suggestCompletions !line !char !modu =
         !cls = el'obj'class obj
         !replace'span =
           SrcRange addr'start $ -- LSP requires the TextEdit not span lines
-            if src'line addr'end /= src'line addr'start
-              then addr'start
-              else addr'end
+            if src'line addr'end == src'line addr'start
+              then addr'end
+              else addr'start
 
         suggestArt :: (AttrKey, EL'AttrDef) -> CompletionItem
         suggestArt (!key, !def) =
