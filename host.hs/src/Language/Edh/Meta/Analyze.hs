@@ -3775,7 +3775,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
     go !args (ar : rest) = case ar of
       RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
         Nothing -> defArgArt argAddr maybeDef
-        Just (DirectRef !argAddr') -> defArgArt argAddr' Nothing
+        Just (DirectRef !argAddr') -> defArgArt argAddr' maybeDef
         Just _otherRename -> go args rest -- TODO elaborate? esp. `as this.xxx`
       RecvRestPkArgs !argAddr -> defArgArt argAddr Nothing
       RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
