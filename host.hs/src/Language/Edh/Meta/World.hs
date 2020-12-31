@@ -100,10 +100,18 @@ createMetaWorldClass !msClass !clsOuterScope =
         el'LocateModule bootstrapWorld "batteries/meta" $
           \ !msMeta -> asModuleResolved bootstrapWorld msMeta $
             \ !resolvedMeta _ets -> do
-              -- log all parsing/resolution diags
-              -- TODO only do so when debug
-              el'WalkParsingDiags msMeta $ logDiags "Đ syntax"
-              el'WalkResolutionDiags msMeta $ logDiags "Đ semantics"
+              when
+                ( consoleLogLevel
+                    ( edh'world'console $
+                        edh'prog'world $
+                          edh'thread'prog etsCtor
+                    )
+                    <= 10
+                )
+                $ do
+                  -- log all parsing/resolution diags
+                  el'WalkParsingDiags msMeta $ logDiags "Đ syntax"
+                  el'WalkResolutionDiags msMeta $ logDiags "Đ semantics"
               -- make the meta scope for ambient of all modules
               let !metaRootScope = el'modu'scope resolvedMeta
                   !ambient = odMap metaDef (el'ScopeAttrs metaRootScope)
