@@ -1530,7 +1530,7 @@ el'AnalyzeExpr
                         el'obj'exps $ el'scope'this'obj pwip
                     --
 
-                    if "=" == opSym || ":=" == opSym
+                    if "=" == opSym || ":=" == opSym -- "?=" goes otherwise
                       then do
                         -- check if it shadows attr from outer scopes
                         case swip of
@@ -1579,9 +1579,37 @@ el'AnalyzeExpr
                     -- record as reference symbol, for completion
                     recordAttrRef eac $
                       EL'UnsolvedRef (Just tgtVal) addr'span
-                    -- TODO add to lh obj (esp. this) attrs for (=)
-                    --      other cases ?
-                    void $ el'ResolveAttrAddr easDone' addr
+                    el'ResolveAttrAddr easDone' addr >>= \case
+                      Nothing ->
+                        -- record as reference symbol, for completion
+                        recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
+                      Just !attrKey ->
+                        case tgtVal of
+                          EL'ObjVal _ms !obj -> do
+                            let !cls = el'obj'class obj
+                                !objAttrs = el'obj'attrs obj
+                            !maybePrevDef <- el'ResolveObjAttr obj attrKey
+                            case maybePrevDef of
+                              Just !prevDef ->
+                                -- record as reference symbol
+                                recordAttrRef eac $
+                                  EL'AttrRef Nothing addr mwip prevDef
+                              Nothing -> pure ()
+                            !attrAnno <-
+                              newTVar $ odLookup attrKey $ el'class'annos cls
+                            let !attrDef =
+                                  EL'AttrDef
+                                    attrKey
+                                    docCmt
+                                    opSym
+                                    addr'span
+                                    xsrc
+                                    rhVal
+                                    attrAnno
+                                    maybePrevDef
+                            iopdInsert attrKey attrDef objAttrs
+                          -- TODO more to do?
+                          _ -> pure ()
                     returnAsExpr easDone'
             ExprSrc (IndexExpr !idxExpr !tgtExpr) _expr'span ->
               el'RunTx easDone $
@@ -2830,6 +2858,7 @@ el'AnalyzeExpr
 
         !cls'exts <- readTVar clsExts
         !cls'exps <- iopdSnapshot clsExps
+        !cls'annos <- iopdSnapshot clsAnnos
         let !cls'scope =
               EL'Scope
                 { el'scope'span = body'span,
@@ -2854,6 +2883,7 @@ el'AnalyzeExpr
                     cls'scope
                     (el'ScopeAttrs cls'scope)
                     cls'exps
+                    cls'annos
                     instAttrs
                     instExts
                     instExps

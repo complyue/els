@@ -530,6 +530,8 @@ data EL'Class = EL'Class
     el'class'attrs :: !EL'Artifacts,
     -- | attributes exported from the class defining procedure
     el'class'exps :: !EL'Artifacts,
+    -- | annotations from the class defining procedure
+    el'class'annos :: !(OrderedDict AttrKey EL'AttrAnno),
     -- | instance attributes ever assigned via @this.xxx@ from methods (esp.
     -- @__init__()@), also include data fields for data classes
     el'inst'attrs :: !EL'ArtsWIP,
@@ -584,6 +586,7 @@ el'MetaClass = mc
         )
         odEmpty
         odEmpty
+        odEmpty
         _EmptyArts
         _EmptyExts
         _EmptyArts
@@ -596,6 +599,7 @@ el'NamespaceClass =
     []
     []
     maoScope
+    odEmpty
     odEmpty
     odEmpty
     _EmptyArts
@@ -612,6 +616,7 @@ el'ModuleClass =
     maoScope
     odEmpty
     odEmpty
+    odEmpty
     _EmptyArts
     _EmptyExts
     _EmptyArts
@@ -624,6 +629,7 @@ el'ScopeClass =
     []
     []
     maoScope
+    odEmpty
     odEmpty
     odEmpty
     _EmptyArts
