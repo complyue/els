@@ -509,6 +509,8 @@ el'ObjNew !cls = do
 
 -- | a class
 --
+-- a class has its attributes and exports mutable during analysis
+--
 -- note the `supers` list of an object at runtime is instances created
 -- according to its class' `mro` list, plus more super objects appended
 -- by `extends` statements, usually from within the `__init__()` method
@@ -520,18 +522,14 @@ data EL'Class = EL'Class
     -- | meta class
     -- note this field can not be strict
     el'class'meta :: EL'Class,
-    -- | super classes installed via @extends@ from class defining procedure
-    el'class'exts :: ![EL'Value],
-    -- | C3 linearized mro list
-    el'class'mro :: ![EL'Class],
-    -- | scope of the class defining procedure
-    el'class'scope :: !EL'Scope,
+    -- | only filled after fully defined
+    el'class'defi :: !(TMVar EL'ClassDefi),
     -- | all attributes of the class
-    el'class'attrs :: !EL'Artifacts,
+    el'class'attrs :: !EL'ArtsWIP,
+    -- | super classes installed via @extends@ from class defining procedure
+    el'class'exts :: !(TVar [EL'Value]),
     -- | attributes exported from the class defining procedure
-    el'class'exps :: !EL'Artifacts,
-    -- | annotations from the class defining procedure
-    el'class'annos :: !(OrderedDict AttrKey EL'AttrAnno),
+    el'class'exps :: !EL'ArtsWIP,
     -- | instance attributes ever assigned via @this.xxx@ from methods (esp.
     -- @__init__()@), also include data fields for data classes
     el'inst'attrs :: !EL'ArtsWIP,
@@ -545,6 +543,15 @@ data EL'Class = EL'Class
 instance Show EL'Class where
   show !cls = show $ el'class'name cls
 
+data EL'ClassDefi = EL'ClassDefi
+  { -- | C3 linearized mro list
+    el'class'mro :: ![EL'Class],
+    -- | scope of the class defining procedure
+    el'class'scope :: !EL'Scope,
+    -- | annotations from the class defining procedure
+    el'class'annos :: !(OrderedDict AttrKey EL'AttrAnno)
+  }
+
 el'ResolveObjAttr :: EL'Object -> AttrKey -> STM (Maybe EL'AttrDef)
 el'ResolveObjAttr !obj !key =
   iopdLookup key (el'obj'attrs obj) >>= \case
@@ -552,15 +559,20 @@ el'ResolveObjAttr !obj !key =
     Nothing -> el'ResolveObjAttr' (el'obj'class obj) key
 
 el'ResolveObjAttr' :: EL'Class -> AttrKey -> STM (Maybe EL'AttrDef)
-el'ResolveObjAttr' !cls !key = go $ cls : el'class'mro cls
+el'ResolveObjAttr' !cls !key =
+  (go . (cls :) =<<) $
+    tryReadTMVar (el'class'defi cls) >>= \case
+      Nothing -> return []
+      Just (EL'ClassDefi !mro _scope _annos) -> return mro
   where
     go [] = return Nothing
     go (c : rest) =
       iopdLookup key (el'inst'attrs c) >>= \case
         Just !def -> return $ Just def
-        Nothing -> case odLookup key $ el'class'attrs c of
-          Just !def -> return $ Just def
-          Nothing -> go rest
+        Nothing ->
+          iopdLookup key (el'class'attrs c) >>= \case
+            Just !def -> return $ Just def
+            Nothing -> go rest
 
 _EmptyArts :: EL'ArtsWIP
 _EmptyArts = unsafePerformIO iopdEmptyIO
@@ -570,14 +582,11 @@ _EmptyExts :: TVar [EL'Value]
 _EmptyExts = unsafePerformIO $ newTVarIO []
 {-# NOINLINE _EmptyExts #-}
 
-el'MetaClass :: EL'Class
-el'MetaClass = mc
-  where
-    mc =
-      EL'Class
-        (AttrByName "class")
-        mc -- meta of meta is itself
-        []
+_EmptyClsDefi :: TMVar EL'ClassDefi
+_EmptyClsDefi =
+  unsafePerformIO $
+    newTMVarIO $
+      EL'ClassDefi
         []
         ( EL'Scope
             noSrcRange
@@ -585,8 +594,19 @@ el'MetaClass = mc
             V.empty
         )
         odEmpty
-        odEmpty
-        odEmpty
+{-# NOINLINE _EmptyClsDefi #-}
+
+el'MetaClass :: EL'Class
+el'MetaClass = mc
+  where
+    mc =
+      EL'Class
+        (AttrByName "class")
+        mc -- meta of meta is itself
+        _EmptyClsDefi
+        _EmptyArts
+        _EmptyExts
+        _EmptyArts
         _EmptyArts
         _EmptyExts
         _EmptyArts
@@ -596,12 +616,10 @@ el'NamespaceClass =
   EL'Class
     (AttrByName "<namespace>")
     el'MetaClass
-    []
-    []
-    maoScope
-    odEmpty
-    odEmpty
-    odEmpty
+    _EmptyClsDefi
+    _EmptyArts
+    _EmptyExts
+    _EmptyArts
     _EmptyArts
     _EmptyExts
     _EmptyArts
@@ -611,12 +629,10 @@ el'ModuleClass =
   EL'Class
     (AttrByName "<module>")
     el'MetaClass
-    []
-    []
-    maoScope
-    odEmpty
-    odEmpty
-    odEmpty
+    _EmptyClsDefi
+    _EmptyArts
+    _EmptyExts
+    _EmptyArts
     _EmptyArts
     _EmptyExts
     _EmptyArts
@@ -626,12 +642,10 @@ el'ScopeClass =
   EL'Class
     (AttrByName "<scope>")
     el'MetaClass
-    []
-    []
-    maoScope
-    odEmpty
-    odEmpty
-    odEmpty
+    _EmptyClsDefi
+    _EmptyArts
+    _EmptyExts
+    _EmptyArts
     _EmptyArts
     _EmptyExts
     _EmptyArts

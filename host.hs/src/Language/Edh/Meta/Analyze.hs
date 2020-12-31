@@ -1256,7 +1256,7 @@ el'AnalyzeExpr
           (_valModu, srcVal@(EL'ObjVal !objModu !obj)) ->
             iopdLookup refKey (el'obj'attrs obj) >>= \case
               Nothing ->
-                case odLookup refKey $ el'class'attrs $ el'obj'class obj of
+                iopdLookup refKey (el'class'attrs $ el'obj'class obj) >>= \case
                   Nothing -> do
                     el'LogDiag
                       diags
@@ -1284,7 +1284,7 @@ el'AnalyzeExpr
 
           -- static class attribute addressing
           (_valModu, srcVal@(EL'ClsVal !clsModu !cls)) ->
-            case odLookup refKey (el'class'attrs cls) of
+            iopdLookup refKey (el'class'attrs cls) >>= \case
               Nothing -> do
                 el'LogDiag
                   diags
@@ -1596,7 +1596,12 @@ el'AnalyzeExpr
                                   EL'AttrRef Nothing addr mwip prevDef
                               Nothing -> pure ()
                             !attrAnno <-
-                              newTVar $ odLookup attrKey $ el'class'annos cls
+                              (newTVar =<<) $
+                                tryReadTMVar (el'class'defi cls) >>= \case
+                                  Nothing -> return Nothing
+                                  Just !defi ->
+                                    return $
+                                      odLookup attrKey $ el'class'annos defi
                             let !attrDef =
                                   EL'AttrDef
                                     attrKey
@@ -2708,21 +2713,35 @@ el'AnalyzeExpr
          )
   !exit
   !eas = do
+    !maybeClsKey <- el'ResolveAttrAddr eas cls'name
+    !clsDefi <- newEmptyTMVar
+    !clsAttrs <- iopdEmpty
     !clsExts <- newTVar []
     !clsExps <- iopdEmpty
+    !instAttrs <- iopdEmpty
+    !instExts <- newTVar []
+    !instExps <- iopdEmpty
+    let !clsObj = EL'Object el'MetaClass clsAttrs clsExts clsExps
+        !cls =
+          EL'Class
+            (fromMaybe (AttrByName "<bad-class-name>") maybeClsKey)
+            el'MetaClass
+            clsDefi
+            clsAttrs
+            clsExts
+            clsExps
+            instAttrs
+            instExts
+            instExps
+        !clsStub = EL'Object cls instAttrs instExts instExps
+
     !branchAttrs <- iopdEmpty
-    !clsAttrs <- iopdEmpty
     !clsEffs <- iopdEmpty
     !clsAnnos <- iopdEmpty
     !branchRegions <- newTVar []
     !clsScopes <- newTVar []
     !clsRegions <- newTVar []
-    !instAttrs <- iopdEmpty
-    !instExts <- newTVar []
-    !instExps <- iopdEmpty
-    let !clsObj = EL'Object el'MetaClass clsAttrs clsExts clsExps
-        !clsStub = EL'Object el'MetaClass instAttrs instExts instExps
-        !bwip =
+    let !bwip =
           EL'BranchWIP
             branchAttrs
             clsEffs
@@ -2784,7 +2803,7 @@ el'AnalyzeExpr
                   el'ResolveAttrAddr eas dfAddr >>= \case
                     Nothing -> go dfs rest
                     Just !dfKey -> do
-                      -- TODO clsAnnos is empty now, try use it later
+                      -- TODO clsAnnos is empty now, fill the var later
                       !dfAnno <- newTVar =<< iopdLookup dfKey clsAnnos
                       go
                         ( ( dfKey,
@@ -2856,9 +2875,6 @@ el'AnalyzeExpr
           (regions'wip ++)
             <$> readTVar (el'scope'regions'wip pwipDone)
 
-        !cls'exts <- readTVar clsExts
-        !cls'exps <- iopdSnapshot clsExps
-        !cls'annos <- iopdSnapshot clsAnnos
         let !cls'scope =
               EL'Scope
                 { el'scope'span = body'span,
@@ -2868,25 +2884,14 @@ el'AnalyzeExpr
         -- record as an inner scope of outer scope
         modifyTVar' (el'scope'inner'scopes'wip outerProc) (cls'scope :)
 
-        el'ResolveAttrAddr eas cls'name >>= \case
+        case maybeClsKey of
           Nothing -> el'Exit eas exit $ EL'Const nil
           Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
           Just !clsName -> do
+            !cls'annos <- iopdSnapshot clsAnnos
             !clsAnno <- newTVar =<< el'ResolveAnnotation outerScope clsName
             let !mro = [] -- TODO C3 linearize cls'exts to get this
-                !cls =
-                  EL'Class
-                    clsName
-                    el'MetaClass
-                    cls'exts
-                    mro
-                    cls'scope
-                    (el'ScopeAttrs cls'scope)
-                    cls'exps
-                    cls'annos
-                    instAttrs
-                    instExts
-                    instExps
+                !defi = EL'ClassDefi mro cls'scope cls'annos
                 !clsVal = EL'ClsVal mwip cls
                 !clsDef =
                   EL'AttrDef
@@ -2898,6 +2903,7 @@ el'AnalyzeExpr
                     clsVal
                     clsAnno
                     Nothing
+            putTMVar clsDefi defi
             -- record as definition symbol of outer scope
             recordAttrDef eac clsDef
             --
@@ -3055,6 +3061,7 @@ el'AnalyzeExpr
             Nothing -> el'Exit eas exit $ EL'Const nil
             Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
             Just !nsName -> do
+              !nsDefi <- newTMVar $ EL'ClassDefi [] ns'scope odEmpty
               !nsAnno <- newTVar =<< el'ResolveAnnotation outerScope nsName
               let !nsVal =
                     EL'ObjVal
@@ -3063,7 +3070,7 @@ el'AnalyzeExpr
                         { el'obj'class =
                             el'NamespaceClass
                               { el'class'name = nsName,
-                                el'class'scope = ns'scope
+                                el'class'defi = nsDefi
                               }
                         }
                   !nsDef =
@@ -3810,7 +3817,12 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                                 EL'AttrRef Nothing addr mwip prevDef
                             Nothing -> pure ()
                           !attrAnno <-
-                            newTVar $ odLookup attrKey $ el'class'annos cls
+                            (newTVar =<<) $
+                              tryReadTMVar (el'class'defi cls) >>= \case
+                                Nothing -> return Nothing
+                                Just !defi ->
+                                  return $
+                                    odLookup attrKey $ el'class'annos defi
                           let !attrDef =
                                 EL'AttrDef
                                   attrKey
@@ -4025,7 +4037,7 @@ suggestCompletions !line !char !modu =
     suggestObjArts :: EL'Object -> SrcRange -> STM [CompletionItem]
     suggestObjArts !obj !addr'span = do
       !instAttrs <- iopdToList (el'obj'attrs obj)
-      let !clsAttrs = odToList (el'class'attrs cls)
+      !clsAttrs <- iopdToList (el'class'attrs cls)
       -- TODO include mro, dedup
       return $
         suggestMemberArt typeName (replaceSpan addr'span)
@@ -4036,7 +4048,7 @@ suggestCompletions !line !char !modu =
 
     suggestClsArts :: EL'Class -> SrcRange -> STM [CompletionItem]
     suggestClsArts !cls !addr'span = do
-      let !clsAttrs = odToList (el'class'attrs cls)
+      !clsAttrs <- iopdToList (el'class'attrs cls)
       -- TODO include mro, dedup
       return $
         suggestMemberArt typeName (replaceSpan addr'span)
