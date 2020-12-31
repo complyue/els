@@ -3595,42 +3595,44 @@ el'DefineMethod
                 }
             !easMth = eas {el'context = eacMth}
 
-        !argArts <- case argsRcvr of
-          WildReceiver -> return []
-          PackReceiver !ars -> defArgArts eas "<method-arg>" xsrc ars
-          SingleReceiver !ar -> defArgArts eas "<method-arg>" xsrc [ar]
-        iopdUpdate argArts mthAttrs
+        ( case argsRcvr of
+            WildReceiver -> ($ [])
+            PackReceiver !ars -> defArgArts easMth "<method-arg>" xsrc ars
+            SingleReceiver !ar -> defArgArts easMth "<method-arg>" xsrc [ar]
+          )
+          $ \ !argArts -> do
+            iopdUpdate argArts mthAttrs
 
-        el'RunTx easMth $
-          el'AnalyzeStmts [mth'body] $ \_ !easDone -> do
-            let !eacDone = el'context easDone
-                !swipDone = el'ctx'scope eacDone
-                !pwipDone = el'ProcWIP swipDone
-                !bwipDone = el'scope'branch'wip pwipDone
-            !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
-            !innerScopes <- readTVar mthScopes
-            !regions <-
-              (regions'wip ++)
-                <$> readTVar (el'scope'regions'wip pwipDone)
+            el'RunTx easMth $
+              el'AnalyzeStmts [mth'body] $ \_ !easDone -> do
+                let !eacDone = el'context easDone
+                    !swipDone = el'ctx'scope eacDone
+                    !pwipDone = el'ProcWIP swipDone
+                    !bwipDone = el'scope'branch'wip pwipDone
+                !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
+                !innerScopes <- readTVar mthScopes
+                !regions <-
+                  (regions'wip ++)
+                    <$> readTVar (el'scope'regions'wip pwipDone)
 
-            -- update annotations for arguments from body
-            forM_ argArts $ \(!argName, !argDef) ->
-              iopdLookup argName mthAnnos >>= \case
-                Nothing -> pure ()
-                Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
-            --
+                -- update annotations for arguments from body
+                forM_ argArts $ \(!argName, !argDef) ->
+                  iopdLookup argName mthAnnos >>= \case
+                    Nothing -> pure ()
+                    Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
+                --
 
-            let !mth'scope =
-                  EL'Scope
-                    { el'scope'span = body'span,
-                      el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                      el'scope'regions = V.fromList $! reverse regions
-                    }
-            -- record as an inner scope of outer scope
-            modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
+                let !mth'scope =
+                      EL'Scope
+                        { el'scope'span = body'span,
+                          el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                          el'scope'regions = V.fromList $! reverse regions
+                        }
+                -- record as an inner scope of outer scope
+                modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
 
-            -- done analyzing this method call
-            doneMthCall
+                -- done analyzing this method call
+                doneMthCall
 
 --
 
@@ -3710,44 +3712,46 @@ el'DefineArrowProc
                 }
             !easMth = eas {el'context = eacMth}
 
-        !argArts <- case argsRcvr of
-          WildReceiver -> return []
-          PackReceiver !ars -> defArgArts eas "<arrow-arg>" lhExpr ars
-          SingleReceiver !ar -> defArgArts eas "<arrow-arg>" lhExpr [ar]
-        iopdUpdate argArts mthAttrs
+        ( case argsRcvr of
+            WildReceiver -> ($ [])
+            PackReceiver !ars -> defArgArts easMth "<arrow-arg>" lhExpr ars
+            SingleReceiver !ar -> defArgArts easMth "<arrow-arg>" lhExpr [ar]
+          )
+          $ \ !argArts -> do
+            iopdUpdate argArts mthAttrs
 
-        el'RunTx easMth $
-          el'AnalyzeExpr Nothing rhExpr $ \_ !easDone -> do
-            let !eacDone = el'context easDone
-                !swipDone = el'ctx'scope eacDone
-                !pwipDone = el'ProcWIP swipDone
-                !bwipDone = el'scope'branch'wip pwipDone
-            !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
-            !innerScopes <- readTVar mthScopes
-            !regions <-
-              (regions'wip ++)
-                <$> readTVar (el'scope'regions'wip pwipDone)
+            el'RunTx easMth $
+              el'AnalyzeExpr Nothing rhExpr $ \_ !easDone -> do
+                let !eacDone = el'context easDone
+                    !swipDone = el'ctx'scope eacDone
+                    !pwipDone = el'ProcWIP swipDone
+                    !bwipDone = el'scope'branch'wip pwipDone
+                !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
+                !innerScopes <- readTVar mthScopes
+                !regions <-
+                  (regions'wip ++)
+                    <$> readTVar (el'scope'regions'wip pwipDone)
 
-            -- update annotations for arguments from body
-            forM_ argArts $ \(!argName, !argDef) ->
-              iopdLookup argName mthAnnos >>= \case
-                Nothing -> pure ()
-                Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
-            --
+                -- update annotations for arguments from body
+                forM_ argArts $ \(!argName, !argDef) ->
+                  iopdLookup argName mthAnnos >>= \case
+                    Nothing -> pure ()
+                    Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
+                --
 
-            let !mth'scope =
-                  EL'Scope
-                    { el'scope'span = body'span,
-                      el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                      el'scope'regions = V.fromList $! reverse regions
-                    }
-            --
+                let !mth'scope =
+                      EL'Scope
+                        { el'scope'span = body'span,
+                          el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                          el'scope'regions = V.fromList $! reverse regions
+                        }
+                --
 
-            -- record as an inner scope of outer scope
-            modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
+                -- record as an inner scope of outer scope
+                modifyTVar' (el'scope'inner'scopes'wip outerProc) (mth'scope :)
 
-            -- done analyzing this method call
-            doneMthCall
+                -- done analyzing this method call
+                doneMthCall
 
 --
 
@@ -3757,7 +3761,8 @@ defArgArts ::
   OpSymbol ->
   ExprSrc ->
   [ArgReceiver] ->
-  STM [(AttrKey, EL'AttrDef)]
+  ([(AttrKey, EL'AttrDef)] -> STM ()) ->
+  STM ()
 -- TODO special treatments for interpreter and 3-arg operator:
 -- - 1st `callerScope` be of scope object type
 -- - rest args be of expr type
@@ -3770,21 +3775,85 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
     go ::
       [(AttrKey, EL'AttrDef)] ->
       [ArgReceiver] ->
-      STM [(AttrKey, EL'AttrDef)]
-    go !args [] = return $ reverse args
-    go !args (ar : rest) = case ar of
-      RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
-        Nothing -> defArgArt argAddr maybeDef
-        Just (DirectRef !argAddr') -> defArgArt argAddr' maybeDef
-        Just _otherRename -> go args rest -- TODO elaborate? esp. `as this.xxx`
+      ([(AttrKey, EL'AttrDef)] -> STM ()) ->
+      STM ()
+    go !args [] !exit = exit $ reverse args
+    go !args (ar : rest) !exit = case ar of
+      RecvArg argAddr@(AttrAddrSrc _ arg'name'span) !maybeRename !maybeDef ->
+        case maybeRename of
+          Nothing -> defArgArt argAddr maybeDef
+          Just (DirectRef !tgtAttr) -> defArgArt tgtAttr maybeDef
+          Just
+            ref@( IndirectRef
+                    tgtExpr@(ExprSrc _ tgt'span)
+                    addr@(AttrAddrSrc _ !addr'span)
+                  ) -> do
+              el'RunTx eas $
+                el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal !easDone' -> do
+                  -- record as reference symbol, for completion
+                  recordAttrRef eac $
+                    EL'UnsolvedRef (Just tgtVal) addr'span
+                  el'ResolveAttrAddr easDone' addr >>= \case
+                    Nothing ->
+                      -- record as reference symbol, for completion
+                      recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
+                    Just !attrKey ->
+                      case tgtVal of
+                        EL'ObjVal _ms !obj -> do
+                          let !cls = el'obj'class obj
+                              !objAttrs = el'obj'attrs obj
+                          !maybePrevDef <- el'ResolveObjAttr obj attrKey
+                          case maybePrevDef of
+                            Just !prevDef ->
+                              -- record as reference symbol
+                              recordAttrRef eac $
+                                EL'AttrRef Nothing addr mwip prevDef
+                            Nothing -> pure ()
+                          !attrAnno <-
+                            newTVar $ odLookup attrKey $ el'class'annos cls
+                          let !attrDef =
+                                EL'AttrDef
+                                  attrKey
+                                  Nothing
+                                  opSym
+                                  addr'span
+                                  ( ExprSrc
+                                      (AttrExpr ref)
+                                      ( SrcRange
+                                          (src'start tgt'span)
+                                          (src'end addr'span)
+                                      )
+                                  )
+                                  ( EL'Expr $
+                                      fromMaybe
+                                        ( ExprSrc
+                                            (AttrExpr (DirectRef argAddr))
+                                            arg'name'span
+                                        )
+                                        maybeDef
+                                  )
+                                  attrAnno
+                                  Nothing
+                          iopdInsert attrKey attrDef objAttrs
+                        -- TODO more to do?
+                        _ -> pure ()
+                  go args rest exit
+          Just !badRename -> do
+            el'LogDiag
+              diags
+              el'Error
+              (attrRefSpan badRename)
+              "bad-re-target"
+              "bad argument re-targeting"
+            go args rest exit
       RecvRestPkArgs !argAddr -> defArgArt argAddr Nothing
       RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
       RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
       where
-        defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
+        defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest exit
         defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
           el'ResolveAttrAddr eas argAddr >>= \case
-            Nothing -> go args rest
+            Nothing -> go args rest exit
             Just !argKey -> do
               -- check if it shadows attr from outer scopes
               el'ResolveLexicalAttr
@@ -3831,6 +3900,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                     args
                   )
                   rest
+                  exit
 
 --
 

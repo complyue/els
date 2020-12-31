@@ -15,6 +15,29 @@ namespace ns () {
 
   gg = 7
 
+  this.hh = 3
+
+  method g( n as this.nn ) {
+    this.gg
+    this.hh
+    this.nn
+    ns.nn
+  }
+
+}
+
+class C {
+  c = 5
+
+  method m( e as this.ee ) {
+    e
+    this.c
+    C.c
+
+    this.ee - 2
+    this.ee
+  }
+
 }
 
 let ( y, z ) = ( 3, 2 )
