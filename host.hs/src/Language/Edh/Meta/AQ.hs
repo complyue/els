@@ -1,4 +1,4 @@
-module Language.Edh.Meta.FIFO where
+module Language.Edh.Meta.AQ where
 
 import Prelude
 

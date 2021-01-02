@@ -19,8 +19,8 @@ import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Vector as V
 import GHC.Conc (unsafeIOToSTM)
 import Language.Edh.EHI
+import Language.Edh.Meta.AQ
 import Language.Edh.Meta.AtTypes
-import Language.Edh.Meta.FIFO
 import Language.Edh.Meta.Model
 import Numeric.Search.Range
 import System.Directory

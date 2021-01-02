@@ -4,7 +4,7 @@ module Language.Edh.Meta.AtTypes where
 import Control.Concurrent.STM
 import Data.Vector (Vector)
 import Language.Edh.EHI
-import Language.Edh.Meta.FIFO
+import Language.Edh.Meta.AQ
 import Language.Edh.Meta.Model
 import Prelude
 

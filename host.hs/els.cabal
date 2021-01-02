@@ -35,8 +35,8 @@ library
     Language.Edh.LS.LangServer
     Language.Edh.LS.RT
     Language.Edh.Meta.Analyze
+    Language.Edh.Meta.AQ
     Language.Edh.Meta.AtTypes
-    Language.Edh.Meta.FIFO
     Language.Edh.Meta.World
 
   hs-source-dirs:     src
