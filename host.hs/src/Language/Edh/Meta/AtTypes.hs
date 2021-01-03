@@ -32,8 +32,6 @@ data EL'AnalysisState = EL'AnalysisState
     el'ets :: !EdhThreadState
   }
 
-type AnalysisInQueue = STM () -> STM ()
-
 el'PostAnalysis :: EL'AnalysisState -> AnalysisInQueue -> STM ()
 el'PostAnalysis !eas !aiq = modifyTVar' (el'backlog eas) $ fifoEnque aiq
 
