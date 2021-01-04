@@ -25,16 +25,34 @@ fifoPeek (FIFO [] []) = (Nothing, fifoEmpty)
 fifoPeek (FIFO back []) = fifoPeek $ FIFO [] (reverse back)
 fifoPeek (FIFO back front@(tip : _)) = (Just tip, FIFO back front)
 
+-- | CPS computation performing analysis jobs, should capture their respective
+-- input data and output `TVar`s as appropriate
 type AnalysisInQueue = STM () -> STM ()
 
+-- | Phases the whole analysis would go over, an analysis job pertain to a
+-- later phase won't be performed until all jobs pertain to earlier phases have
+-- finished.
 data AnalysisPhase
-  = ScanPhase
-  | DefinePhase
-  | CallInPhase
+  = -- | the 1st pass going over parsed nodes, probably not needed to be defined
+    -- here
+    ScanPhase
+  | -- | analysis on the constructors an similar artifacts, those should be
+    -- considered integral part of its outer artifact instead of nested,
+    -- standalone members
+    DefinePhase
+  | -- | analysis on nested, standalone member artifacts, those separately
+    -- callable, much later via a namespace (e.g. an object) reference
+    CallInPhase
   deriving (Eq, Ord)
 
+-- | Analysis job queue
+--
+-- this is a list of FIFO queues grouped and sorted by analysis phase
 type AnalysisQueue = [(AnalysisPhase, TVar (FIFO AnalysisInQueue))]
 
+-- | schedule an analysis job into the queue
+--
+-- invariant: the list by `aqv` kept sorted
 el'scheduleAnalysis ::
   TVar AnalysisQueue ->
   AnalysisPhase ->
@@ -46,27 +64,32 @@ el'scheduleAnalysis !aqv !ap !aiq = do
         [(AnalysisPhase, TVar (FIFO AnalysisInQueue))] ->
         [(AnalysisPhase, TVar (FIFO AnalysisInQueue))] ->
         STM [(AnalysisPhase, TVar (FIFO AnalysisInQueue))]
-      go !earlierQues = \case
+      go !earlierPhases = \case
         [] ->
           newTVar (fifoSingleton aiq) >>= \ !pqv ->
-            return $ reverse earlierQues ++ [(ap, pqv)]
-        ques@(pSlot@(!phase, !pqv) : laterQues) -> case compare ap phase of
-          EQ -> do
-            modifyTVar' pqv $ fifoEnque aiq
-            return aq
-          LT ->
-            newTVar (fifoSingleton aiq) >>= \ !pqv' ->
-              return $ reverse earlierQues ++ (ap, pqv') : ques
-          GT -> go (pSlot : earlierQues) laterQues
+            return $ reverse earlierPhases ++ [(ap, pqv)]
+        curPhases@(phaseSlot@(!phase, !pqv) : laterPhases) ->
+          case compare ap phase of
+            EQ -> do
+              modifyTVar' pqv $ fifoEnque aiq
+              return aq
+            LT ->
+              newTVar (fifoSingleton aiq) >>= \ !pqv' ->
+                return $ reverse earlierPhases ++ (ap, pqv') : curPhases
+            GT -> go (phaseSlot : earlierPhases) laterPhases
   go [] aq >>= writeTVar aqv
 
+-- | perform all analysis jobs in the queue, including subsequent jobs
+-- scheduled by earlier jobs per run
 el'performAnalysis :: TVar AnalysisQueue -> STM () -> STM ()
-el'performAnalysis !aqv !exit =
-  readTVar aqv >>= \case
-    [] -> exit
-    (_phase, !pqv) : laterQues -> do
-      writeTVar aqv laterQues
-      let go :: (Maybe AnalysisInQueue, FIFO AnalysisInQueue) -> STM ()
-          go (Nothing, _) = el'performAnalysis aqv exit
-          go (Just !aiq, !more) = aiq $ go $ fifoDeque more
-      readTVar pqv >>= go . fifoDeque
+el'performAnalysis !aqv !exit = iteration
+  where
+    iteration =
+      readTVar aqv >>= \case
+        [] -> exit
+        (_phase, !pqv) : laterPhases -> do
+          writeTVar aqv laterPhases
+          let go :: (Maybe AnalysisInQueue, FIFO AnalysisInQueue) -> STM ()
+              go (Nothing, _) = iteration
+              go (Just !aiq, !more) = aiq $ go $ fifoDeque more
+          readTVar pqv >>= go . fifoDeque
