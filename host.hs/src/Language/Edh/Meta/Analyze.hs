@@ -600,20 +600,7 @@ resolveParsedModule ::
   [StmtSrc] ->
   EdhProc EL'ResolvedModule
 resolveParsedModule !world !ms !resolving !body !exit !ets = do
-  !backlog <- newTVar fifoEmpty
-  let drainBacklog :: STM () -> STM ()
-      drainBacklog !finallyDone = chkQue
-        where
-          chkQue :: STM ()
-          chkQue =
-            {- HLINT ignore "Redundant <$>" -}
-            fifoDeque <$> swapTVar backlog fifoEmpty >>= \case
-              (Nothing, _) -> finallyDone
-              !more -> go more
-          go :: (Maybe AnalysisInQueue, FIFO AnalysisInQueue) -> STM ()
-          go (Nothing, _) = chkQue
-          go (Just !aiq, q) = aiq $ go $ fifoDeque q
-
+  !aqv <- newTVar []
   let !modu'name = el'modu'name ms
       !name'def =
         EL'AttrDef
@@ -699,13 +686,13 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !eas =
         EL'AnalysisState
           { el'world = world,
-            el'backlog = backlog,
+            el'ana'queue = aqv,
             el'context = eac,
             el'ets = ets
           }
 
   el'RunTx eas $
-    el'AnalyzeStmts body $ \_ !easDone -> drainBacklog $ do
+    el'AnalyzeStmts body $ \_ !easDone -> el'PerformAnalysis aqv $ do
       let !eacDone = el'context easDone
           !swipDone = el'ctx'scope eacDone
           !pwipDone = el'ProcWIP swipDone
@@ -3507,12 +3494,15 @@ el'DefineMethod
     )
   !exit
   !eas = do
-    -- postpone analysis in calling this method to happen after current scope
-    -- finished analysis
-    el'PostAnalysis eas analyzeMthCall
+    !maybeMthName <- el'ResolveAttrAddr eas mth'name
+    let !mthPhase = case maybeMthName of
+          Just (AttrByName "__init__") -> DefinePhase
+          -- TODO other cases ?
+          _ -> CallInPhase
+    el'ScheduleAnalysis (el'ana'queue eas) mthPhase analyzeMthCall
 
     -- define the attribute & return the value at level of current scope
-    el'ResolveAttrAddr eas mth'name >>= \case
+    case maybeMthName of
       Nothing -> el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
       Just !mthName -> do
@@ -3672,9 +3662,7 @@ el'DefineArrowProc
 
       withArgsRcvr :: ArgsReceiver -> STM ()
       withArgsRcvr !argsRcvr = do
-        -- postpone analysis in calling this method to happen after current
-        -- scope finished analysis
-        el'PostAnalysis eas (analyzeMthCall argsRcvr)
+        el'ScheduleAnalysis (el'ana'queue eas) CallInPhase (analyzeMthCall argsRcvr)
 
         -- return the procedure value
         el'Exit eas exit $ EL'ProcVal mwip $ EL'Proc mthName argsRcvr

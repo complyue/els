@@ -50,15 +50,15 @@ data AnalysisPhase
 -- this is a list of FIFO queues grouped and sorted by analysis phase
 type AnalysisQueue = [(AnalysisPhase, TVar (FIFO AnalysisInQueue))]
 
--- | schedule an analysis job into the queue
+-- | Schedule an analysis job into the queue
 --
 -- invariant: the list by `aqv` kept sorted
-el'scheduleAnalysis ::
+el'ScheduleAnalysis ::
   TVar AnalysisQueue ->
   AnalysisPhase ->
   AnalysisInQueue ->
   STM ()
-el'scheduleAnalysis !aqv !ap !aiq = do
+el'ScheduleAnalysis !aqv !ap !aiq = do
   !aq <- readTVar aqv
   let go ::
         [(AnalysisPhase, TVar (FIFO AnalysisInQueue))] ->
@@ -79,10 +79,10 @@ el'scheduleAnalysis !aqv !ap !aiq = do
             GT -> go (phaseSlot : earlierPhases) laterPhases
   go [] aq >>= writeTVar aqv
 
--- | perform all analysis jobs in the queue, including subsequent jobs
+-- | Perform all analysis jobs in the queue, including subsequent jobs
 -- scheduled by earlier jobs per run
-el'performAnalysis :: TVar AnalysisQueue -> STM () -> STM ()
-el'performAnalysis !aqv !exit = iteration
+el'PerformAnalysis :: TVar AnalysisQueue -> STM () -> STM ()
+el'PerformAnalysis !aqv !exit = iteration
   where
     iteration =
       readTVar aqv >>= \case
