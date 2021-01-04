@@ -786,12 +786,86 @@ el'AnalyzeStmt (StmtSrc (ExprStmt !expr !docCmt) !stmt'span) !exit !eas =
 el'AnalyzeStmt
   let'stmt@(StmtSrc (LetStmt !argsRcvr !argsSndr) !stmt'span)
   !exit
-  !eas =
-    el'RunTx eas $
-      el'PackArgs argsSndr $ \apk@(EL'ArgsPack !args !kwargs) _eas ->
+  !eas = case argsSndr of
+    ArgsPacker [SendPosArg !singleArg] apk'span -> el'RunTx eas $
+      el'AnalyzeExpr Nothing singleArg $ \ !singleVal _eas -> case singleVal of
+        EL'Apk !apk -> doRecv apk
+        _ -> case argsRcvr of
+          SingleReceiver
+            ( RecvArg
+                addr@(AttrAddrSrc _ arg'span)
+                !maybeRename
+                _maybeDef
+              ) -> do
+              case maybeRename of
+                Nothing -> recvOne addr singleVal
+                Just (DirectRef !addr') -> recvOne addr' singleVal
+                Just IndirectRef {} -> pure () -- TODO define art into objs
+                _ -> do
+                  el'LogDiag
+                    diags
+                    el'Error
+                    arg'span
+                    "invalid-target"
+                    "invalid let target"
+              el'Exit eas exit $ EL'Const nil
+          WildReceiver -> el'Exit eas exit $ EL'Const nil
+          SingleReceiver !rcvr -> do
+            el'LogDiag
+              diags
+              el'Warning
+              apk'span
+              "dynamic-unpack"
+              "dynamic unpacking"
+            doUnknownRcvrs [rcvr]
+          PackReceiver !rcvrs -> do
+            el'LogDiag
+              diags
+              el'Warning
+              apk'span
+              "dynamic-unpack"
+              "dynamic unpacking"
+            doUnknownRcvrs rcvrs
+    _ -> el'RunTx eas $ el'PackArgs argsSndr $ \ !apk _eas -> doRecv apk
+    where
+      {- HLINT ignore "Reduce duplication" -}
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      !bwip = el'scope'branch'wip pwip
+
+      unknownVal = EL'Expr $ ExprSrc (LitExpr NilLiteral) stmt'span
+
+      doUnknownRcvrs :: [ArgReceiver] -> STM ()
+      doUnknownRcvrs [] = el'Exit eas exit $ EL'Const nil
+      doUnknownRcvrs (rcvr : rest) = do
+        case rcvr of
+          RecvRestPosArgs !addr ->
+            recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty
+          RecvRestKwArgs !addr ->
+            recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty
+          RecvRestPkArgs !addr ->
+            recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty
+          RecvArg addr@(AttrAddrSrc _ arg'span) !maybeRename _maybeDef ->
+            case maybeRename of
+              Nothing -> recvOne addr unknownVal
+              Just (DirectRef !addr') -> recvOne addr' unknownVal
+              Just IndirectRef {} -> pure () -- TODO define art into objs
+              _ -> do
+                el'LogDiag
+                  diags
+                  el'Error
+                  arg'span
+                  "invalid-target"
+                  "invalid let target"
+        doUnknownRcvrs rest
+
+      doRecv :: EL'ArgsPack -> STM ()
+      doRecv apk@(EL'ArgsPack !args !kwargs) =
         case argsRcvr of
-          PackReceiver !rcvrs -> doRecv apk rcvrs
-          SingleReceiver !rcvr -> doRecv apk [rcvr]
+          PackReceiver !rcvrs -> doRcvrs apk rcvrs
+          SingleReceiver !rcvr -> doRcvrs apk [rcvr]
           WildReceiver -> do
             unless (null args) $
               el'LogDiag
@@ -810,16 +884,9 @@ el'AnalyzeStmt
                 . EL'Region (src'end stmt'span)
 
             el'Exit eas exit $ EL'Const nil
-    where
-      {- HLINT ignore "Reduce duplication" -}
-      !eac = el'context eas
-      diags = el'ctx'diags eac
-      !swip = el'ctx'scope eac
-      !pwip = el'ProcWIP swip
-      !bwip = el'scope'branch'wip pwip
 
-      doRecv :: EL'ArgsPack -> [ArgReceiver] -> STM ()
-      doRecv (EL'ArgsPack !args !kwargs) !rcvrs =
+      doRcvrs :: EL'ArgsPack -> [ArgReceiver] -> STM ()
+      doRcvrs (EL'ArgsPack !args !kwargs) !rcvrs =
         go args kwargs rcvrs $ \ !args' !kwargs' -> do
           unless (null args' && odNull kwargs') $
             el'LogDiag
