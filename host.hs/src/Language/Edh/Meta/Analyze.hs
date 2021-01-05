@@ -605,7 +605,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !name'def =
         EL'AttrDef
           (AttrByName "__name__")
-          Nothing
+          (Just ["import name of current module"])
           "<module>"
           noSrcRange
           (ExprSrc (LitExpr (StringLiteral modu'name)) noSrcRange)
@@ -623,7 +623,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !file'def =
         EL'AttrDef
           (AttrByName "__file__")
-          Nothing
+          (Just ["absolute path of current module's source file"])
           "<module>"
           noSrcRange
           (ExprSrc (LitExpr (StringLiteral modu'file)) noSrcRange)
@@ -633,7 +633,11 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !path'def =
         EL'AttrDef
           (AttrByName "__path__")
-          Nothing
+          ( Just
+              [ "absolute path of the directory containing current module's"
+                  <> " source file"
+              ]
+          )
           "<module>"
           noSrcRange
           (ExprSrc (LitExpr (StringLiteral modu'path)) noSrcRange)
@@ -4018,77 +4022,79 @@ suggestCompletions !line !char !modu =
             <$> collectArtsInScopeAt cursorPos (el'modu'scope modu)
       where
         !replace'span = replaceSpan addr'span
-        !intrinsicSuggestions =
-          [ completionSnippet
-              "class"
-              "class definition"
-              "define a new class"
-              "010"
-              ( "class ${1:Class'Name} {\n"
-                  <> "  $2\n}\n"
-              ),
-            completionSnippet
-              "data"
-              "data class definition"
-              "define a new data class"
-              "010"
-              "data ${1:Class'Name}( ${2:data'Field1} ) {$3}\n",
-            completionSnippet
-              "void method"
-              "void method definition"
-              "define a new void method"
-              "010"
-              ( "method ${1:method'Name}( ${2:mth'Arg1} ) void {\n"
-                  <> "  $3\n}\n"
-              ),
-            completionSnippet
-              "method"
-              "method definition"
-              "define a new method"
-              "010"
-              ( "method ${1:method'Name}( ${2:mth'Arg1} ) {\n"
-                  <> "  $3\n}\n"
-              ),
-            completionSnippet
-              "generator"
-              "generator definition"
-              "define a new generator"
-              "010"
-              ( "generator ${1:method'Name}( ${2:mth'Arg1} ) {\n"
-                  <> "  $3\n}\n"
-              ),
-            completionSnippet
-              "interpreter"
-              "interpreter definition"
-              "define a new interpreter"
-              "010"
-              ( "interpreter ${1:method'Name}( ${2:mth'Arg1} ) {\n"
-                  <> "  $3\n}\n"
-              ),
-            completionSnippet
-              "producer"
-              "producer definition"
-              "define a new producer"
-              "010"
-              ( "producer ${1:method'Name}( ${2:mth'Arg1} ) {\n"
-                  <> "  $3\n}\n"
-              ),
-            completionToken
-              "this"
-              "this reference"
-              "address the contextual instance of current object"
-              "100", -- category
-            completionToken
-              "that"
-              "that reference"
-              "address the end instance of current object"
-              "100", -- category
-            completionToken
-              "super"
-              "super reference"
-              "to address super methods from current object"
-              "100" -- category
-          ]
+        !intrinsicSuggestions = []
+    -- these are available from edh-vscode-syntax as json snippets
+    -- TODO implement them with more dynamic intellisense?
+    -- completionSnippet
+    --   "class"
+    --   "class definition"
+    --   "define a new class"
+    --   "010"
+    --   ( "class ${1:Class'Name} {\n"
+    --       <> "  $2\n}\n"
+    --   ),
+    -- completionSnippet
+    --   "data"
+    --   "data class definition"
+    --   "define a new data class"
+    --   "010"
+    --   "data ${1:Class'Name}( ${2:data'Field1} ) {$3}\n",
+    -- completionSnippet
+    --   "void method"
+    --   "void method definition"
+    --   "define a new void method"
+    --   "010"
+    --   ( "method ${1:method'Name}( ${2:mth'Arg1} ) void {\n"
+    --       <> "  $3\n}\n"
+    --   ),
+    -- completionSnippet
+    --   "method"
+    --   "method definition"
+    --   "define a new method"
+    --   "010"
+    --   ( "method ${1:method'Name}( ${2:mth'Arg1} ) {\n"
+    --       <> "  $3\n}\n"
+    --   ),
+    -- completionSnippet
+    --   "generator"
+    --   "generator definition"
+    --   "define a new generator"
+    --   "010"
+    --   ( "generator ${1:method'Name}( ${2:mth'Arg1} ) {\n"
+    --       <> "  $3\n}\n"
+    --   ),
+    -- completionSnippet
+    --   "interpreter"
+    --   "interpreter definition"
+    --   "define a new interpreter"
+    --   "010"
+    --   ( "interpreter ${1:method'Name}( ${2:mth'Arg1} ) {\n"
+    --       <> "  $3\n}\n"
+    --   ),
+    -- completionSnippet
+    --   "producer"
+    --   "producer definition"
+    --   "define a new producer"
+    --   "010"
+    --   ( "producer ${1:method'Name}( ${2:mth'Arg1}, outlet= sink ) {\n"
+    --       <> "  $3\n}\n"
+    --   )
+    -- ,
+    -- completionToken
+    --   "this"
+    --   "this reference"
+    --   "address the contextual instance of current object"
+    --   "100", -- category
+    -- completionToken
+    --   "that"
+    --   "that reference"
+    --   "address the end instance of current object"
+    --   "100", -- category
+    -- completionToken
+    --   "super"
+    --   "super reference"
+    --   "to address super methods from current object"
+    --   "100" -- category
 
     suggestScopeArt :: SrcRange -> (AttrKey, EL'AttrDef) -> CompletionItem
     suggestScopeArt !replace'span (!key, !def) =
