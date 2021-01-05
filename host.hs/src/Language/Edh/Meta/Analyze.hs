@@ -4034,6 +4034,14 @@ suggestCompletions !line !char !modu =
               "010"
               "data ${1:Class'Name}( ${2:data'Field1} ) {$3}\n",
             completionSnippet
+              "void method"
+              "void method definition"
+              "define a new void method"
+              "010"
+              ( "method ${1:method'Name}( ${2:mth'Arg1} ) void {\n"
+                  <> "  $3\n}\n"
+              ),
+            completionSnippet
               "method"
               "method definition"
               "define a new method"
@@ -4042,11 +4050,27 @@ suggestCompletions !line !char !modu =
                   <> "  $3\n}\n"
               ),
             completionSnippet
-              "void method"
-              "void method definition"
-              "define a new void method"
+              "generator"
+              "generator definition"
+              "define a new generator"
               "010"
-              ( "method ${1:method'Name}( ${2:mth'Arg1} ) void {\n"
+              ( "generator ${1:method'Name}( ${2:mth'Arg1} ) {\n"
+                  <> "  $3\n}\n"
+              ),
+            completionSnippet
+              "interpreter"
+              "interpreter definition"
+              "define a new interpreter"
+              "010"
+              ( "interpreter ${1:method'Name}( ${2:mth'Arg1} ) {\n"
+                  <> "  $3\n}\n"
+              ),
+            completionSnippet
+              "producer"
+              "producer definition"
+              "define a new producer"
+              "010"
+              ( "producer ${1:method'Name}( ${2:mth'Arg1} ) {\n"
                   <> "  $3\n}\n"
               ),
             completionToken
