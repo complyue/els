@@ -1026,39 +1026,46 @@ el'AnalyzeStmt (StmtSrc (EffectStmt !effs !docCmt) _stmt'span) !exit !eas =
 --
 
 -- extending
-el'AnalyzeStmt (StmtSrc (ExtendsStmt !superExpr) !stmt'span) !exit !eas =
-  el'RunTx eas $
-    el'AnalyzeExpr Nothing superExpr $ \case
-      superVal@EL'ObjVal {} -> \_eas -> do
-        modifyTVar' exts (++ [superVal])
-        el'Exit eas exit $ EL'Const nil
-      EL'Apk (EL'ArgsPack !superVals !kwargs) | odNull kwargs -> \_eas -> do
-        forM_ superVals $ \case
-          EL'ObjVal {} -> return ()
-          !badSuperVal ->
-            el'LogDiag
-              diags
-              el'Warning
-              stmt'span
-              "invalid-extends"
-              $ "not an object to extend: " <> T.pack (show badSuperVal)
-        modifyTVar' exts (++ superVals)
-        el'Exit eas exit $ EL'Const nil
-      !badSuperVal -> \_eas -> do
-        el'LogDiag
-          diags
-          el'Warning
-          stmt'span
-          "invalid-extends"
-          $ "not an object to extend: " <> T.pack (show badSuperVal)
-        modifyTVar' exts (++ [badSuperVal]) -- TODO this toxic?
-        el'Exit eas exit $ EL'Const nil
-  where
-    !eac = el'context eas
-    diags = el'ctx'diags eac
-    !swip = el'ctx'scope eac
-    !pwip = el'ProcWIP swip
-    !exts = el'obj'exts $ el'scope'this'obj pwip
+el'AnalyzeStmt
+  (StmtSrc (ExtendsStmt superExpr@(ExprSrc _ !super'span)) _)
+  !exit
+  !eas =
+    el'RunTx eas $
+      el'AnalyzeExpr Nothing superExpr $ \case
+        superVal@EL'ObjVal {} -> \_eas -> do
+          modifyTVar' exts (++ [superVal])
+          el'Exit eas exit $ EL'Const nil
+        superVal@EL'ClsVal {} -> \_eas -> do
+          modifyTVar' exts (++ [superVal])
+          el'Exit eas exit $ EL'Const nil
+        EL'Apk (EL'ArgsPack !superVals !kwargs) | odNull kwargs -> \_eas -> do
+          forM_ superVals $ \case
+            EL'ObjVal {} -> return ()
+            EL'ClsVal {} -> return ()
+            !badSuperVal ->
+              el'LogDiag
+                diags
+                el'Warning
+                super'span
+                "invalid-super"
+                $ "invalid super object: " <> T.pack (show badSuperVal)
+          modifyTVar' exts (++ superVals)
+          el'Exit eas exit $ EL'Const nil
+        !badSuperVal -> \_eas -> do
+          el'LogDiag
+            diags
+            el'Warning
+            super'span
+            "invalid-super"
+            $ "invalid super object: " <> T.pack (show badSuperVal)
+          modifyTVar' exts (++ [badSuperVal]) -- TODO this toxic?
+          el'Exit eas exit $ EL'Const nil
+    where
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      !exts = el'obj'exts $ el'scope'this'obj pwip
 --
 
 -- go
