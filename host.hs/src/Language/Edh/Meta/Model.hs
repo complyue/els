@@ -12,6 +12,8 @@ import Data.Vector (Vector)
 import qualified Data.Vector as V
 import GHC.IO (unsafePerformIO)
 import Language.Edh.EHI
+import Language.Edh.LS.InsertTextFormat (InsertTextFormat)
+import qualified Language.Edh.LS.InsertTextFormat as InsertTextFormat
 import Language.Edh.LS.Json
 import Prelude
 
@@ -786,17 +788,84 @@ data CompletionItem = CompletionItem
     el'cmpl'detail :: !Text,
     el'cmpl'documentation :: !Text, -- in markdown format
     el'cmpl'preselect :: !Bool,
-    el'cmpl'sortText :: Text,
+    el'cmpl'sortText :: !Text,
+    el'cmpl'filterText :: !Text,
+    el'cmpl'insertText :: !Text,
+    el'cmpl'insertTextFormat :: !InsertTextFormat,
     el'cmpl'textEdit :: !TextEdit
   }
 
 instance ToLSP CompletionItem where
-  toLSP (CompletionItem !label !detail !doc !presel !st !te) =
-    jsonObject
-      [ ("label", EdhString label),
-        ("detail", EdhString detail),
-        ("documentation", EdhString doc),
-        ("preselect", EdhBool presel),
-        ("sortText", EdhString st),
-        ("textEdit", toLSP te)
-      ]
+  toLSP
+    ( CompletionItem
+        !label
+        !detail
+        !doc
+        !presel
+        !st
+        !fl
+        !ins
+        !fmt
+        te@(TextEdit (SrcRange (SrcPos !start'line _start'col) _end'pos) _)
+      ) =
+      jsonObject
+        [ ("label", EdhString label),
+          ("detail", EdhString detail),
+          ("documentation", EdhString doc),
+          ("preselect", EdhBool presel),
+          ("sortText", if T.null st then EdhNil else EdhString st),
+          ("filterText", if T.null fl then EdhNil else EdhString fl),
+          ("insertText", if T.null ins then EdhNil else EdhString ins),
+          ("insertTextFormat", toLSP fmt),
+          ("textEdit", if start'line < 0 then EdhNil else toLSP te)
+        ]
+
+completionText :: Text -> Text -> Text -> Text -> SrcRange -> CompletionItem
+completionText !label !detail !doc !cate !replace'span =
+  CompletionItem
+    label
+    detail
+    doc
+    False
+    (cate <> ":" <> label)
+    ""
+    ""
+    InsertTextFormat.PlainText
+    (TextEdit replace'span label)
+
+completionToken ::
+  Text ->
+  Text ->
+  Text ->
+  Text ->
+  CompletionItem
+completionToken !label !detail !doc !cate =
+  CompletionItem
+    label
+    detail
+    doc
+    False
+    (cate <> ":" <> label)
+    ""
+    ""
+    InsertTextFormat.PlainText
+    (TextEdit noSrcRange "")
+
+completionSnippet ::
+  Text ->
+  Text ->
+  Text ->
+  Text ->
+  Text ->
+  CompletionItem
+completionSnippet !label !detail !doc !cate !snippet =
+  CompletionItem
+    label
+    detail
+    doc
+    False
+    (cate <> ":" <> label)
+    label
+    snippet
+    InsertTextFormat.Snippet
+    (TextEdit noSrcRange "")

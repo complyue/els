@@ -27,6 +27,7 @@ library
   exposed-modules:
     Language.Edh.LS
     Language.Edh.LS.CompletionItemKind
+    Language.Edh.LS.InsertTextFormat
     Language.Edh.Meta.Model
 
   other-modules:

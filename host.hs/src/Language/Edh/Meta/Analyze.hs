@@ -4019,74 +4019,97 @@ suggestCompletions !line !char !modu =
       where
         !replace'span = replaceSpan addr'span
         !intrinsicSuggestions =
-          [ CompletionItem
+          [ completionSnippet
+              "class"
+              "class definition"
+              "define a new class"
+              "010"
+              ( "class ${1:Class'Name} {\n"
+                  <> "  $2\n}\n"
+              ),
+            completionSnippet
+              "data"
+              "data class definition"
+              "define a new data class"
+              "010"
+              "data ${1:Class'Name}( ${2:data'Field1} ) {$3}\n",
+            completionSnippet
+              "method"
+              "method definition"
+              "define a new method"
+              "010"
+              ( "method ${1:method'Name}( ${2:mth'Arg1} ) {\n"
+                  <> "  $3\n}\n"
+              ),
+            completionSnippet
+              "void method"
+              "void method definition"
+              "define a new void method"
+              "010"
+              ( "method ${1:method'Name}( ${2:mth'Arg1} ) void {\n"
+                  <> "  $3\n}\n"
+              ),
+            completionToken
               "this"
               "this reference"
               "address the contextual instance of current object"
-              False -- preselect
-              "100:this" -- sort text
-              (TextEdit replace'span "this"),
-            CompletionItem
+              "100", -- category
+            completionToken
               "that"
               "that reference"
               "address the end instance of current object"
-              False -- preselect
-              "100:that" -- sort text
-              (TextEdit replace'span "that"),
-            CompletionItem
+              "100", -- category
+            completionToken
               "super"
               "super reference"
               "to address super methods from current object"
-              False -- preselect
-              "100:super" -- sort text
-              (TextEdit replace'span "super")
+              "100" -- category
           ]
 
     suggestScopeArt :: SrcRange -> (AttrKey, EL'AttrDef) -> CompletionItem
     suggestScopeArt !replace'span (!key, !def) =
-      CompletionItem
+      completionText
         label
         detail
         mdContents
-        False -- preselect
-        sortText
-        (TextEdit replace'span label)
+        cate
+        replace'span
       where
         !label = attrKeyStr key
         !detail = attrKeyStr $ el'attr'def'key def -- use better text
         !mdContents =
           T.intercalate "\n***\n" $ T.intercalate "\n" <$> el'AttrDoc def
-        !sortText = case True of
-          True
-            | "__" `T.isPrefixOf` label ->
-              -- magic names, should seldom be written out
-              "999:" <> label
+        !cate = case True of
+          -- magic names, should seldom be written out
+          True | "__" `T.isPrefixOf` label -> "999"
           -- TODO more to categorize wrt sorting
-          _ -> "000:" <> label -- vanilla artifacts
+          _ -> "000" -- vanilla artifacts
           --
 
     --
-    suggestMemberArt :: Text -> SrcRange -> (AttrKey, EL'AttrDef) -> CompletionItem
-    suggestMemberArt !typeName !replace'span (!key, !def) =
+    suggestMemberArt ::
+      Text ->
+      SrcRange ->
+      (AttrKey, EL'AttrDef) ->
       CompletionItem
+    suggestMemberArt !typeName !replace'span (!key, !def) =
+      completionText
         label
         detail
         mdContents
-        False -- preselect
-        sortText
-        (TextEdit replace'span label)
+        cate
+        replace'span
       where
         !label = attrKeyStr key
         !detail = typeName <> "." <> attrKeyStr (el'attr'def'key def)
         !mdContents =
           T.intercalate "\n***\n" $ T.intercalate "\n" <$> el'AttrDoc def
-        !sortText = case True of
-          True
-            | "__" `T.isPrefixOf` label ->
-              -- magic names, should seldom be written out
-              "999:" <> label
+        !cate = case True of
+          -- magic names, should seldom be written out
+          True | "__" `T.isPrefixOf` label -> "999"
           -- TODO more to categorize wrt sorting
-          _ -> "000:" <> label -- vanilla artifacts
+          _ -> "000" -- vanilla artifacts
+          --
 
     --
     suggestObjArts :: EL'Object -> SrcRange -> STM [CompletionItem]
