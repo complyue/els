@@ -3985,11 +3985,12 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
 -- | generate completion items at specified location
 -- the result will be put into response to `textDocument/completion` request
 suggestCompletions ::
+  EL'World ->
   Int ->
   Int ->
   EL'ResolvedModule ->
   STM [CompletionItem]
-suggestCompletions !line !char !modu =
+suggestCompletions !elw !line !char !modu =
   case locateAttrRefInModule line char modu of
     Just (EL'UnsolvedRef !maybeTgtVal !addr'span) -> case maybeTgtVal of
       Nothing -> suggestArtsInScope addr'span
@@ -4024,11 +4025,23 @@ suggestCompletions !line !char !modu =
     suggestArtsInScope :: SrcRange -> STM [CompletionItem]
     suggestArtsInScope !addr'span =
       return $
-        (++ intrinsicSuggestions) $
-          suggestScopeArt replace'span
-            <$> collectArtsInScopeAt cursorPos (el'modu'scope modu)
+        concat
+          [ suggestScopeArt replace'span
+              <$> collectArtsInScopeAt cursorPos (el'modu'scope modu),
+            intrinsicSuggestions,
+            suggestScopeArt replace'span
+              <$> [ (k, def)
+                    | (k, def) <- odToList (el'ambient elw),
+                      suggestAmbientArt (k, def)
+                  ]
+          ]
       where
         !replace'span = replaceSpan addr'span
+        suggestAmbientArt :: (AttrKey, EL'AttrDef) -> Bool
+        suggestAmbientArt (AttrBySym _, _) = True
+        suggestAmbientArt (AttrByName !artName, _) =
+          not $ "__" `T.isPrefixOf` artName
+
         !intrinsicSuggestions = []
     -- these are available from edh-vscode-syntax as json snippets
     -- TODO implement them with more dynamic intellisense?

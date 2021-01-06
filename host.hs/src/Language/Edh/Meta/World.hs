@@ -234,4 +234,4 @@ createMetaWorldClass !msClass !clsOuterScope =
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
               exitEdh ets exit . toLSP
-                =<< suggestCompletions line char resolved
+                =<< suggestCompletions elw line char resolved
