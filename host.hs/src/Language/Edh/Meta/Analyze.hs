@@ -1479,7 +1479,7 @@ el'AnalyzeExpr
           exit
     --
 
-    -- annotation
+    -- attribute type annotation
     "::" -> case lhExpr of
       ExprSrc (AttrExpr (DirectRef !addr)) _ ->
         el'ResolveAttrAddr eas addr >>= \case
@@ -1494,12 +1494,33 @@ el'AnalyzeExpr
           diags
           el'Warning
           bad'anno'span
-          "bad-anno"
-          "bad annotation"
+          "bad-attr-anno"
+          "bad attribute annotation"
         returnAsExpr eas
     --
 
-    -- left-dropping annotation
+    -- type synonym annotation
+    ":=:" -> case lhExpr of
+      ExprSrc (AttrExpr (DirectRef !addr)) _ ->
+        el'ResolveAttrAddr eas addr >>= \case
+          Nothing -> returnAsExpr eas
+          Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+          Just !attrKey -> do
+            let !attrAnno = EL'AttrAnno rhExpr docCmt
+            -- TODO use separate fields
+            iopdInsert attrKey attrAnno (el'branch'annos'wip bwip)
+            el'Exit eas exit $ EL'Const nil
+      ExprSrc _ !bad'anno'span -> do
+        el'LogDiag
+          diags
+          el'Warning
+          bad'anno'span
+          "bad-type-anno"
+          "bad type synonym annotation"
+        returnAsExpr eas
+    --
+
+    -- free-form lhs annotation
     "!" -> el'RunTx eas $ el'AnalyzeExpr docCmt rhExpr exit
     --
 
