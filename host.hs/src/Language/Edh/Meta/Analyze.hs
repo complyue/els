@@ -1260,15 +1260,15 @@ el'AnalyzeExpr
 -- that reference
 el'AnalyzeExpr
   _docCmt
-  xsrc@(ExprSrc (AttrExpr (ThatRef !addr'span)) _expr'span)
+  (ExprSrc (AttrExpr ThatRef {}) _expr'span)
   !exit
-  !eas = do
-    recordAttrRef eac thatRef
-    returnAsExpr
+  !eas = el'Exit eas exit $ EL'ObjVal mwip thisObj
     where
+      -- TODO such faking with this obj okay?
+
       !eac = el'context eas
-      thatRef = EL'UnsolvedRef Nothing addr'span
-      returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+      !mwip = el'ContextModule eac
+      !thisObj = el'ContextObject eac
 --
 
 -- this reference
