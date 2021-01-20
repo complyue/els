@@ -1434,11 +1434,32 @@ el'AnalyzeExpr
 el'AnalyzeExpr
   !docCmt
   xsrc@( ExprSrc
-           (InfixExpr !opSym lhExpr@(ExprSrc !lhx !lh'span) !rhExpr)
+           ( InfixExpr
+               (!opSym, SrcRange op'start _op'end)
+               lhExpr@(ExprSrc !lhx lh'span@(SrcRange _lh'start lh'end))
+               !rhExpr
+             )
            !expr'span
          )
   !exit
   !eas = case opSym of
+    -- infix form of at-notation
+    "@" -> do
+      when
+        ( src'line op'start > src'line lh'end
+            || src'char op'start > src'char lh'end + 1
+        )
+        $ el'LogDiag
+          diags
+          el'Error
+          (SrcRange lh'end op'start)
+          "unintended-at-notation"
+          "you want to put a semicolon here, or it is infix at-notation"
+      el'RunTx eas $
+        el'AnalyzeExpr Nothing lhExpr $
+          const $ -- TODO validate attribute key available from lhs value
+            el'AnalyzeExpr Nothing rhExpr $ const returnAsExpr
+
     -- comparisons
     "==" -> doCmp
     "!=" -> doCmp
@@ -1707,6 +1728,11 @@ el'AnalyzeExpr
                 el'AnalyzeExpr Nothing idxExpr $
                   const $
                     el'AnalyzeExpr Nothing tgtExpr $ const returnAsExpr
+            ExprSrc (InfixExpr ("@", _) _ _) _ ->
+              el'RunTx easDone $
+                el'AnalyzeExpr Nothing lhExpr $ -- assuming it be update, i.e.
+                -- initial assignment should not happen this way
+                  \_lhVal !easDone' -> returnAsExpr easDone'
             ExprSrc _ !bad'assign'tgt'span -> do
               el'LogDiag
                 diags
@@ -1720,7 +1746,7 @@ el'AnalyzeExpr
       doBranch = do
         let (!fullExpr, !maybeGuardExpr) = case lhx of
               -- pattern or value match, guarded
-              InfixExpr "|" (ExprSrc !matchExpr _) !guardExpr ->
+              InfixExpr ("|", _) (ExprSrc !matchExpr _) !guardExpr ->
                 (matchExpr, Just guardExpr)
               -- pattern or value match
               _ -> (lhx, Nothing)
@@ -1926,7 +1952,7 @@ el'AnalyzeExpr
                             Nothing
                     analyzeBranch $! (p1Key, p1Def) : defs
                 InfixExpr
-                  ":"
+                  (":", _)
                   !p2Expr
                   p1Expr'@( ExprSrc
                               ( AttrExpr
@@ -1995,7 +2021,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        "="
+                        ("=", _)
                         ( ExprSrc
                             ( CallExpr
                                 clsExpr@ExprSrc {}
@@ -2119,7 +2145,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        ":>"
+                        (":>", _)
                         headExpr@( ExprSrc
                                      ( AttrExpr
                                          ( DirectRef
@@ -2158,10 +2184,10 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        ">@"
+                        (">@", _)
                         prefixExpr@( ExprSrc
                                        ( InfixExpr
-                                           "@<"
+                                           ("@<", _)
                                            ( ExprSrc
                                                ( AttrExpr
                                                    ( DirectRef
@@ -2205,7 +2231,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        ">@"
+                        (">@", _)
                         !prefixExpr
                         suffixExpr@( ExprSrc
                                        ( AttrExpr
@@ -2231,7 +2257,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        "@<"
+                        ("@<", _)
                         prefixExpr@( ExprSrc
                                        ( AttrExpr
                                            ( DirectRef
@@ -2287,7 +2313,7 @@ el'AnalyzeExpr
             -- {( x:y:z:... )} -- pair pattern
             [ StmtSrc
                 ( ExprStmt
-                    (ParenExpr p1Expr@(ExprSrc (InfixExpr ":" _ _) _))
+                    (ParenExpr p1Expr@(ExprSrc (InfixExpr (":", _) _ _) _))
                     _docCmt
                   )
                 _
@@ -2306,7 +2332,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        ":="
+                        (":=", _)
                         termExpr@( ExprSrc
                                      ( AttrExpr
                                          ( DirectRef
@@ -2444,7 +2470,7 @@ el'AnalyzeExpr
         el'Error
         (SrcRange callee'end paren'start)
         "unintended-call"
-        "you want to insert a semicolon here, or it is procedure call making"
+        "you want to put a semicolon here, or it is procedure call making"
 
     el'RunTx eas $
       el'AnalyzeExpr Nothing calleeExpr $ \ !calleeVal -> el'PackArgs apkr $

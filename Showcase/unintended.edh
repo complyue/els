@@ -1,0 +1,12 @@
+
+symbol @ss
+
+# intended assignment with infix (operator) at-notation
+this@ss = 5
+
+# intended assignment to local scope with an attribute key of bare at-notation,
+# but will parse as infix (operator) at-notation
+@ss = 5
+
+# intended to output an args pack, but will parse as procedure call
+( 1, 2, 3 )
