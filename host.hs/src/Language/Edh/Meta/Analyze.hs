@@ -1880,6 +1880,47 @@ el'AnalyzeExpr
                         "bad data class field extractor"
                       go rest kds
 
+            defPosAttrs ::
+              [ArgSender] ->
+              ( [(AttrKey, EL'AttrDef)] ->
+                STM ()
+              ) ->
+              STM ()
+            defPosAttrs !sndrs !daExit = go sndrs []
+              where
+                go :: [ArgSender] -> [(AttrKey, EL'AttrDef)] -> STM ()
+                go [] !kds = daExit kds
+                go (sndr : rest) !kds = do
+                  !attrAnno <- newTVar Nothing
+                  case sndr of
+                    SendPosArg
+                      attrExpr@( ExprSrc
+                                   (AttrExpr (DirectRef !rcvAttr))
+                                   !arg'span
+                                 ) ->
+                        el'ResolveAttrAddr eas rcvAttr >>= \case
+                          Nothing -> go rest kds
+                          Just !key -> do
+                            let !attrDef =
+                                  EL'AttrDef
+                                    key
+                                    Nothing
+                                    opSym
+                                    arg'span
+                                    xsrc
+                                    (EL'Expr attrExpr)
+                                    attrAnno
+                                    Nothing
+                            go rest $ (key, attrDef) : kds
+                    _ -> do
+                      el'LogDiag
+                        diags
+                        el'Error
+                        (argSenderSpan sndr)
+                        "bad-pos-match"
+                        "bad positional match declaration"
+                      go rest kds
+
             analyzeBranch :: [(AttrKey, EL'AttrDef)] -> STM ()
             analyzeBranch !ps = do
               !branchAttrs <- iopdClone $ el'branch'attrs'wip bwip
@@ -2313,7 +2354,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 (ExprStmt (ArgsPackExpr (ArgsPacker !argSenders _)) _docCmt)
                 _
-              ] -> defDfAttrs mwip el'MetaClass argSenders analyzeBranch
+              ] -> defPosAttrs argSenders analyzeBranch
             --
 
             -- {( x:y:z:... )} -- pair pattern
