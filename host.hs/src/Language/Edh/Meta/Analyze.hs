@@ -1510,6 +1510,12 @@ el'AnalyzeExpr
             let !attrAnno = EL'AttrAnno rhExpr docCmt
             iopdInsert attrKey attrAnno (el'branch'annos'wip bwip)
             el'Exit eas exit $ EL'Const nil
+      ExprSrc (InfixExpr ("@", _) _ _) _ ->
+        -- very possibly to be annotation of bare at-notation,
+        -- unintended to be parsed as infix at-notation,
+        -- will be diag'ed by analyzing it
+        el'RunTx eas $
+          el'AnalyzeExpr Nothing lhExpr $ \_lhVal !eas' -> returnAsExpr eas'
       ExprSrc _ !bad'anno'span -> do
         el'LogDiag
           diags
