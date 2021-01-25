@@ -457,13 +457,16 @@ el'FillModuleSource !moduSource !ms !exit !ets = do
                 return ()
 
           doParseModule :: EdhTx
-          doParseModule !etsParse = do
+          doParseModule !etsParse =
             -- parse & install the result
             -- catch any exception for the parsing, wrap as diagnostics
             edhCatch
               etsParse
               (parseModuleSource moduSource $ el'modu'doc ms)
-              installResult
+              ( -- break into separate STM txs, saving expensive retries
+                -- i.e. to parse again
+                edhContSTM'' etsParse . (False <$) . installResult
+              )
               $ \ !etsCatching !exv !recover !rethrow -> case exv of
                 EdhNil -> rethrow nil
                 _ -> edhValueDesc etsCatching exv $ \ !exDesc ->
@@ -489,16 +492,11 @@ el'FillModuleSource !moduSource !ms !exit !ets = do
 
 parseModuleSource :: Text -> SrcDoc -> EdhProc EL'ParsedModule
 parseModuleSource !moduSource (SrcDoc !moduFile) !exit !ets =
-  -- TODO perform partial parsing, and gather diags
   parseEdh world moduFile moduSource >>= \case
     Left !err -> do
       let !msg = T.pack $ errorBundlePretty err
           !edhWrapException = edh'exception'wrapper world
-          !edhErr =
-            EdhError ParseError msg (toDyn nil) $
-              getEdhErrCtx
-                0
-                ets
+          !edhErr = EdhError ParseError msg (toDyn nil) $ getEdhErrCtx 0 ets
       edhWrapException (toException edhErr)
         >>= \ !exo -> edhThrow ets (EdhObject exo)
     Right (!stmts, !docCmt) ->
