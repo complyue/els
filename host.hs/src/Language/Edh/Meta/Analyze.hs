@@ -307,9 +307,17 @@ el'WalkParsingDiags !msStart !walker = void $ go Map.empty msStart
 
 -- | invalidate resolution results of this module and all known dependants
 -- will have parsing result invaliated as well if `srcChanged` is @True@
-el'InvalidateModule :: Bool -> EL'ModuSlot -> EdhProc ()
-el'InvalidateModule !srcChanged !ms !exit !ets = do
-  when srcChanged $ void $ tryTakeTMVar (el'modu'parsing ms)
+el'InvalidateModule ::
+  Either (TMVar EL'ParsedModule) Bool ->
+  EL'ModuSlot ->
+  EdhProc ()
+el'InvalidateModule !srcChg !ms !exit !ets = do
+  case srcChg of
+    Left !parsingFuture -> do
+      void $ tryTakeTMVar (el'modu'parsing ms)
+      putTMVar (el'modu'parsing ms) $ EL'ModuParsing parsingFuture
+    Right True -> void $ tryTakeTMVar (el'modu'parsing ms)
+    Right False -> pure ()
   tryTakeTMVar reso >>= \case
     Nothing -> pure ()
     Just (EL'ModuResolving !resolving _acts) ->
@@ -318,19 +326,22 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
     Just (EL'ModuResolved !resolved) ->
       readTVar (el'modu'dependants resolved)
         >>= invalidateDeps (el'modu'dependants resolved) . Map.toList
+  exitEdh ets exit ()
   where
     !reso = el'modu'resolution ms
-    invalidateDeps :: TVar (HashMap EL'ModuSlot Bool) -> [(EL'ModuSlot, Bool)] -> STM ()
+    invalidateDeps ::
+      TVar (HashMap EL'ModuSlot Bool) ->
+      [(EL'ModuSlot, Bool)] ->
+      STM ()
     invalidateDeps !dependants !deps = go [] deps
       where
         go :: [(EL'ModuSlot, Bool)] -> [(EL'ModuSlot, Bool)] -> STM ()
-        go !upds [] = do
+        go !upds [] =
           unless (null upds) $
             modifyTVar' dependants $
               -- todo maybe should delete instead of update here?
               -- in case some module file is deleted, this'll leak?
               Map.union (Map.fromList upds)
-          exitEdh ets exit ()
         go !upds ((!dependant, !hold) : rest) =
           tryTakeTMVar (el'modu'resolution dependant) >>= \case
             Nothing -> go upds rest
@@ -341,7 +352,7 @@ el'InvalidateModule !srcChanged !ms !exit !ets = do
               case Map.lookup ms (el'modu'dependencies resolved') of
                 Just True ->
                   runEdhTx ets $
-                    el'InvalidateModule False dependant $ \_ _ets ->
+                    el'InvalidateModule (Right False) dependant $ \_ _ets ->
                       go upds rest
                 _ ->
                   if hold
@@ -424,23 +435,18 @@ parseModuleOnDisk moduDoc@(SrcDoc !moduFile) !exit !ets =
 --
 -- todo track document version to cancel parsing attempts for old versions
 el'FillModuleSource :: Text -> EL'ModuSlot -> EdhProc ()
-el'FillModuleSource !moduSource !ms !exit !ets =
+el'FillModuleSource !moduSource !ms !exit !ets = do
+  !parsingFuture <- newEmptyTMVar
   -- invalidate parsing/resolution results of this module and all dependants
   runEdhTx ets $
-    el'InvalidateModule True ms $ \() _ets -> do
-      void $ tryTakeTMVar parsingVar
+    el'InvalidateModule (Left parsingFuture) ms $ \() _ets -> do
       -- now parse the supplied source and get the result,
       -- then try install only if it's still up-to-date
-      !parsedVar <- newEmptyTMVar
-      -- the put will retry if parsingVar has been changed by others
-      -- concurrently, so no duplicate effort would incur here
-      putTMVar parsingVar (EL'ModuParsing parsedVar)
-
       let installResult !parsed = do
-            putTMVar parsedVar parsed
+            putTMVar parsingFuture parsed
             tryTakeTMVar parsingVar >>= \case
-              Just (EL'ModuParsing parsedVar')
-                | parsedVar' == parsedVar ->
+              Just (EL'ModuParsing parsingFuture')
+                | parsingFuture' == parsingFuture ->
                   -- the most expected scenario
                   putTMVar parsingVar $ EL'ModuParsed parsed
               Just !other ->
@@ -472,8 +478,8 @@ el'FillModuleSource !moduSource !ms !exit !ets =
                           exDesc
                       ]
 
-      -- perform the parsing in a separate thread, return as soon as the target
-      -- module is invalidated, and we have initiated the parsing.
+      -- perform the parsing in a separate thread, return as soon as the
+      -- target module is invalidated, and we have initiated the parsing.
       -- it is essential for us to return only after the parsing placeholder
       -- (i.e. putting into @parsingVar@) is installed, or subsequent lsp
       -- request may cause another parsing initiated against the file on disk.

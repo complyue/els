@@ -58,7 +58,7 @@ createMetaModuleClass !clsOuterScope =
     invalidateProc (defaultArg False -> !srcChanged) !exit !ets =
       withThisHostObj ets $ \ !ms ->
         runEdhTx ets $
-          el'InvalidateModule srcChanged ms $
+          el'InvalidateModule (Right srcChanged) ms $
             \() _ets -> exitEdh ets exit nil
 
     fillProc :: "srcOTF" !: Text -> EdhHostProc
