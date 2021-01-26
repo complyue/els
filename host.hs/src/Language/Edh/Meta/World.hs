@@ -31,7 +31,8 @@ createMetaModuleClass !clsOuterScope =
                    <$> mkHostProperty clsOuterScope nm getter setter
                  | (nm, getter, setter) <-
                      [ ("home", homeProc, Nothing),
-                       ("doc", docProc, Nothing)
+                       ("doc", docProc, Nothing),
+                       ("chgSignal", chgSignalProc, Nothing)
                      ]
                ]
       iopdUpdate arts $ edh'scope'entity clsScope
@@ -53,6 +54,10 @@ createMetaModuleClass !clsOuterScope =
       let SrcDoc !docFile = el'modu'doc ms
           !hv = EdhString docFile
       exitEdh ets exit hv
+
+    chgSignalProc :: EdhHostProc
+    chgSignalProc !exit !ets = withThisHostObj ets $ \ !ms ->
+      exitEdh ets exit $ EdhSink $ el'modu'chg'signal ms
 
     invalidateProc :: "srcChanged" ?: Bool -> EdhHostProc
     invalidateProc (defaultArg False -> !srcChanged) !exit !ets =

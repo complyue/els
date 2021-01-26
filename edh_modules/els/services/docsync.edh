@@ -37,14 +37,23 @@ export method @'textDocument/didChange' (
 
   case textDocument of { TxtDocFile ( absFilePath ) } -> {
     moduChgd = world.locateByFile( absFilePath )
-    moduChgd.fill( fullTxt ) # this returns immediately after it's invalidated
-    # then obtain and publish the diags in a separate thread (goroutine)
-    # to not block subsequent requests from the lsp client
-    go { perform lspNotify( 'textDocument/publishDiagnostics',
+    # `.fill()` returns immediately after the module invalidated and parsing
+    # future of the new source registered, it'll post an event to
+    # `moduChgd.chgSignal` as well
+    moduChgd.fill( fullTxt )
+    # then on a separate thread, block wait for the diags and publish it,
+    # to unblock subsequent requests from the lsp client
+    go {
+      # terminate this thread on subsequent doc changes
+      # it's safe as no lsp request involved so no response mandated
+      perceive moduChgd.chgSignal break
+      # block wait diags from resolution/parsing, report back to lsp client
+      perform lspNotify( 'textDocument/publishDiagnostics',
         uri= textDocument[ 'uri' ],
         version= textDocument[ 'version' ],
         diagnostics= world.diags( moduChgd ),
-    ) }
+      )
+    }
   }
 }
 

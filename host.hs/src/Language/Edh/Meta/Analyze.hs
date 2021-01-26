@@ -90,6 +90,7 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                     putTMVar mmVar mm
                     exitEdh ets exit ms
           Nothing -> do
+            !chgSig <- newEventSink' False
             !parsing <- newEmptyTMVar
             !resolution <- newEmptyTMVar
             let !ms =
@@ -97,6 +98,7 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                     home
                     name
                     (SrcDoc absFile)
+                    chgSig
                     parsing
                     resolution
             putTMVar mmVar (Map.insert name ms mm)
@@ -316,7 +318,10 @@ el'InvalidateModule !srcChg !ms !exit !ets = do
     Left !parsingFuture -> do
       void $ tryTakeTMVar (el'modu'parsing ms)
       putTMVar (el'modu'parsing ms) $ EL'ModuParsing parsingFuture
-    Right True -> void $ tryTakeTMVar (el'modu'parsing ms)
+      void $ postEvent (el'modu'chg'signal ms) (EdhBool True)
+    Right True -> do
+      void $ tryTakeTMVar (el'modu'parsing ms)
+      void $ postEvent (el'modu'chg'signal ms) (EdhBool False)
     Right False -> pure ()
   tryTakeTMVar reso >>= \case
     Nothing -> pure ()
@@ -368,30 +373,34 @@ asModuleParsed !ms !exit !ets =
   tryReadTMVar parsingVar >>= \case
     Nothing -> do
       !parsedVar <- newEmptyTMVar
-      -- the put will retry if parsingVar has been changed by others
-      -- concurrently, so no duplicate effort would incur here
+      -- this put will retry back to re-check, if parsingVar has been changed
+      -- by others concurrently, so duplicate parsing effort can be avoided
       putTMVar parsingVar (EL'ModuParsing parsedVar)
-      -- todo maybe try harder to guarantee 'parsedVar' will always be filled.
-      -- bracket with STM monad is not correct as multiple txs it will span;
-      -- using Edh finally block may be the way, but we're already doing that
-      -- in 'doParseModule', not sure anything to be done here so.
-      doParseModule $ \ !parsed -> do
-        -- install the parsed record
-        putTMVar parsedVar parsed
-        tryTakeTMVar parsingVar >>= \case
-          Just (EL'ModuParsing parsedVar')
-            | parsedVar' == parsedVar ->
-              -- the most expected scenario
-              putTMVar parsingVar $ EL'ModuParsed parsed
-          Just !other ->
-            -- invalidated & new analysation wip
-            void $ tryPutTMVar parsingVar other
-          _ ->
-            -- invalidated meanwhile
-            return ()
+      -- schedule the parsing to happen in next tx, so retries caused by above
+      -- don't include the expensive, actual parsing
+      edhContSTM'' ets $
+        -- todo
+        -- maybe try harder to guarantee 'parsedVar' will always be filled.
+        -- bracket with STM monad is not correct as multiple txs it will span;
+        -- using Edh finally block may be the way, but we're already doing that
+        -- in 'doParseModule', not sure anything to be done here so.
+        doParseModule $ \ !parsed -> do
+          -- install the parsed record
+          putTMVar parsedVar parsed
+          tryTakeTMVar parsingVar >>= \case
+            Just (EL'ModuParsing parsedVar')
+              | parsedVar' == parsedVar ->
+                -- the most expected scenario
+                putTMVar parsingVar $ EL'ModuParsed parsed
+            Just !other ->
+              -- invalidated & new analysation wip
+              void $ tryPutTMVar parsingVar other
+            _ ->
+              -- invalidated meanwhile
+              return ()
 
-        -- return from this procedure
-        exitEdh ets exit parsed
+          -- return from this procedure
+          exitEdh ets exit parsed
     Just (EL'ModuParsing !parsedVar) -> do
       -- parsing by some other thread,
       -- blocking wait a result in next tx
@@ -438,26 +447,25 @@ el'FillModuleSource :: Text -> EL'ModuSlot -> EdhProc ()
 el'FillModuleSource !moduSource !ms !exit !ets = do
   !parsingFuture <- newEmptyTMVar
   -- invalidate parsing/resolution results of this module and all dependants
+  -- with this parsing registered for the future
   runEdhTx ets $
     el'InvalidateModule (Left parsingFuture) ms $ \() _ets -> do
       -- now parse the supplied source and get the result,
       -- then try install only if it's still up-to-date
       let installResult !parsed = do
             putTMVar parsingFuture parsed
-            tryTakeTMVar parsingVar >>= \case
+            tryReadTMVar parsingVar >>= \case
               Just (EL'ModuParsing parsingFuture')
-                | parsingFuture' == parsingFuture ->
+                | parsingFuture' == parsingFuture -> do
                   -- the most expected scenario
+                  void $ tryTakeTMVar parsingVar
                   putTMVar parsingVar $ EL'ModuParsed parsed
-              Just !other ->
-                -- invalidated & new analysation wip
-                putTMVar parsingVar other
-              _ ->
-                -- invalidated meanwhile
-                return ()
-
+              _ -> return () -- changed again or invalidated meanwhile
           doParseModule :: EdhTx
           doParseModule !etsParse =
+            -- TODO start another thread to kill this parsing thread on signal
+            --      from `el'modu'chg'signal ms`
+            --      note: make sure `parsingFuture` filled anyway
             -- parse & install the result
             -- catch any exception for the parsing, wrap as diagnostics
             edhCatch
@@ -465,7 +473,7 @@ el'FillModuleSource !moduSource !ms !exit !ets = do
               (parseModuleSource moduSource $ el'modu'doc ms)
               ( -- break into separate STM txs, saving expensive retries
                 -- i.e. to parse again
-                edhContSTM'' etsParse . (False <$) . installResult
+                edhContSTM'' etsParse . installResult
               )
               $ \ !etsCatching !exv !recover !rethrow -> case exv of
                 EdhNil -> rethrow nil
@@ -482,10 +490,12 @@ el'FillModuleSource !moduSource !ms !exit !ets = do
                       ]
 
       -- perform the parsing in a separate thread, return as soon as the
-      -- target module is invalidated, and we have initiated the parsing.
-      -- it is essential for us to return only after the parsing placeholder
-      -- (i.e. putting into @parsingVar@) is installed, or subsequent lsp
-      -- request may cause another parsing initiated against the file on disk.
+      -- target module is invalidated, and we have registered our future
+      --
+      -- it is essential for us to return only after our parsing future
+      -- put into @parsingVar@, or subsequent lsp request may cause another
+      -- parsing-on-demand registered, that to load the file content (older
+      -- than edited by the lsp client) from disk
       forkEdh id doParseModule exit ets
   where
     !parsingVar = el'modu'parsing ms
@@ -539,30 +549,34 @@ asModuleResolving !world !ms !exit !ets = do
               dependencies
               diags
               dependants
-      -- the put will retry if parsingVar has been changed by others
-      -- concurrently, so no duplicate effort would incur here
+      -- this put will retry back to re-check, if resoVar has been changed
+      -- by others concurrently, so duplicate resolution effort can be avoided
       putTMVar resoVar (EL'ModuResolving resolving resolvedVar)
-      -- todo maybe try harder to guarantee 'resolvedVar' will always be filled.
-      -- bracket with STM monad is not correct as multiple txs it will span;
-      -- using Edh finally block may be the way, but we're already doing that
-      -- in 'doResolveModule', not sure anything to be done here so.
-      doResolveModule resolving $ \ !resolved -> do
-        -- install the resolved record
-        putTMVar resolvedVar resolved
-        tryTakeTMVar resoVar >>= \case
-          Just (EL'ModuResolving _resolving resolvedVar')
-            | resolvedVar' == resolvedVar ->
-              -- the most expected scenario
-              putTMVar resoVar $ EL'ModuResolved resolved
-          Just !other ->
-            -- invalidated & new analysation wip
-            void $ tryPutTMVar resoVar other
-          _ ->
-            -- invalidated meanwhile
-            return ()
+      -- schedule the resolution to happen in next tx, so retries caused by
+      -- above don't include the expensive, actual resolution
+      edhContSTM'' ets $
+        -- todo
+        -- maybe try harder to guarantee 'resolvedVar' will always be filled.
+        -- bracket with STM monad is not correct as multiple txs it will span;
+        -- using Edh finally block may be the way, but we're already doing that
+        -- in 'doResolveModule', not sure anything to be done here so.
+        doResolveModule resolving $ \ !resolved -> do
+          -- install the resolved record
+          putTMVar resolvedVar resolved
+          tryTakeTMVar resoVar >>= \case
+            Just (EL'ModuResolving _resolving resolvedVar')
+              | resolvedVar' == resolvedVar ->
+                -- the most expected scenario
+                putTMVar resoVar $ EL'ModuResolved resolved
+            Just !other ->
+              -- invalidated & new analysation wip
+              void $ tryPutTMVar resoVar other
+            _ ->
+              -- invalidated meanwhile
+              return ()
 
-        -- return from this procedure
-        exitEdh ets exit $ EL'ModuResolved resolved
+          -- return from this procedure
+          exitEdh ets exit $ EL'ModuResolved resolved
   where
     !resoVar = el'modu'resolution ms
 

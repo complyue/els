@@ -172,6 +172,9 @@ data EL'ModuSlot = EL'ModuSlot
     -- | absolute path of the `.edh` src file
     -- this corresponds to `__file__` in the module at runtime
     el'modu'doc :: !SrcDoc,
+    -- | signal channel with 1 event posted per module source change (i.e.
+    -- AST invalidated)
+    el'modu'chg'signal :: !EventSink,
     -- | tracking the parsing of this module
     el'modu'parsing :: !(TMVar EL'ModuParsing),
     -- | tracking the resolving of this module

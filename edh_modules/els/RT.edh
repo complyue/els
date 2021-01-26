@@ -80,6 +80,9 @@ export {
     diags :: ( MetaModule ) -> json![ json!DictType ]
     {##
      # obtain diagnostics generated during parsing and resolution of the module
+     #
+     # can be blocked waiting the result of a resolution in progress, which in
+     # turn can be blocked waiting the result of a parsing in progress
      #}
     method diags( modu ) pass
 
