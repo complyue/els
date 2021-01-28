@@ -5,6 +5,7 @@ export {
   import * './defi'
   import * './hover'
   import * './completion'
+  import * './outline'
   import * './signature'
 
 }

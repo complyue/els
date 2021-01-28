@@ -23,7 +23,8 @@ createMetaModuleClass !clsOuterScope =
         sequence $
           [ (AttrByName nm,) <$> mkHostProc clsOuterScope vc nm hp
             | (nm, vc, hp) <-
-                [ ("invalidate", EdhMethod, wrapHostProc invalidateProc),
+                [ ("moduSymbols", EdhMethod, wrapHostProc moduSymbolsProc),
+                  ("invalidate", EdhMethod, wrapHostProc invalidateProc),
                   ("fill", EdhMethod, wrapHostProc fillProc)
                 ]
           ]
@@ -44,20 +45,15 @@ createMetaModuleClass !clsOuterScope =
         EvalError
         "no way to construct MetaModule object from Edh code"
 
-    homeProc :: EdhHostProc
-    homeProc !exit !ets = withThisHostObj ets $ \ !ms -> do
-      let !hv = EdhString $ el'home'path $ el'modu'home ms
-      exitEdh ets exit hv
-
-    docProc :: EdhHostProc
-    docProc !exit !ets = withThisHostObj ets $ \ !ms -> do
-      let SrcDoc !docFile = el'modu'doc ms
-          !hv = EdhString docFile
-      exitEdh ets exit hv
-
-    chgSignalProc :: EdhHostProc
-    chgSignalProc !exit !ets = withThisHostObj ets $ \ !ms ->
-      exitEdh ets exit $ EdhSink $ el'modu'chg'signal ms
+    moduSymbolsProc :: EdhHostProc
+    moduSymbolsProc !exit !ets = withThisHostObj ets $ \ !ms ->
+      runEdhTx ets $
+        asModuleParsed ms $
+          \(EL'ParsedModule !modu'cmt !stmts _diags) _ets ->
+            exitEdh ets exit $
+              jsonArray $
+                toLSP
+                  <$> moduSymbols (el'modu'name ms) modu'cmt stmts
 
     invalidateProc :: "srcChanged" ?: Bool -> EdhHostProc
     invalidateProc (defaultArg False -> !srcChanged) !exit !ets =
@@ -72,6 +68,21 @@ createMetaModuleClass !clsOuterScope =
         runEdhTx ets $
           el'FillModuleSource srcOTF ms $
             \_parsed _ets -> exitEdh ets exit nil
+
+    homeProc :: EdhHostProc
+    homeProc !exit !ets = withThisHostObj ets $ \ !ms -> do
+      let !hv = EdhString $ el'home'path $ el'modu'home ms
+      exitEdh ets exit hv
+
+    docProc :: EdhHostProc
+    docProc !exit !ets = withThisHostObj ets $ \ !ms -> do
+      let SrcDoc !docFile = el'modu'doc ms
+          !hv = EdhString docFile
+      exitEdh ets exit hv
+
+    chgSignalProc :: EdhHostProc
+    chgSignalProc !exit !ets = withThisHostObj ets $ \ !ms ->
+      exitEdh ets exit $ EdhSink $ el'modu'chg'signal ms
 
 createMetaWorldClass :: Object -> Scope -> STM Object
 createMetaWorldClass !msClass !clsOuterScope =

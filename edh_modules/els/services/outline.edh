@@ -1,0 +1,32 @@
+
+import * 'els'
+
+import * './utils'
+
+
+{##
+ # to make those blocks with titles, as well as irrelevant contents between
+ # two titled blocks, foldable
+ #}
+export method @'textDocument/foldingRange' ( textDocument, ***_ ) void {
+  case textDocument of { TxtDocFile ( absFilePath ) } ->
+  { return { go {
+        modu = world.locateByFile( absFilePath )
+        perform lspRespond([]) # TODO impl.
+  } } }
+  error( 'unexpected lsp params' )
+}
+
+
+{##
+ # not really for symbols, but to show blocks with titles in the
+ # outline view of side bar, with hierarchy of those blocks
+ #}
+export method @'textDocument/documentSymbol' ( textDocument, ***_ ) void {
+  case textDocument of { TxtDocFile ( absFilePath ) } ->
+  { return { go {
+        modu = world.locateByFile( absFilePath )
+        perform lspRespond( modu.moduSymbols() )
+  } } }
+  error( 'unexpected lsp params' )
+}

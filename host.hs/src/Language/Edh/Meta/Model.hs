@@ -15,6 +15,8 @@ import Language.Edh.EHI
 import Language.Edh.LS.InsertTextFormat (InsertTextFormat)
 import qualified Language.Edh.LS.InsertTextFormat as InsertTextFormat
 import Language.Edh.LS.Json
+import Language.Edh.LS.SymbolKind (SymbolKind)
+import qualified Language.Edh.LS.SymbolKind as SymbolKind
 import Prelude
 
 -- diagnostic data structures per LSP specification 3.15
@@ -785,6 +787,222 @@ instance ToLSP TextEdit where
       [ ("range", toLSP range),
         ("newText", EdhString newText)
       ]
+
+data DocumentSymbol = DocumentSymbol
+  { el'sym'name :: !Text,
+    el'sym'detail :: !Text,
+    el'sym'kind :: !SymbolKind,
+    el'sym'range :: !SrcRange,
+    el'sym'selectionRange :: !SrcRange,
+    el'sym'children :: ![DocumentSymbol]
+  }
+
+instance ToLSP DocumentSymbol where
+  toLSP (DocumentSymbol !name !detail !kind !range !selectionRange !children) =
+    jsonObject
+      [ ("name", EdhString name),
+        ("detail", EdhString detail),
+        ("kind", toLSP kind),
+        ("range", toLSP range),
+        ("selectionRange", toLSP selectionRange),
+        ("children", jsonArray $ toLSP <$> children)
+      ]
+
+titledBlock ::
+  DocComment ->
+  SrcRange ->
+  [DocumentSymbol] ->
+  DocumentSymbol
+titledBlock
+  !cmt
+  range@(SrcRange (SrcPos !start'line !start'char) _)
+  !exprSymbols =
+    DocumentSymbol
+      { el'sym'name = name,
+        el'sym'detail = detail,
+        el'sym'kind = SymbolKind.Namespace,
+        el'sym'range = range,
+        el'sym'selectionRange = SrcRange startPos startPos,
+        el'sym'children = exprSymbols
+      }
+    where
+      -- selection start at the position immediately following `{##`
+      !startPos = SrcPos start'line (start'char + 3)
+
+      decorTitle !t = case T.strip t of
+        "" -> "<untitled>"
+        !title -> title
+
+      (name, detail) = case cmt of
+        [] -> ("<untitled>", "")
+        line1 : line2 : _ -> (decorTitle line1, line2)
+        line1 : _ -> (decorTitle line1, "")
+
+procDecl ::
+  Maybe DocComment ->
+  AttrAddrSrc ->
+  SymbolKind ->
+  SrcRange ->
+  [DocumentSymbol] ->
+  DocumentSymbol
+procDecl
+  !cmt
+  (AttrAddrSrc !name !name'span)
+  !kind
+  !range
+  !exprSymbols =
+    DocumentSymbol
+      { el'sym'name = attrAddrStr name,
+        el'sym'detail = detail,
+        el'sym'kind = kind,
+        el'sym'range = range,
+        el'sym'selectionRange = name'span,
+        el'sym'children = exprSymbols
+      }
+    where
+      detail = case cmt of
+        Nothing -> ""
+        Just [] -> ""
+        Just (line1 : _) -> line1
+
+moduSymbols :: Text -> Maybe DocComment -> [StmtSrc] -> [DocumentSymbol]
+moduSymbols !name !cmt !stmts = [moduSym]
+  where
+    !moduSym =
+      DocumentSymbol
+        { el'sym'name = name,
+          el'sym'detail = detail,
+          el'sym'kind = SymbolKind.Module,
+          el'sym'range = range,
+          el'sym'selectionRange = selRange,
+          el'sym'children = blockSymbols stmts
+        }
+    !detail = case cmt of
+      Just (line1 : _) -> line1
+      _ -> ""
+    (!range, !selRange) = case stmts of
+      [] -> (zeroSrcRange, zeroSrcRange)
+      (StmtSrc _ (SrcRange !startPos1 !endPos1)) : rest ->
+        ( SrcRange beginningSrcPos $ endPos endPos1 rest,
+          SrcRange beginningSrcPos startPos1
+        )
+    endPos :: SrcPos -> [StmtSrc] -> SrcPos
+    endPos !p [] = p
+    endPos _ ((StmtSrc _ (SrcRange _ !p)) : more) = endPos p more
+
+blockSymbols :: [StmtSrc] -> [DocumentSymbol]
+blockSymbols !stmts = concat $ stmtSymbols <$> stmts
+  where
+    stmtSymbols :: StmtSrc -> [DocumentSymbol]
+    stmtSymbols (StmtSrc (ExprStmt !x !doc) !stmt'span) =
+      exprSymbols doc stmt'span x
+    stmtSymbols (StmtSrc (GoStmt !x) _) = exprSymbols' Nothing x
+    stmtSymbols (StmtSrc (DeferStmt !x) _) = exprSymbols' Nothing x
+    stmtSymbols (StmtSrc (LetStmt _ (ArgsPacker !sndrs _)) _) =
+      concat $ exprSymbols' Nothing . sentArgExprSrc <$> sndrs
+    stmtSymbols (StmtSrc (ExtendsStmt !x) _) = exprSymbols' Nothing x
+    stmtSymbols (StmtSrc (PerceiveStmt !x !stmt) _) =
+      exprSymbols' Nothing x ++ stmtSymbols stmt
+    stmtSymbols (StmtSrc (WhileStmt !x !stmt) _) =
+      exprSymbols' Nothing x ++ stmtSymbols stmt
+    stmtSymbols (StmtSrc (ThrowStmt !x) _) = exprSymbols' Nothing x
+    stmtSymbols (StmtSrc (ReturnStmt !x) _) = exprSymbols' Nothing x
+    stmtSymbols _ = []
+
+    exprSymbols' :: Maybe DocComment -> ExprSrc -> [DocumentSymbol]
+    exprSymbols' !doc (ExprSrc !x !expr'span) = exprSymbols doc expr'span x
+
+    exprSymbols'' :: Maybe DocComment -> SrcRange -> ExprSrc -> [DocumentSymbol]
+    exprSymbols'' !doc !full'span (ExprSrc !x _) = exprSymbols doc full'span x
+
+    exprSymbols :: Maybe DocComment -> SrcRange -> Expr -> [DocumentSymbol]
+    exprSymbols !doc !full'span (BlockExpr !nested'stmts) = case doc of
+      Just !cmt -> [titledBlock cmt full'span $ blockSymbols nested'stmts]
+      Nothing -> blockSymbols nested'stmts
+    exprSymbols !doc !full'span (ScopedBlockExpr !nested'stmts) = case doc of
+      Just !cmt -> [titledBlock cmt full'span $ blockSymbols nested'stmts]
+      Nothing -> blockSymbols nested'stmts
+    exprSymbols
+      !doc
+      !full'span
+      (NamespaceExpr (ProcDecl !name _args !body _loc) (ArgsPacker !sndrs _)) =
+        [ procDecl doc name SymbolKind.Namespace full'span $
+            concat (exprSymbols' Nothing . sentArgExprSrc <$> sndrs)
+              ++ stmtSymbols body
+        ]
+    exprSymbols
+      !doc
+      !full'span
+      (ClassExpr (ProcDecl !name _args !body _loc)) =
+        [procDecl doc name SymbolKind.Class full'span $ stmtSymbols body]
+    exprSymbols
+      !doc
+      !full'span
+      (MethodExpr (ProcDecl !name _args !body _loc)) =
+        [procDecl doc name SymbolKind.Method full'span $ stmtSymbols body]
+    exprSymbols
+      !doc
+      !full'span
+      (GeneratorExpr (ProcDecl !name _args !body _loc)) =
+        [procDecl doc name SymbolKind.Method full'span $ stmtSymbols body]
+    exprSymbols
+      !doc
+      !full'span
+      (InterpreterExpr (ProcDecl !name _args !body _loc)) =
+        [procDecl doc name SymbolKind.Method full'span $ stmtSymbols body]
+    exprSymbols
+      !doc
+      !full'span
+      (ProducerExpr (ProcDecl !name _args !body _loc)) =
+        [procDecl doc name SymbolKind.Method full'span $ stmtSymbols body]
+    exprSymbols
+      !doc
+      !full'span
+      (OpDefiExpr _ _ _ (ProcDecl !name _args !body _loc)) =
+        [procDecl doc name SymbolKind.Operator full'span $ stmtSymbols body]
+    exprSymbols
+      !doc
+      !full'span
+      (OpOvrdExpr _ _ _ (ProcDecl !name _args !body _loc)) =
+        [procDecl doc name SymbolKind.Operator full'span $ stmtSymbols body]
+    exprSymbols !doc _full'span (VoidExpr !x) = exprSymbols' doc x
+    exprSymbols !doc _full'span (AtoIsoExpr !x) = exprSymbols' doc x
+    exprSymbols !doc _full'span (PrefixExpr _ !x) = exprSymbols' doc x
+    exprSymbols !doc _full'span (IfExpr !cnd !cseq !alt) =
+      exprSymbols' doc cnd ++ stmtSymbols cseq ++ maybe [] stmtSymbols alt
+    exprSymbols !doc _full'span (CaseExpr !t !b) =
+      exprSymbols' doc t ++ exprSymbols' doc b
+    exprSymbols !doc _full'span (DictExpr !entries) = concat $
+      (<$> entries) $ \(!k, !v) -> (++ exprSymbols' doc v) $ case k of
+        ExprDictKey !x -> exprSymbols' doc x
+        _ -> []
+    exprSymbols !doc _full'span (ListExpr !items) =
+      concat $ exprSymbols' doc <$> items
+    exprSymbols !doc _full'span (ArgsPackExpr (ArgsPacker !sndrs _)) =
+      concat $ exprSymbols' doc . sentArgExprSrc <$> sndrs
+    exprSymbols !doc !full'span (ParenExpr !x) = exprSymbols'' doc full'span x
+    exprSymbols !doc _full'span (ImportExpr _ !src !into) =
+      exprSymbols' doc src ++ maybe [] (exprSymbols' doc) into
+    exprSymbols !doc !full'span (ExportExpr !x) = exprSymbols'' doc full'span x
+    exprSymbols !doc _full'span (YieldExpr !x) = exprSymbols' doc x
+    exprSymbols !doc _full'span (ForExpr _rcvrs !from !body) =
+      exprSymbols' doc from ++ stmtSymbols body
+    exprSymbols !doc _full'span (IndexExpr !idx !tgt) =
+      exprSymbols' doc tgt ++ exprSymbols' doc idx
+    exprSymbols !doc _full'span (CallExpr !callee (ArgsPacker !sndrs _)) =
+      concat (exprSymbols' doc . sentArgExprSrc <$> sndrs)
+        ++ exprSymbols' doc callee
+    exprSymbols !doc _full'span (InfixExpr _op !lhs !rhs) =
+      exprSymbols' doc lhs ++ exprSymbols' doc rhs
+    exprSymbols !doc _full'span (DefaultExpr !x) = exprSymbols' doc x
+    exprSymbols !doc _full'span (ExprWithSrc !x !ssegs) =
+      (exprSymbols' doc x ++) $
+        concat $
+          (<$> ssegs) $ \case
+            SrcSeg _txt -> []
+            IntplSeg !x' -> exprSymbols' doc x'
+    exprSymbols !doc _full'span (IntplExpr !x) = exprSymbols' doc x
+    exprSymbols _ _ _ = []
 
 data CompletionItem = CompletionItem
   { el'cmpl'label :: !Text,

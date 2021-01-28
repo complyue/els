@@ -37,6 +37,17 @@ export method initialize(
           ]
         },
 
+        # not really for symbols, but to show blocks with titles in the
+        # outline view of side bar, with hierarchy of those blocks
+        'documentSymbolProvider': {
+          'label': 'Titled Code Blocks',
+          'workDoneProgress': false, # TODO add progress reporting
+        },
+        # to make those blocks with titles foldable
+        'foldingRangeProvider': true,
+
+        # backlog:
+
         # 'signatureHelpProvider': {
         #   'triggerCharacters': [
         #     '(',
@@ -48,9 +59,7 @@ export method initialize(
 
         # TODO impl. them
         # 'referencesProvider': true,
-        # 'foldingRangeProvider': true,
 
-        # 'documentSymbolProvider': true,
         # 'workspaceSymbolProvider': true,
 
         # TODO watch for src file changes?

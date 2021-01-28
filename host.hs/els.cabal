@@ -28,6 +28,7 @@ library
     Language.Edh.LS
     Language.Edh.LS.CompletionItemKind
     Language.Edh.LS.InsertTextFormat
+    Language.Edh.LS.SymbolKind
     Language.Edh.Meta.Model
 
   other-modules:
