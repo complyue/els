@@ -117,17 +117,33 @@
    # above each code cell, as in below. Click them (repeating welcomed) and
    # see what happens.
    #
-   # Finally, live code as well as live documentation!
+   # Those terminal sessions are full fledged REPL by the way, feel free to
+   # keyin Đ source by yourself there. And find files named `haskit.json`
+   # within the workspace folders, if you ever wonder where the list of
+   # choices come from.
+   #
+   # Finally, it becomes live code as well as live documentation!
    #
    #} {
 
     # %{ this denotes the starting cell of a block
-    # %% this denotes one cell
     console.print$ 'Finally!'
+
     # %% this denotes another cell
-    console.print( 'Voila! Live Code,' ++ ' Live Documentation!' )
+    console.print( 'Live Code,' ++ ' Live Documentation!' )
+
+    # %% this denotes yet another cell
+    let ( do's, don'ts, ) = (
+      ( 'feel it', 'experience it',
+        'keep things up-to-date', ),
+      ( "merely read it", 'literally remember it',
+        'leave yourself outdated', ),
+    )
+    for ( todo, to'not'do ) from zip( do's, don'ts )
+    do console.print$ 'Do ' ++ todo ++ ", don't " ++ to'not'do ++ '!'
+
     # %} this denotes the final cell of a block
-    console.print$ 'Seeing is believing!'
+    console.print$ `Voila!`
     # %# an end-of-cell mark
 
     # Note
