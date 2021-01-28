@@ -95,7 +95,13 @@
    #  Đ has *scoped block* which is denoted as `{@ ... @}`, it does create a
    #  nested scope. And you can write doc-comment for it too.
    #
-   #} {; # Note
+   #} {
+    # Right-click `console` below, select "Go to Definition", see what happens.
+    # Try `print` then.
+    console.print
+    # Hover mouse on them to see sth.
+
+    # Note
     #  In Đ, a block is an expression instead of a statement, but also,
     #  a standalone expression is an expression-statement, so a standalone
     #  block-expression can be said to be a block-statement.
