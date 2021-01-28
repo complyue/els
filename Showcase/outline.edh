@@ -118,9 +118,11 @@
    # see what happens.
    #
    # Those terminal sessions are full fledged REPL by the way, feel free to
-   # keyin Đ source by yourself there. And find files named `haskit.json`
-   # within the workspace folders, if you ever wonder where the list of
-   # choices come from.
+   # keyin Đ source by yourself there. Tip: for multi-line input, start by a
+   # line with mere `{`, and finish by a line with mere `}`.
+   #
+   # Find files named `haskit.json` within the workspace folder(s),
+   # if you ever wonder where the list of choices come from.
    #
    # Finally, it becomes live code as well as live documentation!
    #
