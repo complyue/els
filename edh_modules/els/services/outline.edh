@@ -12,7 +12,7 @@ export method @'textDocument/foldingRange' ( textDocument, ***_ ) void {
   case textDocument of { TxtDocFile ( absFilePath ) } ->
   { return { go {
         modu = world.locateByFile( absFilePath )
-        perform lspRespond([]) # TODO impl.
+        perform lspRespond( modu.foldingRanges() )
   } } }
   error( 'unexpected lsp params' )
 }

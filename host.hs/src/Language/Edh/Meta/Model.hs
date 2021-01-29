@@ -788,6 +788,8 @@ instance ToLSP TextEdit where
         ("newText", EdhString newText)
       ]
 
+-- * Hierarchical Symbols for Outline
+
 data DocumentSymbol = DocumentSymbol
   { el'sym'name :: !Text,
     el'sym'detail :: !Text,
@@ -1003,6 +1005,144 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
             IntplSeg !x' -> exprSymbols' doc x'
     exprSymbols !doc _full'span (IntplExpr !x) = exprSymbols' doc x
     exprSymbols _ _ _ = []
+
+-- * Folding of Hierarchical Symbols
+
+data FoldingRange = FoldingRange
+  { el'fold'startLine :: !Int,
+    el'fold'startCharacter :: !Int,
+    el'fold'endLine :: !Int,
+    el'fold'endCharacter :: !Int,
+    el'fold'kind :: !Text
+  }
+
+instance ToLSP FoldingRange where
+  toLSP (FoldingRange !startLine !startCharacter !endLine !endCharacter !kind) =
+    jsonObject
+      [ ("startLine", jsonInt startLine),
+        ("startCharacter", jsonInt startCharacter),
+        ("endLine", jsonInt endLine),
+        ("endCharacter", jsonInt endCharacter),
+        ("kind", if T.null kind then nil else EdhString kind)
+      ]
+
+foldingRange :: SrcRange -> FoldingRange
+foldingRange !rng = foldingRange' rng "region"
+
+foldingRange' :: SrcRange -> Text -> FoldingRange
+foldingRange'
+  (SrcRange (SrcPos !start'line !start'char) (SrcPos !end'line !end'char))
+  !kind =
+    FoldingRange
+      { el'fold'startLine = start'line,
+        el'fold'startCharacter = start'char,
+        el'fold'endLine = end'line,
+        el'fold'endCharacter = end'char,
+        el'fold'kind = kind
+      }
+
+blockFoldRngs :: [StmtSrc] -> [FoldingRange]
+blockFoldRngs !stmts = concat $ stmtFoldRngs <$> stmts
+  where
+    stmtFoldRngs :: StmtSrc -> [FoldingRange]
+    stmtFoldRngs (StmtSrc (ExprStmt !x _doc) !stmt'span) =
+      exprFoldRngs stmt'span x
+    stmtFoldRngs (StmtSrc (GoStmt !x) _) = exprFoldRngs' x
+    stmtFoldRngs (StmtSrc (DeferStmt !x) _) = exprFoldRngs' x
+    stmtFoldRngs (StmtSrc (LetStmt _ (ArgsPacker !sndrs _)) _) =
+      concat $ exprFoldRngs' . sentArgExprSrc <$> sndrs
+    stmtFoldRngs (StmtSrc (ExtendsStmt !x) _) = exprFoldRngs' x
+    stmtFoldRngs (StmtSrc (PerceiveStmt !x !stmt) _) =
+      exprFoldRngs' x ++ stmtFoldRngs stmt
+    stmtFoldRngs (StmtSrc (WhileStmt !x !stmt) _) =
+      exprFoldRngs' x ++ stmtFoldRngs stmt
+    stmtFoldRngs (StmtSrc (ThrowStmt !x) _) = exprFoldRngs' x
+    stmtFoldRngs (StmtSrc (ReturnStmt !x) _) = exprFoldRngs' x
+    stmtFoldRngs _ = []
+
+    exprFoldRngs' :: ExprSrc -> [FoldingRange]
+    exprFoldRngs' (ExprSrc !x !expr'span) = exprFoldRngs expr'span x
+
+    exprFoldRngs'' :: SrcRange -> ExprSrc -> [FoldingRange]
+    exprFoldRngs'' !full'span (ExprSrc !x _) = exprFoldRngs full'span x
+
+    exprFoldRngs :: SrcRange -> Expr -> [FoldingRange]
+    exprFoldRngs !full'span (BlockExpr !nested'stmts) =
+      foldingRange full'span : blockFoldRngs nested'stmts
+    exprFoldRngs !full'span (ScopedBlockExpr !nested'stmts) =
+      foldingRange full'span : blockFoldRngs nested'stmts
+    exprFoldRngs
+      !full'span
+      (NamespaceExpr (ProcDecl _name _args !body _loc) _apkr) =
+        foldingRange full'span : stmtFoldRngs body
+    exprFoldRngs
+      !full'span
+      (ClassExpr (ProcDecl _name _args !body _loc)) =
+        foldingRange full'span : stmtFoldRngs body
+    exprFoldRngs
+      !full'span
+      (MethodExpr (ProcDecl _name _args !body _loc)) =
+        foldingRange full'span : stmtFoldRngs body
+    exprFoldRngs
+      !full'span
+      (GeneratorExpr (ProcDecl _name _args !body _loc)) =
+        foldingRange full'span : stmtFoldRngs body
+    exprFoldRngs
+      !full'span
+      (InterpreterExpr (ProcDecl _name _args !body _loc)) =
+        foldingRange full'span : stmtFoldRngs body
+    exprFoldRngs
+      !full'span
+      (ProducerExpr (ProcDecl _name _args !body _loc)) =
+        foldingRange full'span : stmtFoldRngs body
+    exprFoldRngs
+      !full'span
+      (OpDefiExpr _ _ _ (ProcDecl _name _args !body _loc)) =
+        foldingRange full'span : stmtFoldRngs body
+    exprFoldRngs
+      !full'span
+      (OpOvrdExpr _ _ _ (ProcDecl _name _args !body _loc)) =
+        foldingRange full'span : stmtFoldRngs body
+    exprFoldRngs _full'span (VoidExpr !x) = exprFoldRngs' x
+    exprFoldRngs _full'span (AtoIsoExpr !x) = exprFoldRngs' x
+    exprFoldRngs _full'span (PrefixExpr _ !x) = exprFoldRngs' x
+    exprFoldRngs _full'span (IfExpr !cnd !cseq !alt) =
+      exprFoldRngs' cnd ++ stmtFoldRngs cseq ++ maybe [] stmtFoldRngs alt
+    exprFoldRngs _full'span (CaseExpr !t !b) =
+      exprFoldRngs' t ++ exprFoldRngs' b
+    exprFoldRngs _full'span (DictExpr !entries) = concat $
+      (<$> entries) $ \(!k, !v) -> (++ exprFoldRngs' v) $ case k of
+        ExprDictKey !x -> exprFoldRngs' x
+        _ -> []
+    exprFoldRngs _full'span (ListExpr !items) =
+      concat $ exprFoldRngs' <$> items
+    exprFoldRngs _full'span (ArgsPackExpr (ArgsPacker !sndrs _)) =
+      concat $ exprFoldRngs' . sentArgExprSrc <$> sndrs
+    exprFoldRngs !full'span (ParenExpr !x) = exprFoldRngs'' full'span x
+    exprFoldRngs _full'span (ImportExpr _ !src !into) =
+      exprFoldRngs' src ++ maybe [] exprFoldRngs' into
+    exprFoldRngs !full'span (ExportExpr !x) = exprFoldRngs'' full'span x
+    exprFoldRngs _full'span (YieldExpr !x) = exprFoldRngs' x
+    exprFoldRngs _full'span (ForExpr _rcvrs !from !body) =
+      exprFoldRngs' from ++ stmtFoldRngs body
+    exprFoldRngs _full'span (IndexExpr !idx !tgt) =
+      exprFoldRngs' tgt ++ exprFoldRngs' idx
+    exprFoldRngs _full'span (CallExpr !callee (ArgsPacker !sndrs _)) =
+      concat (exprFoldRngs' . sentArgExprSrc <$> sndrs)
+        ++ exprFoldRngs' callee
+    exprFoldRngs _full'span (InfixExpr _op !lhs !rhs) =
+      exprFoldRngs' lhs ++ exprFoldRngs' rhs
+    exprFoldRngs _full'span (DefaultExpr !x) = exprFoldRngs' x
+    exprFoldRngs _full'span (ExprWithSrc !x !ssegs) =
+      (exprFoldRngs' x ++) $
+        concat $
+          (<$> ssegs) $ \case
+            SrcSeg _txt -> []
+            IntplSeg !x' -> exprFoldRngs' x'
+    exprFoldRngs _full'span (IntplExpr !x) = exprFoldRngs' x
+    exprFoldRngs _ _ = []
+
+-- * Completion / Suggestion
 
 data CompletionItem = CompletionItem
   { el'cmpl'label :: !Text,

@@ -24,6 +24,7 @@ createMetaModuleClass !clsOuterScope =
           [ (AttrByName nm,) <$> mkHostProc clsOuterScope vc nm hp
             | (nm, vc, hp) <-
                 [ ("moduSymbols", EdhMethod, wrapHostProc moduSymbolsProc),
+                  ("foldingRanges", EdhMethod, wrapHostProc foldingRangesProc),
                   ("invalidate", EdhMethod, wrapHostProc invalidateProc),
                   ("fill", EdhMethod, wrapHostProc fillProc)
                 ]
@@ -54,6 +55,16 @@ createMetaModuleClass !clsOuterScope =
               jsonArray $
                 toLSP
                   <$> moduSymbols (el'modu'name ms) modu'cmt stmts
+
+    foldingRangesProc :: EdhHostProc
+    foldingRangesProc !exit !ets = withThisHostObj ets $ \ !ms ->
+      runEdhTx ets $
+        asModuleParsed ms $
+          \(EL'ParsedModule _modu'cmt !stmts _diags) _ets ->
+            exitEdh ets exit $
+              jsonArray $
+                toLSP
+                  <$> blockFoldRngs stmts
 
     invalidateProc :: "srcChanged" ?: Bool -> EdhHostProc
     invalidateProc (defaultArg False -> !srcChanged) !exit !ets =
