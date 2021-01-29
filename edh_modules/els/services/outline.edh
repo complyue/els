@@ -5,28 +5,28 @@ import * './utils'
 
 
 {##
- # to make those blocks with titles, as well as irrelevant contents between
- # two titled blocks, foldable
- #}
-export method @'textDocument/foldingRange' ( textDocument, ***_ ) void {
-  case textDocument of { TxtDocFile ( absFilePath ) } ->
-  { return { go {
-        modu = world.locateByFile( absFilePath )
-        perform lspRespond( modu.foldingRanges() )
-  } } }
-  error( 'unexpected lsp params' )
-}
-
-
-{##
- # not really for symbols, but to show blocks with titles in the
- # outline view of side bar, with hierarchy of those blocks
+ # As well as for traditional symbols, also for doc-commented blocks to be
+ # shown in the outline view of side bar, as *navigable* table-of-contents
+ # reflecting the hierarchical structure of the code/document organization.
  #}
 export method @'textDocument/documentSymbol' ( textDocument, ***_ ) void {
   case textDocument of { TxtDocFile ( absFilePath ) } ->
   { return { go {
         modu = world.locateByFile( absFilePath )
         perform lspRespond( modu.moduSymbols() )
+  } } }
+  error( 'unexpected lsp params' )
+}
+
+{##
+ # Closely tracking the ToC shown in the outline view (from symbols),
+ # making each level individually foldable in the code editor.
+ #}
+export method @'textDocument/foldingRange' ( textDocument, ***_ ) void {
+  case textDocument of { TxtDocFile ( absFilePath ) } ->
+  { return { go {
+        modu = world.locateByFile( absFilePath )
+        perform lspRespond( modu.foldingRanges() )
   } } }
   error( 'unexpected lsp params' )
 }

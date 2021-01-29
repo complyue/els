@@ -107,6 +107,13 @@
     #  block-expression can be said to be a block-statement.
   }
 
+  # Lines between symbol regions are considered implementation details,
+  # they are not navigable as having no corresponding clickable label in the
+  # outline view (ToC), then such regions should be foldable, so a reader can
+  # purposefully hide them for less distraction.
+  assert$ 1+1 is 2
+  assert$ 3 > 2
+
   {## Code Lens for Life
    # Snippets to run in integrated terminal sessions, a click away
    #

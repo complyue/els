@@ -34,13 +34,30 @@ export {
   class MetaModule {
 
     {##
-     # invalidate the module resolution
-     # also invalidate the parsing result if `srcChanged` is true
+     # Obtain LSP response for the symbols in this module
+     #
+     # As well as for traditional symbols, also for doc-commented blocks to be
+     # shown in the outline view of side bar, as *navigable* table-of-contents
+     # reflecting the hierarchical structure of the code/document organization.
+     #}
+    method moduSymbols() pass
+
+    {##
+     # Obtain LSP response for the folding ranges in this module
+     #
+     # Closely tracking the ToC shown in the outline view (from symbols),
+     # making each level individually foldable in the code editor.
+     #}
+    method foldingRanges() pass
+
+    {##
+     # Invalidate the module resolution, also the parsing result if
+     # `srcChanged` is true
      #}
     method invalidate( srcChanged= false ) pass
 
     {##
-     # fill some source on-the-fly
+     # Fill new source for this module on-the-fly
      #
      # this procedure returns immediately after this module is invalidated and
      # parsing against the supplied source initiated, it forks a separate
@@ -54,7 +71,7 @@ export {
     property$ method home() pass
 
     {##
-     # absolute path of the module's source file
+     # Absolute path of the module's source file
      #}
     property$ method doc() pass
 

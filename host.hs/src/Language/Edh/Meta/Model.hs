@@ -1042,8 +1042,35 @@ foldingRange'
       }
 
 blockFoldRngs :: [StmtSrc] -> [FoldingRange]
-blockFoldRngs !stmts = concat $ stmtFoldRngs <$> stmts
+blockFoldRngs [] = []
+blockFoldRngs (stmt1 : rest'stmts) = foldGap stmt1 rest'stmts
   where
+    foldGap :: StmtSrc -> [StmtSrc] -> [FoldingRange]
+    foldGap !stmt [] = stmtFoldRngs stmt
+    foldGap !stmt !rest = case stmtFoldRngs stmt of
+      [] -> rest'rngs
+      !prev'rngs -> case rest'rngs of
+        [] -> prev'rngs
+        next'rng : _ ->
+          prev'rngs
+            ++ gapRngs (last prev'rngs) next'rng
+            ++ rest'rngs
+      where
+        gapRngs
+          (FoldingRange _ _ !prev'end'line _ _)
+          (FoldingRange !next'start'line _ _ _ _) =
+            [ foldingRange'
+                ( SrcRange
+                    (SrcPos (prev'end'line + 1) 0)
+                    (SrcPos (next'start'line - 1) 0)
+                )
+                "" -- region kind for verbose details here?
+              | next'start'line - prev'end'line > 5
+            ]
+        rest'rngs = case rest of
+          [] -> []
+          stmt' : rest' -> foldGap stmt' rest'
+
     stmtFoldRngs :: StmtSrc -> [FoldingRange]
     stmtFoldRngs (StmtSrc (ExprStmt !x _doc) !stmt'span) =
       exprFoldRngs stmt'span x
