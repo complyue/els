@@ -35,19 +35,16 @@ export method @'textDocument/didChange' (
     error( 'too many changes' )
   }
 
-  case textDocument of { TxtDocFile ( absFilePath ) } -> {
+  case textDocument of { TxtDocFile ( absFilePath, version= docVersion ) } -> {
     moduChgd = world.locateByFile( absFilePath )
-    # `.fill()` returns immediately after the module invalidated and parsing
-    # future of the new source registered, it'll post an event to
-    # `moduChgd.chgSignal` as well
-    moduChgd.fill( fullTxt )
-    # then on a separate thread, block wait for the diags and publish it,
-    # to unblock subsequent requests from the lsp client
-    go {
-      # terminate this thread on subsequent doc changes
-      # it's safe as no lsp request involved so no response mandated
-      perceive moduChgd.chgSignal break
-      # block wait diags from resolution/parsing, report back to lsp client
+    # the parsing after invalidated, will pend starting until otf source is
+    # seen stabilized, i.e. no further otf change after 350 ms.
+    #
+    # the first otf filler is responsible to report back diags, `fill()` tells
+    # whether this is the first fill since last parsed.
+    if moduChgd.fill( docVersion, fullTxt, ) then go {
+      # obtain diags by resolving (which triggers parsing in turn),
+      # report the result back to lsp client
       perform lspNotify( 'textDocument/publishDiagnostics',
         uri= textDocument[ 'uri' ],
         version= textDocument[ 'version' ],

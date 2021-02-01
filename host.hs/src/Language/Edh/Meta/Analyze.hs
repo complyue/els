@@ -17,6 +17,7 @@ import qualified Data.Text as T
 import Data.Text.Encoding (Decoding (Some), streamDecodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Vector as V
+import GHC.Clock
 import GHC.Conc (unsafeIOToSTM)
 import Language.Edh.EHI
 import Language.Edh.Meta.AQ
@@ -90,7 +91,7 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                     putTMVar mmVar mm
                     exitEdh ets exit ms
           Nothing -> do
-            !chgSig <- newEventSink' False
+            !otfVar <- newTVar Nothing
             !parsing <- newEmptyTMVar
             !resolution <- newEmptyTMVar
             let !ms =
@@ -98,7 +99,7 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                     home
                     name
                     (SrcDoc absFile)
-                    chgSig
+                    otfVar
                     parsing
                     resolution
             putTMVar mmVar (Map.insert name ms mm)
@@ -310,19 +311,11 @@ el'WalkParsingDiags !msStart !walker = void $ go Map.empty msStart
 -- | invalidate resolution results of this module and all known dependants
 -- will have parsing result invaliated as well if `srcChanged` is @True@
 el'InvalidateModule ::
-  Either (TMVar EL'ParsedModule) Bool ->
+  Bool ->
   EL'ModuSlot ->
   EdhProc ()
-el'InvalidateModule !srcChg !ms !exit !ets = do
-  case srcChg of
-    Left !parsingFuture -> do
-      void $ tryTakeTMVar (el'modu'parsing ms)
-      putTMVar (el'modu'parsing ms) $ EL'ModuParsing parsingFuture
-      void $ postEvent (el'modu'chg'signal ms) (EdhBool True)
-    Right True -> do
-      void $ tryTakeTMVar (el'modu'parsing ms)
-      void $ postEvent (el'modu'chg'signal ms) (EdhBool False)
-    Right False -> pure ()
+el'InvalidateModule !srcChgd !ms !exit !ets = do
+  when srcChgd $ void $ tryTakeTMVar (el'modu'parsing ms)
   tryTakeTMVar reso >>= \case
     Nothing -> pure ()
     Just (EL'ModuResolving !resolving _acts) ->
@@ -357,7 +350,7 @@ el'InvalidateModule !srcChg !ms !exit !ets = do
               case Map.lookup ms (el'modu'dependencies resolved') of
                 Just True ->
                   runEdhTx ets $
-                    el'InvalidateModule (Right False) dependant $ \_ _ets ->
+                    el'InvalidateModule False dependant $ \_ _ets ->
                       go upds rest
                 _ ->
                   if hold
@@ -367,141 +360,125 @@ el'InvalidateModule !srcChg !ms !exit !ets = do
                         rest
                     else go upds rest
 
--- | obtain the result as the specified module is parsed
+moduSrcStabilized :: EL'ModuSlot -> STM Bool
+moduSrcStabilized !ms =
+  readTVar (el'modu'src'otf ms) >>= \case
+    Nothing -> return True
+    Just (_ver, _src, !otfTime) -> do
+      !currTime <- unsafeIOToSTM getMonotonicTimeNSec
+      -- considered stabilized after at least 350ms
+      -- todo make this tunable?
+      return $ currTime - otfTime >= 350000000
+
+-- | Obtain the result as the specified module is parsed
+--
+-- It is throttled wrt source changes on-the-fly, esp. during fast typing,
+-- see:
+--   https://github.com/emacs-lsp/lsp-mode/issues/362#issuecomment-446549480
 asModuleParsed :: EL'ModuSlot -> EdhProc EL'ParsedModule
 asModuleParsed !ms !exit !ets =
-  tryReadTMVar parsingVar >>= \case
-    Nothing -> do
-      !parsedVar <- newEmptyTMVar
-      -- this put will retry back to re-check, if parsingVar has been changed
-      -- by others concurrently, so duplicate parsing effort can be avoided
-      putTMVar parsingVar (EL'ModuParsing parsedVar)
-      -- schedule the parsing to happen in next tx, so retries caused by above
-      -- don't include the expensive, actual parsing
-      edhContSTM'' ets $
-        -- todo
-        -- maybe try harder to guarantee 'parsedVar' will always be filled.
-        -- bracket with STM monad is not correct as multiple txs it will span;
-        -- using Edh finally block may be the way, but we're already doing that
-        -- in 'doParseModule', not sure anything to be done here so.
-        doParseModule $ \ !parsed -> do
-          -- install the parsed record
-          putTMVar parsedVar parsed
-          tryTakeTMVar parsingVar >>= \case
-            Just (EL'ModuParsing parsedVar')
-              | parsedVar' == parsedVar ->
-                -- the most expected scenario
-                putTMVar parsingVar $ EL'ModuParsed parsed
-            Just !other ->
-              -- invalidated & new analysation wip
-              void $ tryPutTMVar parsingVar other
-            _ ->
-              -- invalidated meanwhile
-              return ()
+  moduSrcStabilized ms >>= \case
+    False -> edhContIO'' ets $ do
+      threadDelay 350000
+      atomically $ asModuleParsed ms exit ets
+    True -> do
+      !otf <- readTVar (el'modu'src'otf ms)
+      let !otfVersion = case otf of
+            Just (!ver, _, _) -> ver
+            _ -> 0
+          doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
+          doParseModule !exit' = edhCatch ets doParse exit' $
+            \ !etsCatching !exv !recover !rethrow -> case exv of
+              EdhNil -> rethrow nil
+              _ -> edhValueDesc etsCatching exv $ \ !exDesc ->
+                recover $
+                  EL'ParsedModule
+                    otfVersion
+                    Nothing
+                    []
+                    [el'Diag el'Error noSrcRange "err-parse" exDesc]
+            where
+              doParse !exit'' !etsParse = do
+                (!resultVersion, !moduSrc, _) <- case otf of
+                  Just !otfSrc -> return otfSrc
+                  Nothing ->
+                    let SrcDoc !moduFile = moduDoc
+                     in unsafeIOToSTM
+                          ( streamDecodeUtf8With lenientDecode
+                              <$> B.readFile (T.unpack moduFile)
+                          )
+                          >>= \case
+                            Some !src _ _ -> return (0, src, 0)
+                parseModuleSource resultVersion moduSrc moduDoc exit'' etsParse
+          goParse = do
+            -- STM can retry back to re-check, in case parsingVar has been
+            -- changed by others concurrently, so duplicate parsing effort
+            -- can be avoided
+            void $ tryTakeTMVar parsingVar
+            !parsedVar <- newEmptyTMVar
+            putTMVar parsingVar (EL'ModuParsing otfVersion parsedVar)
+            -- schedule the parsing to happen in next tx, so retries caused by
+            -- above don't include the expensive, actual parsing
+            edhContSTM'' ets $
+              -- todo
+              --  maybe try harder to guarantee 'parsedVar' will always be
+              --  filled. bracket with STM monad is not correct as multiple txs
+              --  it will span; using Edh finally block may be the way, but
+              --  we're already doing that in 'doParseModule', not sure
+              --  anything to be done here so.
+              doParseModule $ \ !parsed -> do
+                -- install the parsed record
+                putTMVar parsedVar parsed
+                tryTakeTMVar parsingVar >>= \case
+                  Just (EL'ModuParsing !parsingVer _parsedVar')
+                    | otfVersion >= parsingVer ->
+                      -- the most expected scenario, we got the latest result
+                      putTMVar parsingVar $ EL'ModuParsed parsed
+                  Just !other ->
+                    -- invalidated & new analysation wip
+                    void $ tryPutTMVar parsingVar other
+                  Nothing ->
+                    -- invalidated meanwhile
+                    return ()
 
-          -- return from this procedure
-          exitEdh ets exit parsed
-    Just (EL'ModuParsing !parsedVar) -> do
-      -- parsing by some other thread,
-      -- blocking wait a result in next tx
-      runEdhTx ets $ edhContSTM $ readTMVar parsedVar >>= exitEdh ets exit
-    Just (EL'ModuParsed !parsed) -> exitEdh ets exit parsed
+                -- return from this procedure
+                exitEdh ets exit parsed
+
+      tryReadTMVar parsingVar >>= \case
+        Nothing -> goParse
+        Just (EL'ModuParsing !parsingVer !parsedVar) ->
+          if otfVersion > parsingVer
+            then goParse
+            else
+              runEdhTx ets $
+                -- parsing by some other thread,
+                -- blocking wait a result in next tx
+                edhContSTM $ readTMVar parsedVar >>= exitEdh ets exit
+        Just (EL'ModuParsed !parsed) ->
+          if otfVersion > el'modu'src'version parsed
+            then goParse
+            else exitEdh ets exit parsed
   where
+    !moduDoc = el'modu'doc ms
     !parsingVar = el'modu'parsing ms
 
-    doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
-    doParseModule !exit' = edhCatch
-      ets
-      (parseModuleOnDisk $ el'modu'doc ms)
-      exit'
-      $ \ !etsCatching !exv !recover !rethrow -> case exv of
-        EdhNil -> rethrow nil
-        _ -> edhValueDesc etsCatching exv $ \ !exDesc ->
-          recover $
-            EL'ParsedModule
-              Nothing
-              []
-              [ el'Diag
-                  el'Error
-                  noSrcRange
-                  "err-parse"
-                  exDesc
-              ]
-
-parseModuleOnDisk :: SrcDoc -> EdhProc EL'ParsedModule
-parseModuleOnDisk moduDoc@(SrcDoc !moduFile) !exit !ets =
-  unsafeIOToSTM
-    ( streamDecodeUtf8With lenientDecode
-        <$> B.readFile
-          ( T.unpack
-              moduFile
-          )
-    )
-    >>= \case
-      Some !moduSource _ _ -> parseModuleSource moduSource moduDoc exit ets
-
--- | fill in module source on the fly, usually pending save from an IDE editor
---
--- todo track document version to cancel parsing attempts for old versions
-el'FillModuleSource :: Text -> EL'ModuSlot -> EdhProc ()
-el'FillModuleSource !moduSource !ms !exit !ets = do
-  !parsingFuture <- newEmptyTMVar
-  -- invalidate parsing/resolution results of this module and all dependants
-  -- with this parsing registered for the future
+-- | Fill in module source on the fly, usually pending save from an IDE editor,
+-- return whether this is the first fill since last parsed.
+el'FillModuleSource :: Int -> Text -> EL'ModuSlot -> EdhProc Bool
+el'FillModuleSource !docVersion !moduSource !ms !exit !ets =
   runEdhTx ets $
-    el'InvalidateModule (Left parsingFuture) ms $ \() _ets -> do
-      -- now parse the supplied source and get the result,
-      -- then try install only if it's still up-to-date
-      let installResult !parsed = do
-            putTMVar parsingFuture parsed
-            tryReadTMVar parsingVar >>= \case
-              Just (EL'ModuParsing parsingFuture')
-                | parsingFuture' == parsingFuture -> do
-                  -- the most expected scenario
-                  void $ tryTakeTMVar parsingVar
-                  putTMVar parsingVar $ EL'ModuParsed parsed
-              _ -> return () -- changed again or invalidated meanwhile
-          doParseModule :: EdhTx
-          doParseModule !etsParse =
-            -- TODO start another thread to kill this parsing thread on signal
-            --      from `el'modu'chg'signal ms`
-            --      note: make sure `parsingFuture` filled anyway
-            -- parse & install the result
-            -- catch any exception for the parsing, wrap as diagnostics
-            edhCatch
-              etsParse
-              (parseModuleSource moduSource $ el'modu'doc ms)
-              ( -- break into separate STM txs, saving expensive retries
-                -- i.e. to parse again
-                edhContSTM'' etsParse . installResult
-              )
-              $ \ !etsCatching !exv !recover !rethrow -> case exv of
-                EdhNil -> rethrow nil
-                _ -> edhValueDesc etsCatching exv $ \ !exDesc ->
-                  recover $
-                    EL'ParsedModule
-                      Nothing
-                      []
-                      [ el'Diag
-                          el'Error
-                          noSrcRange
-                          "err-parse"
-                          exDesc
-                      ]
-
-      -- perform the parsing in a separate thread, return as soon as the
-      -- target module is invalidated, and we have registered our future
-      --
-      -- it is essential for us to return only after our parsing future
-      -- put into @parsingVar@, or subsequent lsp request may cause another
-      -- parsing-on-demand registered, that to load the file content (older
-      -- than edited by the lsp client) from disk
-      forkEdh id doParseModule exit ets
+    el'InvalidateModule True ms $ \() _ets -> do
+      !prevFill <- readTVar otfVar
+      !otfTime <- unsafeIOToSTM getMonotonicTimeNSec
+      writeTVar otfVar $ Just (docVersion, moduSource, otfTime)
+      exitEdh ets exit $ case prevFill of
+        Nothing -> True
+        _ -> False
   where
-    !parsingVar = el'modu'parsing ms
+    otfVar = el'modu'src'otf ms
 
-parseModuleSource :: Text -> SrcDoc -> EdhProc EL'ParsedModule
-parseModuleSource !moduSource (SrcDoc !moduFile) !exit !ets =
+parseModuleSource :: Int -> Text -> SrcDoc -> EdhProc EL'ParsedModule
+parseModuleSource !srcVersion !moduSource (SrcDoc !moduFile) !exit !ets =
   parseEdh world moduFile moduSource >>= \case
     Left !err -> do
       let !msg = T.pack $ errorBundlePretty err
@@ -510,7 +487,7 @@ parseModuleSource !moduSource (SrcDoc !moduFile) !exit !ets =
       edhWrapException (toException edhErr)
         >>= \ !exo -> edhThrow ets (EdhObject exo)
     Right (!stmts, !docCmt) ->
-      exitEdh ets exit $ EL'ParsedModule docCmt stmts []
+      exitEdh ets exit $ EL'ParsedModule srcVersion docCmt stmts []
   where
     !world = edh'prog'world $ edh'thread'prog ets
 

@@ -26,15 +26,15 @@ createMetaModuleClass !clsOuterScope =
                 [ ("moduSymbols", EdhMethod, wrapHostProc moduSymbolsProc),
                   ("foldingRanges", EdhMethod, wrapHostProc foldingRangesProc),
                   ("invalidate", EdhMethod, wrapHostProc invalidateProc),
-                  ("fill", EdhMethod, wrapHostProc fillProc)
+                  ("fill", EdhMethod, wrapHostProc fillProc),
+                  ("stabilized", EdhMethod, wrapHostProc stabilizedProc)
                 ]
           ]
             ++ [ (AttrByName nm,)
                    <$> mkHostProperty clsOuterScope nm getter setter
                  | (nm, getter, setter) <-
                      [ ("home", homeProc, Nothing),
-                       ("doc", docProc, Nothing),
-                       ("chgSignal", chgSignalProc, Nothing)
+                       ("doc", docProc, Nothing)
                      ]
                ]
       iopdUpdate arts $ edh'scope'entity clsScope
@@ -50,17 +50,16 @@ createMetaModuleClass !clsOuterScope =
     moduSymbolsProc !exit !ets = withThisHostObj ets $ \ !ms ->
       runEdhTx ets $
         asModuleParsed ms $
-          \(EL'ParsedModule !modu'cmt !stmts _diags) _ets ->
+          \(EL'ParsedModule _ver !modu'cmt !stmts _diags) _ets ->
             exitEdh ets exit $
               jsonArray $
-                toLSP
-                  <$> moduSymbols (el'modu'name ms) modu'cmt stmts
+                toLSP <$> moduSymbols (el'modu'name ms) modu'cmt stmts
 
     foldingRangesProc :: EdhHostProc
     foldingRangesProc !exit !ets = withThisHostObj ets $ \ !ms ->
       runEdhTx ets $
         asModuleParsed ms $
-          \(EL'ParsedModule _modu'cmt !stmts _diags) _ets ->
+          \(EL'ParsedModule _ver _modu'cmt !stmts _diags) _ets ->
             exitEdh ets exit $
               jsonArray $
                 toLSP
@@ -70,15 +69,18 @@ createMetaModuleClass !clsOuterScope =
     invalidateProc (defaultArg False -> !srcChanged) !exit !ets =
       withThisHostObj ets $ \ !ms ->
         runEdhTx ets $
-          el'InvalidateModule (Right srcChanged) ms $
+          el'InvalidateModule srcChanged ms $
             \() _ets -> exitEdh ets exit nil
 
-    fillProc :: "srcOTF" !: Text -> EdhHostProc
-    fillProc (mandatoryArg -> !srcOTF) !exit !ets =
+    fillProc :: "verOTF" !: Int -> "srcOTF" !: Text -> EdhHostProc
+    fillProc (mandatoryArg -> !verOTF) (mandatoryArg -> !srcOTF) !exit !ets =
       withThisHostObj ets $ \ !ms ->
-        runEdhTx ets $
-          el'FillModuleSource srcOTF ms $
-            \_parsed _ets -> exitEdh ets exit nil
+        runEdhTx ets $ el'FillModuleSource verOTF srcOTF ms $ exit . EdhBool
+
+    stabilizedProc :: EdhHostProc
+    stabilizedProc !exit !ets =
+      withThisHostObj ets $ \ !ms ->
+        moduSrcStabilized ms >>= exitEdh ets exit . EdhBool
 
     homeProc :: EdhHostProc
     homeProc !exit !ets = withThisHostObj ets $ \ !ms -> do
@@ -90,10 +92,6 @@ createMetaModuleClass !clsOuterScope =
       let SrcDoc !docFile = el'modu'doc ms
           !hv = EdhString docFile
       exitEdh ets exit hv
-
-    chgSignalProc :: EdhHostProc
-    chgSignalProc !exit !ets = withThisHostObj ets $ \ !ms ->
-      exitEdh ets exit $ EdhSink $ el'modu'chg'signal ms
 
 createMetaWorldClass :: Object -> Scope -> STM Object
 createMetaWorldClass !msClass !clsOuterScope =

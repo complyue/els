@@ -2,11 +2,11 @@
 import ( elsDebug, **_ ) 'els/debug'
 
 
-export data TxtDocFile ( absFilePath ) {
+export data TxtDocFile ( absFilePath, version= 0 ) {
 
   method __match__ ( textDocument ) case textDocument[ 'uri' ] of {
     { URI( scheme, path ) } | scheme is 'file' -> {
-      return TxtDocFile( path )
+      return TxtDocFile( path, textDocument[ 'version' ] or 0 )
     }
     debug and elsDebug.replHere()
     return void perform lspError( 'unsupported uri' )

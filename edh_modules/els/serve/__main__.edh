@@ -6,12 +6,17 @@
  # VSCode workspace session.
  #}
 
-import * 'els'
-effect import * 'els/effects'
+{
 
-# pull-in all service methods
-import (** allMethods ) 'els/services'
+  import * 'els'
+  effect import * 'els/effects'
 
+  # pull-in all service methods
+  import (** allMethods ) 'els/services'
+
+} $=> { exc } -> {
+  console.fatal<| 'els service initalization error: ' ++ desc( exc )
+}
 
 # mocking artifacts those should have been implanted by host
 # module preparation, to give meaningful information to IDEs

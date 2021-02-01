@@ -57,13 +57,18 @@ export {
     method invalidate( srcChanged= false ) pass
 
     {##
-     # Fill new source for this module on-the-fly
+     # Fill new versioned source for this module on-the-fly.
      #
-     # this procedure returns immediately after this module is invalidated and
-     # parsing against the supplied source initiated, it forks a separate
-     # thread (goroutine) to perform the actual parsing.
+     # This method returns the previous version on-the-fly, or nil if this is
+     # the first otf fill since last parsed.
      #}
-    method fill( srcOTF ) pass
+    method fill( verOTF, srcOTF ) pass
+
+    {##
+     # Check whether on-the-fly source changing of this module has been
+     # stabilized
+     #}
+    method stabilized() pass
 
     {##
      # EPM home this moduel belongs to

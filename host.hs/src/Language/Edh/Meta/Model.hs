@@ -10,6 +10,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Vector (Vector)
 import qualified Data.Vector as V
+import Data.Word
 import GHC.IO (unsafePerformIO)
 import Language.Edh.EHI
 import Language.Edh.LS.InsertTextFormat (InsertTextFormat)
@@ -174,9 +175,8 @@ data EL'ModuSlot = EL'ModuSlot
     -- | absolute path of the `.edh` src file
     -- this corresponds to `__file__` in the module at runtime
     el'modu'doc :: !SrcDoc,
-    -- | signal channel with 1 event posted per module source change (i.e.
-    -- AST invalidated)
-    el'modu'chg'signal :: !EventSink,
+    -- | module source modified on-the-fly
+    el'modu'src'otf :: !(TVar (Maybe (Int, Text, Word64))),
     -- | tracking the parsing of this module
     el'modu'parsing :: !(TMVar EL'ModuParsing),
     -- | tracking the resolving of this module
@@ -197,11 +197,12 @@ instance Hashable EL'ModuSlot where
      in hashWithSalt s absPath
 
 data EL'ModuParsing
-  = EL'ModuParsing !(TMVar EL'ParsedModule)
+  = EL'ModuParsing !Int !(TMVar EL'ParsedModule)
   | EL'ModuParsed !EL'ParsedModule
 
 data EL'ParsedModule = EL'ParsedModule
-  { el'modu'doc'comment :: !(Maybe DocComment),
+  { el'modu'src'version :: !Int,
+    el'modu'doc'comment :: !(Maybe DocComment),
     el'modu'stmts :: ![StmtSrc],
     -- | diagnostics generated from this stage of analysis
     el'parsing'diags :: ![EL'Diagnostic]
