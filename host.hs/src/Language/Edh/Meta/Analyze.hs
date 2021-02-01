@@ -382,11 +382,11 @@ asModuleParsed !ms !exit !ets =
       threadDelay 350000
       atomically $ asModuleParsed ms exit ets
     True -> do
-      !otf <- readTVar (el'modu'src'otf ms)
-      let !otfVersion = case otf of
-            Just (!ver, _, _) -> ver
-            _ -> 0
-          doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
+      !otf <- readTVar otfVar
+      !otfVersion <- case otf of
+        Just (!ver, _, _) -> return ver
+        _ -> return 0
+      let doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
           doParseModule !exit' = edhCatch ets doParse exit' $
             \ !etsCatching !exv !recover !rethrow -> case exv of
               EdhNil -> rethrow nil
@@ -427,6 +427,8 @@ asModuleParsed !ms !exit !ets =
               --  we're already doing that in 'doParseModule', not sure
               --  anything to be done here so.
               doParseModule $ \ !parsed -> do
+                -- clear the otf src after successfully parsed
+                writeTVar otfVar Nothing
                 -- install the parsed record
                 putTMVar parsedVar parsed
                 tryTakeTMVar parsingVar >>= \case
@@ -460,6 +462,7 @@ asModuleParsed !ms !exit !ets =
             else exitEdh ets exit parsed
   where
     !moduDoc = el'modu'doc ms
+    !otfVar = el'modu'src'otf ms
     !parsingVar = el'modu'parsing ms
 
 -- | Fill in module source on the fly, usually pending save from an IDE editor,
