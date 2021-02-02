@@ -55,8 +55,8 @@
  #} {
 
   {##
-   # Outline with Nested Block Organization
-   # Auto, Clickable ToC, with contents properly indented
+   # Outline with Organizational Blocks
+   # Auto, Navigable ToC (+Breadcrumbs), with contents properly indented
    #
    # Assuming you are viewing this file with VSCode, Eclipse Theia or derived
    # tools like Codium or Gitpod, look at the outline view in the side bar now,
@@ -69,19 +69,21 @@
    # can be collapsed and expanded individually, as well as some convenient
    # UX tools there, e.g. the "Follow Cursor" toggle.
    #
-   # The outline view serves much like the *clickable* ToC of an Đ module,
-   # esp. when you view the module source as documentation of itself.
+   # The outline view serves much like the *navigable* ToC of an Đ module,
+   # esp. when you view the module source as documentation of itself. Further
+   # with *Breadcrumbs* and *code-folding* in the editor, the source code can
+   # be browsed just like documentation.
    #
-   # Further with code folding by the editor, the source code can be browsed
-   # just like documentation.
+   # Then you can write dedicated Đ module sets solely for documentation
+   # purpose, with narration toward tutorials, references, technical reviews
+   # etc.
    #
-   # And you can write dedicated Đ modules solely for documentation purpose,
-   # once familar with code navigation capability of the IDE, import the
-   # documented modules and place references to the documented artifacts,
-   # then the viewer, in the same way as you the author, can navigate to the
-   # actual implementation code by just "Go to Definition". Note navigating
-   # back is as easy too, and you should find yourself the keyboard shortcuts
-   # for your setup for great good.
+   # Once familar with code navigation capability of the IDE, import the
+   # essential modules and place references to their artifacts meant to be
+   # documented, then the viewer, in the same way as you the author, can
+   # navigate to the effecting code by just "Go to Definition". Note that
+   # navigating back is just as easy, and you should find yourself the
+   # keyboard shortcuts for your setup for great good.
    #
    # Note
    #  A vanilla block doesn't create lexical scope in Đ, rather like in
