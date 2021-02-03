@@ -2565,9 +2565,29 @@ el'AnalyzeExpr
   !exit
   !eas =
     case maybeInto of
-      Just _intoExpr ->
-        returnAsExpr -- TODO handle importing into some object
-      Nothing -> case specExpr of
+      Just _intoExpr -> do
+        -- TODO resolve and use the target object
+        --      note nil target should be allowed as nop
+        !fakeScope <- iopdEmpty
+        doImp fakeScope fakeScope
+      Nothing -> doImp localScope localExps
+    where
+      !world = el'world eas
+      !ets = el'ets eas
+      !eac = el'context eas
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      !bwip = el'scope'branch'wip pwip
+      diags = el'ctx'diags eac
+
+      !localScope =
+        if el'ctx'eff'defining eac
+          then el'branch'effs'wip bwip
+          else el'branch'attrs'wip bwip
+      !localExps = el'obj'exps $ el'scope'this'obj pwip
+
+      doImp :: EL'ArtsWIP -> EL'ArtsWIP -> STM ()
+      doImp !intoScope !withExps = case specExpr of
         LitExpr (StringLiteral !litSpec) -> case el'ContextModule' eac of
           Nothing -> do
             el'LogDiag
@@ -2654,202 +2674,186 @@ el'AnalyzeExpr
             "dynamic-import"
             "dynamic import specification not analyzed yet"
           el'Exit eas exit $ EL'Const nil
-    where
-      !world = el'world eas
-      !ets = el'ets eas
-      !eac = el'context eas
-      !swip = el'ctx'scope eac
-      !pwip = el'ProcWIP swip
-      !bwip = el'scope'branch'wip pwip
-      diags = el'ctx'diags eac
-      returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
-
-      chkExport :: STM (AttrKey -> EL'AttrDef -> STM ())
-      chkExport =
-        if not (el'ctx'exporting eac)
-          then return $ \_ _ -> return ()
-          else
-            let !localExps = el'obj'exps $ el'scope'this'obj pwip
-             in return $ \ !localKey !attrDef ->
-                  iopdInsert localKey attrDef localExps
-
-      impIntoScope ::
-        (AttrKey -> EL'AttrDef -> STM ()) ->
-        EL'ModuSlot ->
-        EL'Artifacts ->
-        ArgsReceiver ->
-        STM ()
-      impIntoScope !chkExp !srcModu !srcExps !asr = do
-        case asr of
-          WildReceiver -> forM_ (odToList srcExps) wildImp
-          PackReceiver !ars -> go srcExps ars
-          SingleReceiver !ar -> go srcExps [ar]
-        -- record a region after this import, for current scope
-        iopdSnapshot (el'branch'attrs'wip bwip)
-          >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-            . EL'Region (src'end expr'span)
         where
-          !localTgt =
-            if el'ctx'eff'defining eac
-              then el'branch'effs'wip bwip
-              else el'branch'attrs'wip bwip
+          chkExport :: STM (AttrKey -> EL'AttrDef -> STM ())
+          chkExport =
+            if not (el'ctx'exporting eac)
+              then return $ \_ _ -> return ()
+              else return $ \ !localKey !attrDef ->
+                iopdInsert localKey attrDef withExps
 
-          wildImp :: (AttrKey, EL'AttrDef) -> STM ()
-          wildImp (!k, !def) = do
-            !artAnno <- newTVar =<< el'ResolveAnnotation swip k
-            let !attrDef =
-                  EL'AttrDef
-                    k
-                    docCmt
-                    "<import>"
-                    expr'span
-                    xsrc
-                    (EL'External srcModu def)
-                    artAnno
-                    Nothing
-            iopdInsert k attrDef localTgt
-            chkExp k attrDef
+          impIntoScope ::
+            (AttrKey -> EL'AttrDef -> STM ()) ->
+            EL'ModuSlot ->
+            EL'Artifacts ->
+            ArgsReceiver ->
+            STM ()
+          impIntoScope !chkExp !srcModu !srcExps !asr = do
+            case asr of
+              WildReceiver -> forM_ (odToList srcExps) wildImp
+              PackReceiver !ars -> go srcExps ars
+              SingleReceiver !ar -> go srcExps [ar]
+            -- record a region after this import, for current scope
+            iopdSnapshot (el'branch'attrs'wip bwip)
+              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                . EL'Region (src'end expr'span)
+            where
+              wildImp :: (AttrKey, EL'AttrDef) -> STM ()
+              wildImp (!k, !def) = do
+                !artAnno <- newTVar =<< el'ResolveAnnotation swip k
+                let !attrDef =
+                      EL'AttrDef
+                        k
+                        docCmt
+                        "<import>"
+                        expr'span
+                        xsrc
+                        (EL'External srcModu def)
+                        artAnno
+                        Nothing
+                iopdInsert k attrDef intoScope
+                chkExp k attrDef
 
-          go :: OrderedDict AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
-          go !srcArts [] =
-            if odNull srcArts
-              then return () -- very well expected
-              else
-                el'LogDiag
-                  diags
-                  el'Error
-                  spec'span
-                  "non-exhaustive-import"
-                  $ "import is not exhaustive, "
-                    <> if odSize srcArts <= 8
-                      then
-                        "also exported: "
-                          <> T.intercalate
-                            ", "
-                            (attrKeyStr <$> odKeys srcArts)
-                      else T.pack (show $ odSize srcArts) <> " more exported"
-          go !srcArts (ar : rest) = case ar of
-            RecvArg srcAddr@(AttrAddrSrc _ !item'span) !maybeAs !defExpr -> do
-              case defExpr of
-                Nothing -> pure ()
-                Just {} ->
-                  el'LogDiag
-                    diags
-                    el'Warning
-                    item'span
-                    "unusual-import"
-                    "defaults in import specificatin is not analyzed yet"
-              case maybeAs of
-                Nothing -> processImp srcAddr srcAddr
-                Just (DirectRef !asAddr) -> processImp srcAddr asAddr
-                Just !badRename ->
+              go :: OrderedDict AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
+              go !srcArts [] =
+                if odNull srcArts
+                  then return () -- very well expected
+                  else
+                    el'LogDiag
+                      diags
+                      el'Error
+                      spec'span
+                      "non-exhaustive-import"
+                      $ "import is not exhaustive, "
+                        <> if odSize srcArts <= 8
+                          then
+                            "also exported: "
+                              <> T.intercalate
+                                ", "
+                                (attrKeyStr <$> odKeys srcArts)
+                          else T.pack (show $ odSize srcArts) <> " more exported"
+              go !srcArts (ar : rest) = case ar of
+                RecvArg srcAddr@(AttrAddrSrc _ !item'span) !maybeAs !defExpr -> do
+                  case defExpr of
+                    Nothing -> pure ()
+                    Just {} ->
+                      el'LogDiag
+                        diags
+                        el'Warning
+                        item'span
+                        "unusual-import"
+                        "defaults in import specificatin is not analyzed yet"
+                  case maybeAs of
+                    Nothing -> processImp srcAddr srcAddr
+                    Just (DirectRef !asAddr) -> processImp srcAddr asAddr
+                    Just !badRename ->
+                      el'LogDiag
+                        diags
+                        el'Error
+                        item'span
+                        "invalid-import-rename"
+                        $ "invalid rename of import: " <> T.pack (show badRename)
+                RecvRestPosArgs (AttrAddrSrc _ bad'span) ->
                   el'LogDiag
                     diags
                     el'Error
-                    item'span
-                    "invalid-import-rename"
-                    $ "invalid rename of import: " <> T.pack (show badRename)
-            RecvRestPosArgs (AttrAddrSrc _ bad'span) ->
-              el'LogDiag
-                diags
-                el'Error
-                bad'span
-                "rest-pos-import"
-                "rest positional receiver in import specification"
-            RecvRestPkArgs (AttrAddrSrc _ bad'span) ->
-              el'LogDiag
-                diags
-                el'Error
-                bad'span
-                "rest-apk-import"
-                "rest apk receiver in import specification"
-            RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) ->
-              el'ResolveAttrAddr eas localAddr >>= \case
-                Nothing ->
-                  -- invalid attr addr, error should have been logged
-                  go srcArts rest
-                Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
-                Just !localKey -> do
-                  !artAnno <- newTVar =<< el'ResolveAnnotation swip localKey
-                  let !kwVal =
-                        EL'Apk $
-                          EL'ArgsPack [] $
-                            odMap (EL'External srcModu) srcArts
-                      !attrDef =
-                        EL'AttrDef
-                          localKey
-                          docCmt
-                          "<import>"
-                          addr'span
-                          xsrc
-                          kwVal
-                          artAnno
-                          Nothing
-                  -- record as definition symbol
-                  recordAttrDef eac attrDef
-
-                  -- register as local attribute
-                  iopdInsert localKey attrDef localTgt
-                  -- export it if specified so
-                  chkExp localKey attrDef
-
-                  go odEmpty rest
-            where
-              processImp :: AttrAddrSrc -> AttrAddrSrc -> STM ()
-              processImp
-                srcAddr@(AttrAddrSrc _ !src'span)
-                localAddr@(AttrAddrSrc _ !local'span) = do
+                    bad'span
+                    "rest-pos-import"
+                    "rest positional receiver in import specification"
+                RecvRestPkArgs (AttrAddrSrc _ bad'span) ->
+                  el'LogDiag
+                    diags
+                    el'Error
+                    bad'span
+                    "rest-apk-import"
+                    "rest apk receiver in import specification"
+                RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) ->
                   el'ResolveAttrAddr eas localAddr >>= \case
                     Nothing ->
                       -- invalid attr addr, error should have been logged
                       go srcArts rest
-                    Just !localKey ->
-                      el'ResolveAttrAddr eas srcAddr >>= \case
+                    Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
+                    Just !localKey -> do
+                      !artAnno <- newTVar =<< el'ResolveAnnotation swip localKey
+                      let !kwVal =
+                            EL'Apk $
+                              EL'ArgsPack [] $
+                                odMap (EL'External srcModu) srcArts
+                          !attrDef =
+                            EL'AttrDef
+                              localKey
+                              docCmt
+                              "<import>"
+                              addr'span
+                              xsrc
+                              kwVal
+                              artAnno
+                              Nothing
+                      -- record as definition symbol
+                      recordAttrDef eac attrDef
+
+                      -- register as local attribute
+                      iopdInsert localKey attrDef intoScope
+                      -- export it if specified so
+                      chkExp localKey attrDef
+
+                      go odEmpty rest
+                where
+                  processImp :: AttrAddrSrc -> AttrAddrSrc -> STM ()
+                  processImp
+                    srcAddr@(AttrAddrSrc _ !src'span)
+                    localAddr@(AttrAddrSrc _ !local'span) = do
+                      el'ResolveAttrAddr eas localAddr >>= \case
                         Nothing ->
                           -- invalid attr addr, error should have been logged
                           go srcArts rest
-                        Just !srcKey ->
-                          let (!gotArt, !srcArts') = odTakeOut srcKey srcArts
-                           in case gotArt of
-                                Nothing -> do
-                                  el'LogDiag
-                                    diags
-                                    el'Error
-                                    src'span
-                                    "missing-import"
-                                    $ "no such artifact to import: "
-                                      <> attrKeyStr srcKey
-                                  go srcArts' rest
-                                Just !srcDef -> do
-                                  !artAnno <-
-                                    newTVar
-                                      =<< el'ResolveAnnotation swip localKey
-                                  let !impDef =
-                                        EL'AttrDef
-                                          localKey
-                                          docCmt
-                                          "<import>"
-                                          local'span
-                                          xsrc
-                                          (EL'External srcModu srcDef)
-                                          artAnno
+                        Just !localKey ->
+                          el'ResolveAttrAddr eas srcAddr >>= \case
+                            Nothing ->
+                              -- invalid attr addr, error should have been logged
+                              go srcArts rest
+                            Just !srcKey ->
+                              let (!gotArt, !srcArts') = odTakeOut srcKey srcArts
+                               in case gotArt of
+                                    Nothing -> do
+                                      el'LogDiag
+                                        diags
+                                        el'Error
+                                        src'span
+                                        "missing-import"
+                                        $ "no such artifact to import: "
+                                          <> attrKeyStr srcKey
+                                      go srcArts' rest
+                                    Just !srcDef -> do
+                                      !artAnno <-
+                                        newTVar
+                                          =<< el'ResolveAnnotation swip localKey
+                                      let !impDef =
+                                            EL'AttrDef
+                                              localKey
+                                              docCmt
+                                              "<import>"
+                                              local'span
+                                              xsrc
+                                              (EL'External srcModu srcDef)
+                                              artAnno
+                                              Nothing
+                                      -- record as definition symbol
+                                      recordAttrDef eac impDef
+                                      -- record as referencing symbol
+                                      recordAttrRef eac $
+                                        EL'AttrRef
                                           Nothing
-                                  -- record as definition symbol
-                                  recordAttrDef eac impDef
-                                  -- record as referencing symbol
-                                  recordAttrRef eac $
-                                    EL'AttrRef
-                                      Nothing
-                                      localAddr
-                                      srcModu
-                                      srcDef
+                                          localAddr
+                                          srcModu
+                                          srcDef
 
-                                  -- register as local attribute
-                                  iopdInsert localKey impDef localTgt
-                                  -- export it if specified so
-                                  chkExp localKey impDef
+                                      -- register as local attribute
+                                      iopdInsert localKey impDef intoScope
+                                      -- export it if specified so
+                                      chkExp localKey impDef
 
-                                  go srcArts' rest
+                                      go srcArts' rest
 --
 
 -- defining a class
