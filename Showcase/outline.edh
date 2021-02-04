@@ -14,8 +14,7 @@
  #  It can be written anywhere technically, but only significates when
  #  associated with some certain kind of syntatical elements.
  #
- #} {
-  ;
+ #} {;
   # Without a semicolon here, it is an empty dict literal instead of a
   # block, then the doc-comment before it will be ignored, like a vanilla
   # block-comment. Try remove it and see how this section disappears from
@@ -28,7 +27,7 @@
  # Similar to e.g. `/** ... */` denoted Javadoc in Java source, Doc-Comment
  # can be used to document classes, methods etc. right near the actual code.
  #
- #} {
+ #} {;
 
   {##
    # A class models sth.
@@ -52,7 +51,7 @@
 
 {## Extra Purpose in Đ
  # Source Code being Documentation as well
- #} {
+ #} {;
 
   {##
    # Outline with Organizational Blocks
@@ -97,7 +96,7 @@
    #  Đ has *scoped block* which is denoted as `{@ ... @}`, it does create a
    #  nested scope. And you can write doc-comment for it too.
    #
-   #} {
+   #} {;
     # Right-click `console` below, select "Go to Definition", see what happens.
     # Try `print` then.
     console.print
@@ -135,7 +134,7 @@
    #
    # Finally, it becomes live code as well as live documentation!
    #
-   #} {
+   #} {;
 
     # %{ this denotes the starting cell of a block
     console.print$ 'Finally!'
