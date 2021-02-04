@@ -1044,33 +1044,34 @@ foldingRange'
 
 blockFoldRngs :: [StmtSrc] -> [FoldingRange]
 blockFoldRngs [] = []
-blockFoldRngs (stmt1 : rest'stmts) = foldGap stmt1 rest'stmts
+blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
   where
     foldGap :: StmtSrc -> [StmtSrc] -> [FoldingRange]
     foldGap !stmt [] = stmtFoldRngs stmt
-    foldGap !stmt !rest = case stmtFoldRngs stmt of
-      [] -> rest'rngs
-      !prev'rngs -> case rest'rngs of
-        [] -> prev'rngs
-        next'rng : _ ->
-          prev'rngs
-            ++ gapRngs (last prev'rngs) next'rng
-            ++ rest'rngs
+    foldGap !stmt (next'stmt : rest'stmts) = case stmtFoldRngs stmt of
+      [] -> more'rngs
+      lead'rngs@(rng : rngs) ->
+        let last'end'line =
+              foldl max (el'fold'endLine rng) $ el'fold'endLine <$> rngs
+         in case more'rngs of
+              [] -> lead'rngs
+              next'rng : _ ->
+                lead'rngs
+                  ++ gapRngs last'end'line next'rng
+                  ++ more'rngs
       where
         gapRngs
-          (FoldingRange _ _ !prev'end'line _ _)
+          !last'end'line
           (FoldingRange !next'start'line _ _ _ _) =
             [ foldingRange'
                 ( SrcRange
-                    (SrcPos (prev'end'line + 1) 0)
+                    (SrcPos (last'end'line + 1) 0)
                     (SrcPos (next'start'line - 1) 0)
                 )
                 "" -- region kind for verbose details here?
-              | next'start'line - prev'end'line > 5
+              | next'start'line - last'end'line > 5
             ]
-        rest'rngs = case rest of
-          [] -> []
-          stmt' : rest' -> foldGap stmt' rest'
+        more'rngs = foldGap next'stmt rest'stmts
 
     stmtFoldRngs :: StmtSrc -> [FoldingRange]
     stmtFoldRngs (StmtSrc (ExprStmt !x _doc) !stmt'span) =
