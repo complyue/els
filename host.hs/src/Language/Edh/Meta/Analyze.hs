@@ -1348,15 +1348,22 @@ el'AnalyzeExpr
           -- static class attribute addressing
           (_valModu, srcVal@(EL'ClsVal !clsModu !cls)) ->
             iopdLookup refKey (el'class'attrs cls) >>= \case
-              Nothing -> do
-                el'LogDiag
-                  diags
-                  el'Error
-                  addr'span
-                  "no-cls-attr"
-                  "no such class attribute"
-                recordAttrRef eac $ EL'UnsolvedRef (Just srcVal) addr'span
-                returnAsExpr
+              Nothing -> case refKey of
+                AttrByName "name" ->
+                  -- TODO provide proper value
+                  returnAsExpr
+                AttrByName "mro" ->
+                  -- TODO provide proper value
+                  returnAsExpr
+                _ -> do
+                  el'LogDiag
+                    diags
+                    el'Error
+                    addr'span
+                    "no-cls-attr"
+                    "no such class attribute"
+                  recordAttrRef eac $ EL'UnsolvedRef (Just srcVal) addr'span
+                  returnAsExpr
               Just !attrDef -> do
                 -- record as referencing symbol
                 let (!origModu, !origDef) = el'UltimateDefi clsModu attrDef
