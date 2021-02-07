@@ -34,7 +34,7 @@ export method initialize(
         'completionProvider': {
           'triggerCharacters': [
             '.', '@', '{',
-          ]
+          ],
         },
 
         # not really for symbols, but to show blocks with titles in the
@@ -46,7 +46,15 @@ export method initialize(
         # to make those blocks with titles foldable
         'foldingRangeProvider': true,
 
+
         # backlog:
+
+        # Needed after major SCM(Git) pull, to update diagnostics or at least invalidate parsed/resolved results.
+        # Without this, killing els (implicitly by relaunching the IDE, or explicitly by kill command) is the only workaround.
+        # 'workspaceFolders': {
+        #   'supported': false,
+        #   'changeNotifications': false,
+        # },
 
         # 'signatureHelpProvider': {
         #   'triggerCharacters': [
@@ -57,25 +65,16 @@ export method initialize(
         #   ],
         # },
 
-        # TODO impl. them
+        # 'selectionRangeProvider': false,
         # 'referencesProvider': true,
+        # 'renameProvider': false,
 
         # 'workspaceSymbolProvider': true,
-
-        # TODO watch for src file changes?
-        # 'workspaceFolders': {
-        #   'supported': false,
-        #   'changeNotifications': false,
-        # },
-
-        # todo impl. these ?
-        # 'renameProvider': false,
-        # 'selectionRangeProvider': false,
 
       },
       'serverInfo': {
         'name': 'els',
-        'version': '0.1.0.pre',
+        'version': '0.1.0.preview',
       },
   } )
 
