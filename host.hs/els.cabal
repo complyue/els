@@ -107,7 +107,7 @@ executable els
     TypeOperators
     ViewPatterns
 
-  ghc-options:        -Wall -threaded "-with-rtsopts=-maxN31 -qg"
+  ghc-options:        -Wall -threaded "-with-rtsopts=-maxN3 -qg"
   build-depends:
     , base              >=4.12
     , bytestring
