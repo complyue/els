@@ -366,9 +366,9 @@ moduSrcStabilized !ms =
     Nothing -> return True
     Just (_ver, _src, !otfTime) -> do
       !currTime <- unsafeIOToSTM getMonotonicTimeNSec
-      -- considered stabilized after at least 350ms
+      -- considered stabilized after at least 5 seconds
       -- todo make this tunable?
-      return $ currTime - otfTime >= 350000000
+      return $ currTime - otfTime >= 5000000000
 
 -- | Obtain the result as the specified module is parsed
 --
@@ -379,7 +379,7 @@ asModuleParsed :: EL'ModuSlot -> EdhProc EL'ParsedModule
 asModuleParsed !ms !exit !ets =
   moduSrcStabilized ms >>= \case
     False -> edhContIO'' ets $ do
-      threadDelay 350000
+      threadDelay 1000000 -- check back after 1 second
       atomically $ asModuleParsed ms exit ets
     True -> do
       !otf <- readTVar otfVar
