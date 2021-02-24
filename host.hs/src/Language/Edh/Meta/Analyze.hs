@@ -366,9 +366,9 @@ moduSrcStabilized !ms =
     Nothing -> return True
     Just (_ver, _src, !otfTime) -> do
       !currTime <- unsafeIOToSTM getMonotonicTimeNSec
-      -- considered stabilized after at least 5 seconds
+      -- considered stabilized after at least 3 seconds
       -- todo make this tunable?
-      return $ currTime - otfTime >= 5000000000
+      return $ currTime - otfTime >= 3000000000
 
 -- | Obtain the result as the specified module is parsed
 --
