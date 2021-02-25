@@ -2378,6 +2378,38 @@ el'AnalyzeExpr
             [StmtSrc BreakStmt _] -> analyzeBranch []
             -- { fallthrough } -- match with fallthrough
             [StmtSrc FallthroughStmt _] -> analyzeBranch []
+            -- { return <attr> } -- capture return value
+            [ StmtSrc
+                ( ReturnStmt
+                    valExpr@( ExprSrc
+                                ( AttrExpr
+                                    ( DirectRef
+                                        ( AttrAddrSrc
+                                            (NamedAttr !valueName)
+                                            val'span
+                                          )
+                                      )
+                                  )
+                                _
+                              )
+                  )
+                _
+              ] -> do
+                !anno <- newTVar Nothing
+                let !valKey = AttrByName valueName
+                    !attrDef =
+                      EL'AttrDef
+                        valKey
+                        Nothing
+                        opSym
+                        val'span
+                        valExpr
+                        (EL'Expr valExpr)
+                        anno
+                        Nothing
+                analyzeBranch [(valKey, attrDef)]
+            -- { return <expr> } -- match with expected return value
+            [StmtSrc (ReturnStmt _expectExpr) _] -> analyzeBranch []
             --
 
             -- { term := value } -- definition pattern
