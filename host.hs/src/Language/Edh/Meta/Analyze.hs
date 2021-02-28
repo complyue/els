@@ -3599,9 +3599,21 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (IndexExpr !idx !tgt) _expr'span) !exit !eas =
 --
 
 -- default
-el'AnalyzeExpr _docCmt x@(ExprSrc (DefaultExpr !expr) _expr'span) !exit !eas =
-  el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+el'AnalyzeExpr
+  _docCmt
+  x@(ExprSrc (DefaultExpr Nothing !expr) _expr'span)
+  !exit
+  !eas =
+    el'RunTx eas $
+      el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+el'AnalyzeExpr
+  _docCmt
+  x@(ExprSrc (DefaultExpr (Just !argSndrs) !expr) _expr'span)
+  !exit
+  !eas =
+    el'RunTx eas $
+      el'PackArgs argSndrs $ \_apk ->
+        el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
 --
 
 -- interpolated expr

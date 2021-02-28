@@ -997,7 +997,10 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
         ++ exprSymbols' doc callee
     exprSymbols !doc _full'span (InfixExpr _op !lhs !rhs) =
       exprSymbols' doc lhs ++ exprSymbols' doc rhs
-    exprSymbols !doc _full'span (DefaultExpr !x) = exprSymbols' doc x
+    exprSymbols !doc _full'span (DefaultExpr Nothing !x) = exprSymbols' doc x
+    exprSymbols !doc _full'span (DefaultExpr (Just (ArgsPacker !sndrs _)) !x) =
+      (++ exprSymbols' doc x) $
+        concat $ exprSymbols' doc . sentArgExprSrc <$> sndrs
     exprSymbols !doc _full'span (ExprWithSrc !x !ssegs) =
       (exprSymbols' doc x ++) $
         concat $
@@ -1161,7 +1164,9 @@ blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
         ++ exprFoldRngs' callee
     exprFoldRngs _full'span (InfixExpr _op !lhs !rhs) =
       exprFoldRngs' lhs ++ exprFoldRngs' rhs
-    exprFoldRngs _full'span (DefaultExpr !x) = exprFoldRngs' x
+    exprFoldRngs _full'span (DefaultExpr Nothing !x) = exprFoldRngs' x
+    exprFoldRngs _full'span (DefaultExpr (Just (ArgsPacker !sndrs _)) !x) =
+      (++ exprFoldRngs' x) $ concat $ exprFoldRngs' . sentArgExprSrc <$> sndrs
     exprFoldRngs _full'span (ExprWithSrc !x !ssegs) =
       (exprFoldRngs' x ++) $
         concat $
