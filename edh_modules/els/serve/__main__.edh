@@ -11,8 +11,31 @@
   import * 'els'
   effect import * 'els/effects'
 
+  namespace service () {
+
+    {## Event sinks per lsc request, majorly used for cancellation by lsc
+     # Keyed by lsc request id #}
+    clientRequests = {}
+
+    method @'$/cancelRequest'( id as idReq ) {
+      case this.clientRequests[ idReq ] of { cancelSignal } -> {
+        cancelSignal <- { break }
+        this.clientRequests[ idReq ] = nil
+      }
+    }
+
+    {## Event sink for all responses from lsc wrt lss requests
+     #}
+    globalResponses = sink
+
+    {## Registered listeners for responses from lsc wrt lss requests
+     # Keyed by lss request id #}
+    responseListeners = {}
+
+  }
+
   # pull-in all service methods
-  import (** allMethods ) 'els/services'
+  import * 'els/services' into service
 
 } $=> { exc } -> {
   console.fatal<| 'els service initalization error: ' ++ desc( exc )
@@ -73,6 +96,23 @@ defer {
     postOnePkt( json$ outDict )
   }
 
+  effect method lspReqSignal() {
+    reqDict = behave lspRequest
+    case reqDict[ 'id' ] of {
+      { idReq } | type( idReq ) ?<= ( DecimalType, StringType, ) -> { pass }
+      debug and elsDebug.replHere()
+      error( 'bug: obtaining request signal of non-request' )
+    }
+    return ai case service.clientRequests[ idReq ] of {
+      { reqSig } -> reqSig # already armed
+      # need to arm a signal sink
+      # assuming current thread is the owner, cleanup on thread termination
+      defer service.clientRequests[ idReq ] = nil
+      # arm an event sink by request id
+      service.clientRequests[ idReq ] = sink
+    }
+  }
+
   {##
    # for a service method to post a lsp response
    #}
@@ -108,13 +148,11 @@ defer {
   }
 
   # global sink of all responses, service threads can choose to perceive this
-  globalResponses = sink
-  effect lspResponses = globalResponses
+  effect lspResponses = service.globalResponses
 
   # response listeners can be registered per request id
-  responseListeners = {}
   effect method lspReceiveResponse( idReq, listener ) {
-    responseListeners[ idReq ] = listener
+    service.responseListeners[ idReq ] = listener
   }
 
 } $=> { exc } -> {
@@ -139,17 +177,17 @@ while eol() is false {
       case rpcIn[ 'id' ] of {
         nil -> error( 'lsp error response without id' )
         { idReq } -> {
-          globalResponses <- rpcIn
-          case responseListeners[ idReq ] of {
+          service.globalResponses <- rpcIn
+          case service.responseListeners[ idReq ] of {
             { listener } -> { {
                 # a listener must return `true` to be kept installed
                 if listener( NA, error=rpcErr ) is not true
-                then responseListeners[ idReq ] = nil
+                then service.responseListeners[ idReq ] = nil
               } $=> { exc } -> {
                 console.warn<| 'LSP response listener failed: ' ++ desc( exc )
                 # uninstall the failing one
-                ai if responseListeners[ idReq ] is listener
-                then responseListeners[ idReq ] = nil
+                ai if service.responseListeners[ idReq ] is listener
+                then service.responseListeners[ idReq ] = nil
             } }
             # console.warn<| (
             #   'LSP error not listened: ' ++ rpcErr, rpc=rpcIn
@@ -165,17 +203,17 @@ while eol() is false {
       case rpcIn[ 'id' ] of {
         nil -> error( 'lsp response without id' )
         { idReq } -> {
-          globalResponses <- rpcIn
-          case responseListeners[ idReq ] of {
+          service.globalResponses <- rpcIn
+          case service.responseListeners[ idReq ] of {
             { listener } -> { {
                 # a listener must return `true` to be kept installed
                 if listener( rpcResult ) is not true
-                then responseListeners[ idReq ] = nil
+                then service.responseListeners[ idReq ] = nil
               } $=> { exc } -> {
                 console.warn<| 'LSP response listener failed: ' ++ desc( exc )
                 # uninstall the failing one
-                ai if responseListeners[ idReq ] is listener
-                then responseListeners[ idReq ] = nil
+                ai if service.responseListeners[ idReq ] is listener
+                then service.responseListeners[ idReq ] = nil
             } }
             # console.warn<| (
             #   'LSP result not listened: ' ++ rpcResult, rpc=rpcIn
@@ -201,7 +239,7 @@ while eol() is false {
       args = ()
     }
 
-    case allMethods ?@ mthName of {
+    case service ?@ mthName of {
       nil -> {
         case mthName of { '$/' >@ _ } -> # protocol implementation dependent
         case rpcIn[ 'id' ] of nil -> # it's a notification

@@ -255,8 +255,15 @@ createMetaWorldClass !msClass !clsOuterScope =
       (mandatoryArg -> !char)
       !exit
       !ets =
-        withThisHostObj ets $ \ !elw ->
+        withThisHostObj ets $ \ !elw -> do
+          readTVar otfVar >>= \case
+            Nothing -> pure ()
+            Just (!ver, !src, _otfTime) ->
+              -- mark as stablized
+              writeTVar otfVar $ Just (ver, src, 0)
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
               exitEdh ets exit . toLSP
                 =<< suggestCompletions elw line char resolved
+        where
+          !otfVar = el'modu'src'otf ms

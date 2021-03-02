@@ -27,33 +27,40 @@ export method @'textDocument/completion' (
   case textDocument of { TxtDocFile( absFilePath ) } ->
   case position of { Position( line, character ) } ->
   case context of { CompletionContext( triggerKind, triggerCharacter ) } ->
-  { return { go {
-        modu = world.locateByFile( absFilePath )
-        perform lspRespond(
+  {
+    modu = world.locateByFile( absFilePath )
+    return { go {
+        perceive (perform lspReqSignal()) {
+          { break } -> {
+            perform lspError( 'cancelled', -32800 ) # RequestCancelled
+            break
+          }
+        }
+        # `suggest()` will mark the doc stablized immediately, perform a slight delay before that, in hope the lsc would cancel previous completion request after user has typed more chars quickly after the initial triggering
+        for _ from console.everyMillis(120) do break
+        resp = {
           world.suggest( modu, line, character )
-        )
-        # case triggerKind of {
-        #   CompletionContext.TriggerCharacter -> case triggerCharacter of {
-        #     '.' -> perform lspRespond(
-        #       world.suggest( modu, line, character )
-        #     )
-        #     '@' -> perform lspRespond(
-        #       world.suggest( modu, line, character )
-        #     )
-        #     error( 'unexpected trigger char: ' ++ triggerCharacter )
-        #   }
 
-        #   CompletionContext.Invoked -> perform lspRespond(
-        #     world.suggest( modu, line, character )
-        #   )
+          # case triggerKind of {
+          #   CompletionContext.TriggerCharacter -> case triggerCharacter of {
+          #     '.' -> world.suggest( modu, line, character )
+          #     '@' -> world.suggest( modu, line, character )
+          #     error( 'unexpected trigger char: ' ++ triggerCharacter )
+          #   }
 
-        #   CompletionContext.TriggerForIncompleteCompletions -> {
-        #  # todo err out instead?
-        #     perform lspRespond( world.suggest( modu, line, character ) )
-        #   }
+          #   CompletionContext.Invoked -> world.suggest( modu, line, character )
 
-        #   error( 'unexpected trigger kind: ' ++ triggerKind )
-        # }
-  } } }
+          #   CompletionContext.TriggerForIncompleteCompletions -> {
+          #     # todo err out instead?
+          #     world.suggest( modu, line, character )
+          #   }
+
+          #   error( 'unexpected trigger kind: ' ++ triggerKind )
+          # }
+
+        } or None
+        perform lspRespond( resp )
+    } }
+  }
   error( 'unexpected lsp params' )
 }
