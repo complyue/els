@@ -167,10 +167,7 @@ createMetaWorldClass !msClass !clsOuterScope =
            in logger
                 severity
                 (Just $ el'PrettyLoc ms diag)
-                ( ArgsPack
-                    [ EdhString $ cate <> ": " <> el'diag'message diag
-                    ]
-                    odEmpty
+                ( cate <> ": " <> el'diag'message diag
                 )
 
     homesProc :: EdhHostProc
