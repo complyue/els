@@ -32,10 +32,15 @@
      # Keyed by lss request id #}
     responseListeners = {}
 
-  }
+    # pull-in all service methods
+    import * 'els/services'
 
-  # pull-in all service methods
-  import * 'els/services' into service
+    # Seems VSCode can make fast concurrent connections at startup, here per a subsequent connection, the import above can finish before those modules finished initialization.
+    # Wait here and only proceed after the artifacts have actually gotten imported, or we'll be wrong to report MethodNotFound back to VSCode
+    for _ from console.everyMillis(200, wait1st= false,)
+    do if this ? initialize is not nil then break
+
+  }
 
 } $=> { exc } -> {
   console.fatal<| 'els service initalization error: ' ++ desc( exc )
@@ -160,6 +165,7 @@ defer {
   rethrow
 }
 
+
 # loop forever until eol on error, or stopped elsewhere
 while eol() is false {
 
@@ -246,6 +252,7 @@ while eol() is false {
         { continue } # ignore this per
         # https://github.com/microsoft/vscode-languageserver-node/issues/170
 
+        console.warn<| 'Missing service method ' ++ mthName
         debug and elsDebug.replHere()
         postOnePkt( json$ {
             'id': rpcIn[ 'id' ],
