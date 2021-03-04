@@ -18,8 +18,8 @@
     clientRequests = {}
 
     method @'$/cancelRequest'( id as idReq ) {
-      case this.clientRequests[ idReq ] of { cancelSignal } -> {
-        cancelSignal <- { break }
+      ai case this.clientRequests[ idReq ] of { cancelSignal } -> {
+        cancelSignal <- nil
         this.clientRequests[ idReq ] = nil
       }
     }
@@ -276,7 +276,7 @@ while eol() is false {
       # try call the designated lsp method
       mth(** args )
     } $=> { exc } -> {
-      console.debug<| desc( exc )
+      console.error<| desc( exc )
       # report back for an uncaught exception as internal error
       postOnePkt( json$ {
           'id': rpcIn[ 'id' ],
