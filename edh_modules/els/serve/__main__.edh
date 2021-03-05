@@ -19,7 +19,7 @@
 
     method @'$/cancelRequest'( id as idReq ) {
       ai case this.clientRequests[ idReq ] of { cancelSignal } -> {
-        cancelSignal <- nil
+        cancelSignal <- { break }
         this.clientRequests[ idReq ] = nil
       }
     }

@@ -31,7 +31,7 @@ export method @'textDocument/completion' (
     modu = world.locateByFile( absFilePath )
     go {
       perceive (perform lspReqSignal()) {
-        nil -> {
+        { break } -> {
           perform lspError( 'cancelled', -32800 ) # RequestCancelled
           break
         }
