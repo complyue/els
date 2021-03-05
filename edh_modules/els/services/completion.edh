@@ -22,14 +22,12 @@ data CompletionContext( triggerKind, triggerCharacter ) {
 export method @'textDocument/completion' (
   textDocument, position, context= {}, ***_
 ) void {
-  # try parse & resolve then obtain completion asynchronously,
-  # to not block subsequent requests from the lsp client
   case textDocument of { TxtDocFile( absFilePath ) } ->
   case position of { Position( line, character ) } ->
   case context of { CompletionContext( triggerKind, triggerCharacter ) } ->
   {
     modu = world.locateByFile( absFilePath )
-    go {
+    go { # not block subsequent requests from the lsp client
       perceive (perform lspReqSignal()) {
         { break } -> {
           perform lspError( 'cancelled', -32800 ) # RequestCancelled
@@ -37,7 +35,6 @@ export method @'textDocument/completion' (
         }
         { sig } -> console.warn<| 'Unexpected request signal: ' ++ desc(sig)
       }
-      # %#
 
       # `suggest()` will mark the doc stablized immediately, perform a slight delay before that, in hope the lsc would cancel previous completion request after user has typed more chars quickly after the initial triggering
       for _ from console.everyMillis(120) do break
