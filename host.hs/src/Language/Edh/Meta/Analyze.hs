@@ -2014,21 +2014,25 @@ el'AnalyzeExpr
 
                   analyzeContent =
                     el'AnalyzeExpr Nothing rhExpr $
-                      \ !rhResult !easDone -> do
-                        -- TODO fill annos of ps from branchAnnos now
-                        case rhResult of
-                          EL'Const EdhFallthrough -> do
-                            -- this branch leaks to its following code
-                            !prevRegions <-
-                              readTVar
-                                (el'branch'regions'wip bwip)
-                            modifyTVar' branchRegions (++ prevRegions)
-                            el'Exit easDone exit $ EL'Expr xsrc
-                          _ -> do
-                            -- this branch closes
-                            !regions <- readTVar branchRegions
-                            modifyTVar' (el'scope'regions'wip pwip) (regions ++)
-                            el'Exit eas exit $ EL'Expr xsrc
+                      -- XXX the branch fallthrough has bug, later artifacts
+                      -- are not available during analyze of inner scopes
+                      -- of previous scopes, need further investigation
+                      \_rhResult _easDone -> do
+                        -- \ !rhResult !easDone -> do
+                        --   -- TODO fill annos of ps from branchAnnos now
+                        --   case rhResult of
+                        --     EL'Const EdhFallthrough -> do
+                        --       -- this branch leaks to its following code
+                        --       !prevRegions <-
+                        --         readTVar
+                        --           (el'branch'regions'wip bwip)
+                        --       modifyTVar' branchRegions (++ prevRegions)
+                        --       el'Exit easDone exit $ EL'Expr xsrc
+                        --     _ -> do
+                        -- this branch closes
+                        !regions <- readTVar branchRegions
+                        modifyTVar' (el'scope'regions'wip pwip) (regions ++)
+                        el'Exit eas exit $ EL'Expr xsrc
 
               case maybeGuardExpr of
                 Nothing -> el'RunTx easBranch analyzeContent
