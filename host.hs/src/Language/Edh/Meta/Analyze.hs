@@ -758,7 +758,7 @@ el'PackArgs (ArgsPacker !argSndrs _) !exit !eas =
       SendPosArg !ax -> el'AnalyzeExpr Nothing ax $ \ !argVal ->
         collectArgs (argVal : args) kwargs rest
       SendKwArg !argAddr !ax -> \ !easDone ->
-        el'ResolveAttrAddr easDone argAddr >>= \case
+        el'ResolveAttrAddr easDone argAddr $ \case
           Nothing -> el'RunTx easDone $ collectArgs args kwargs rest
           Just !argKey -> el'RunTx easDone $
             el'AnalyzeExpr Nothing ax $ \ !argVal ->
@@ -937,7 +937,7 @@ el'AnalyzeStmt
         RecvArg addr@(AttrAddrSrc _ arg'span) !maybeRename maybeDef ->
           let goRecv :: AttrAddrSrc -> (AttrKey -> EL'Value -> STM ()) -> STM ()
               goRecv !recvAddr !received =
-                el'ResolveAttrAddr eas recvAddr >>= \case
+                el'ResolveAttrAddr eas recvAddr $ \case
                   Nothing -> done args kwargs
                   Just !recvKey -> case odTakeOut recvKey kwargs of
                     (Just !kwVal, kwargs') -> do
@@ -978,7 +978,7 @@ el'AnalyzeStmt
 
       recvOne :: AttrAddrSrc -> EL'Value -> STM ()
       recvOne addr@(AttrAddrSrc _ !addr'span) !v =
-        el'ResolveAttrAddr eas addr >>= \case
+        el'ResolveAttrAddr eas addr $ \case
           Nothing -> return ()
           Just !k -> recvOne' addr'span k v
 
@@ -1170,6 +1170,71 @@ el'AnalyzeExprs !exprs !exit !eas = el'RunTx easPure $ go exprs []
     go (expr : rest) !vals = el'AnalyzeExpr Nothing expr $ \ !r ->
       go rest (r : vals)
 
+el'ResolveAttrAddr :: EL'AnalysisState -> AttrAddrSrc -> (Maybe AttrKey -> STM ()) -> STM ()
+el'ResolveAttrAddr _ (AttrAddrSrc (NamedAttr !attrName) _) !exit =
+  exit $ Just $ AttrByName attrName
+el'ResolveAttrAddr _ (AttrAddrSrc (QuaintAttr !attrName) _) !exit =
+  exit $ Just $ AttrByName attrName
+el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) !exit =
+  el'ResolveContextAttr eas (AttrByName symName) >>= \case
+    Nothing -> do
+      el'LogDiag
+        diags
+        el'Error
+        addr'span
+        "bad-attr-ref"
+        "no such attribute defined"
+      exit Nothing
+    Just !def -> case el'UltimateValue $ el'attr'def'value def of
+      EL'Const (EdhSymbol !symKey) -> exit $ Just $ AttrBySym symKey
+      EL'Const (EdhString !nameKey) -> exit $ Just $ AttrByName nameKey
+      _ -> do
+        el'LogDiag
+          diags
+          el'Warning
+          addr'span
+          "dyn-attr-ref"
+          "dynamic attribute reference"
+        !dynSym <- mkSymbol "<dynamic-attr-key>"
+        exit $ Just $ AttrBySym dynSym
+  where
+    eac = el'context eas
+    diags = el'ctx'diags eac
+el'ResolveAttrAddr !eas (AttrAddrSrc (IntplSymAttr _src !x) !addr'span) !exit =
+  el'RunTx eas $
+    el'AnalyzeExpr Nothing x $ \ !symVal _eas -> case symVal of
+      EL'Const (EdhSymbol !sym) ->
+        exit $ Just $ AttrBySym sym
+      _ -> do
+        el'LogDiag
+          diags
+          el'Error
+          addr'span
+          "bad-attr-ref"
+          "no such attribute defined"
+        exit Nothing
+  where
+    eac = el'context eas
+    diags = el'ctx'diags eac
+el'ResolveAttrAddr _ (AttrAddrSrc (LitSymAttr !sym) _) !exit =
+  exit $ Just $ AttrBySym sym
+el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrName !addr'span) !exit = do
+  el'LogDiag
+    (el'ctx'diags $ el'context eas)
+    el'Error
+    addr'span
+    "missing-attr"
+    "missing attribute name"
+  exit Nothing
+el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrSymbol !addr'span) !exit = do
+  el'LogDiag
+    (el'ctx'diags $ el'context eas)
+    el'Error
+    addr'span
+    "missing-sym"
+    "missing symbolic attribute name"
+  exit Nothing
+
 -- | analyze an expression in context
 el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
 --
@@ -1223,7 +1288,7 @@ el'AnalyzeExpr
          )
   !exit
   !eas =
-    el'ResolveAttrAddr eas addr >>= \case
+    el'ResolveAttrAddr eas addr $ \case
       Nothing -> returnAsExpr -- error diag should have been logged
       Just (AttrByName "_") -> do
         el'LogDiag
@@ -1312,7 +1377,7 @@ el'AnalyzeExpr
   !exit
   !eas = el'RunTx eas $
     el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal _eas ->
-      el'ResolveAttrAddr eas addr >>= \case
+      el'ResolveAttrAddr eas addr $ \case
         Nothing -> do
           recordAttrRef eac $ EL'UnsolvedRef (Just tgtVal) addr'span
           returnAsExpr
@@ -1510,7 +1575,7 @@ el'AnalyzeExpr
     -- attribute type annotation
     "::" -> case lhExpr of
       ExprSrc (AttrExpr (DirectRef !addr)) _ ->
-        el'ResolveAttrAddr eas addr >>= \case
+        el'ResolveAttrAddr eas addr $ \case
           Nothing -> returnAsExpr eas
           Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
           Just !attrKey -> do
@@ -1536,7 +1601,7 @@ el'AnalyzeExpr
     -- type synonym annotation
     ":=:" -> case lhExpr of
       ExprSrc (AttrExpr (DirectRef !addr)) _ ->
-        el'ResolveAttrAddr eas addr >>= \case
+        el'ResolveAttrAddr eas addr $ \case
           Nothing -> returnAsExpr eas
           Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
           Just !attrKey -> do
@@ -1594,7 +1659,7 @@ el'AnalyzeExpr
                   (DirectRef addr@(AttrAddrSrc _ !addr'span))
                 )
               _ ->
-                el'ResolveAttrAddr easDone addr >>= \case
+                el'ResolveAttrAddr easDone addr $ \case
                   Nothing -> returnAsExpr easDone
                   Just (AttrByName "_") -> el'Exit easDone exit $ EL'Const nil
                   Just !attrKey -> do
@@ -1699,7 +1764,7 @@ el'AnalyzeExpr
                     -- record as reference symbol, for completion
                     recordAttrRef eac $
                       EL'UnsolvedRef (Just tgtVal) addr'span
-                    el'ResolveAttrAddr easDone' addr >>= \case
+                    el'ResolveAttrAddr easDone' addr $ \case
                       Nothing ->
                         -- record as reference symbol, for completion
                         recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
@@ -1813,7 +1878,7 @@ el'AnalyzeExpr
                                    (AttrExpr (DirectRef !rcvAttr))
                                    !arg'span
                                  ) ->
-                        el'ResolveAttrAddr eas rcvAttr >>= \case
+                        el'ResolveAttrAddr eas rcvAttr $ \case
                           Nothing -> go rest kds
                           Just !key -> do
                             !attrVal <-
@@ -1847,10 +1912,10 @@ el'AnalyzeExpr
                                    (AttrExpr (DirectRef !tgtAttr))
                                    !arg'span
                                  ) ->
-                        el'ResolveAttrAddr eas srcAttr >>= \case
+                        el'ResolveAttrAddr eas srcAttr $ \case
                           Nothing -> go rest kds
                           Just !srcKey ->
-                            el'ResolveAttrAddr eas tgtAttr >>= \case
+                            el'ResolveAttrAddr eas tgtAttr $ \case
                               Nothing -> go rest kds
                               Just !tgtKey -> do
                                 !attrVal <-
@@ -1905,7 +1970,7 @@ el'AnalyzeExpr
                                    (AttrExpr (DirectRef !rcvAttr))
                                    !arg'span
                                  ) ->
-                        el'ResolveAttrAddr eas rcvAttr >>= \case
+                        el'ResolveAttrAddr eas rcvAttr $ \case
                           Nothing -> go rest kds
                           Just !key -> do
                             let !attrDef =
@@ -2047,7 +2112,7 @@ el'AnalyzeExpr
                   )
                 !stmt'span
               ] ->
-                el'ResolveAttrAddr eas valAddr >>= \case
+                el'ResolveAttrAddr eas valAddr $ \case
                   Nothing -> analyzeBranch []
                   Just !attrKey ->
                     defExprAttrs
@@ -2097,7 +2162,7 @@ el'AnalyzeExpr
                     EL'ClsVal !clsModu !cls -> do
                       !obj <- el'ObjNew cls
                       defDfAttrs clsModu cls apkr $ \ !dfs ->
-                        el'ResolveAttrAddr eas instAddr >>= \case
+                        el'ResolveAttrAddr eas instAddr $ \case
                           Nothing -> analyzeBranch dfs
                           Just !instKey -> do
                             !anno <- newTVar Nothing
@@ -2113,7 +2178,7 @@ el'AnalyzeExpr
                                     Nothing
                             analyzeBranch $ dfs ++ [(instKey, attrDef)]
                     _ -> defDfAttrs mwip el'MetaClass apkr $ \ !dfs ->
-                      el'ResolveAttrAddr eas instAddr >>= \case
+                      el'ResolveAttrAddr eas instAddr $ \case
                         Nothing -> analyzeBranch dfs
                         Just !instKey -> do
                           !anno <- newTVar Nothing
@@ -2151,7 +2216,7 @@ el'AnalyzeExpr
                   )
                 _
               ] ->
-                el'ResolveAttrAddr eas instAddr >>= \case
+                el'ResolveAttrAddr eas instAddr $ \case
                   Nothing -> analyzeBranch []
                   Just !instKey -> el'RunTx eas $
                     el'AnalyzeExpr
@@ -2809,7 +2874,7 @@ el'AnalyzeExpr
                     "rest-apk-import"
                     "rest apk receiver in import specification"
                 RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) ->
-                  el'ResolveAttrAddr eas localAddr >>= \case
+                  el'ResolveAttrAddr eas localAddr $ \case
                     Nothing ->
                       -- invalid attr addr, error should have been logged
                       go srcArts rest
@@ -2844,12 +2909,12 @@ el'AnalyzeExpr
                   processImp
                     srcAddr@(AttrAddrSrc _ !src'span)
                     localAddr@(AttrAddrSrc _ !local'span) = do
-                      el'ResolveAttrAddr eas localAddr >>= \case
+                      el'ResolveAttrAddr eas localAddr $ \case
                         Nothing ->
                           -- invalid attr addr, error should have been logged
                           go srcArts rest
                         Just !localKey ->
-                          el'ResolveAttrAddr eas srcAddr >>= \case
+                          el'ResolveAttrAddr eas srcAddr $ \case
                             Nothing ->
                               -- invalid attr addr, error should have been logged
                               go srcArts rest
@@ -2914,8 +2979,7 @@ el'AnalyzeExpr
            !expr'span
          )
   !exit
-  !eas = do
-    !maybeClsKey <- el'ResolveAttrAddr eas cls'name
+  !eas = el'ResolveAttrAddr eas cls'name $ \ !maybeClsKey -> do
     !clsDefi <- newEmptyTMVar
     !clsAttrs <- iopdEmpty
     !clsExts <- newTVar []
@@ -2972,22 +3036,23 @@ el'AnalyzeExpr
 
         -- define artifacts from arguments (i.e. data fields) for a data
         -- class
-        defDataArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
+        defDataArts :: [ArgReceiver] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
         defDataArts !ars = go [] ars
           where
             go ::
               [(AttrKey, EL'AttrDef)] ->
               [ArgReceiver] ->
-              STM [(AttrKey, EL'AttrDef)]
-            go !dfs [] = return $ reverse dfs
-            go !dfs (ar : rest) = case ar of
+              ([(AttrKey, EL'AttrDef)] -> STM ()) ->
+              STM ()
+            go !dfs [] !exit' = exit' $ reverse dfs
+            go !dfs (ar : rest) exit' = case ar of
               RecvArg
                 dfAddr@(AttrAddrSrc _ df'span)
                 !maybeRename
                 _maybeDef ->
                   case maybeRename of
-                    Nothing -> defDataField dfAddr
-                    Just (DirectRef !dfAddr') -> defDataField dfAddr'
+                    Nothing -> defDataField dfAddr exit'
+                    Just (DirectRef !dfAddr') -> defDataField dfAddr' exit'
                     Just _badRename -> do
                       el'LogDiag
                         diags
@@ -2995,15 +3060,16 @@ el'AnalyzeExpr
                         df'span
                         "bad-data-field-rename"
                         "bad data field rename"
-                      go dfs rest
-              RecvRestPkArgs !dfAddr -> defDataField dfAddr
-              RecvRestKwArgs !dfAddr -> defDataField dfAddr
-              RecvRestPosArgs !dfAddr -> defDataField dfAddr
+                      go dfs rest exit'
+              RecvRestPkArgs !dfAddr -> defDataField dfAddr exit'
+              RecvRestKwArgs !dfAddr -> defDataField dfAddr exit'
+              RecvRestPosArgs !dfAddr -> defDataField dfAddr exit'
               where
-                defDataField (AttrAddrSrc (NamedAttr "_") _) = go dfs rest
-                defDataField dfAddr@(AttrAddrSrc _ df'name'span) =
-                  el'ResolveAttrAddr eas dfAddr >>= \case
-                    Nothing -> go dfs rest
+                defDataField (AttrAddrSrc (NamedAttr "_") _) !exit'' =
+                  go dfs rest exit''
+                defDataField dfAddr@(AttrAddrSrc _ df'name'span) !exit'' =
+                  el'ResolveAttrAddr eas dfAddr $ \case
+                    Nothing -> go dfs rest exit''
                     Just !dfKey -> do
                       -- TODO clsAnnos is empty now, fill the var later
                       !dfAnno <- newTVar =<< iopdLookup dfKey clsAnnos
@@ -3027,6 +3093,7 @@ el'AnalyzeExpr
                           dfs
                         )
                         rest
+                        exit''
 
     -- define intrinsic methods of the data class
     (flip iopdUpdate clsAttrs =<<) $
@@ -3062,8 +3129,8 @@ el'AnalyzeExpr
       -- a normal class
       WildReceiver -> pure ()
       -- a data class (ADT)
-      SingleReceiver !ar -> defDataArts [ar] >>= flip iopdUpdate instAttrs
-      PackReceiver !ars -> defDataArts ars >>= flip iopdUpdate instAttrs
+      SingleReceiver !ar -> defDataArts [ar] $ flip iopdUpdate instAttrs
+      PackReceiver !ars -> defDataArts ars $ flip iopdUpdate instAttrs
 
     el'RunTx easCls $
       el'AnalyzeStmts [cls'body] $ \_ !easDone -> do
@@ -3259,7 +3326,7 @@ el'AnalyzeExpr
           -- record as an inner scope of outer scope
           modifyTVar' (el'scope'inner'scopes'wip outerProc) (ns'scope :)
 
-          el'ResolveAttrAddr eas ns'name >>= \case
+          el'ResolveAttrAddr eas ns'name $ \case
             Nothing -> el'Exit eas exit $ EL'Const nil
             Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
             Just !nsName -> do
@@ -3326,7 +3393,7 @@ el'AnalyzeExpr
           go !argArts [] = nsaExit $ reverse argArts
           go !argArts (argSndr : rest) = case argSndr of
             SendKwArg argAddr@(AttrAddrSrc _ !arg'name'span) !argExpr ->
-              el'ResolveAttrAddr eas argAddr >>= \case
+              el'ResolveAttrAddr eas argAddr $ \case
                 Nothing -> go argArts rest
                 Just !argKey -> el'RunTx eas $
                   el'AnalyzeExpr docCmt argExpr $ \ !argVal _eas -> do
@@ -3506,31 +3573,32 @@ el'AnalyzeExpr
   _docCmt
   x@(ExprSrc (ForExpr !asr !it body@(StmtSrc _ !body'span)) _expr'span)
   !exit
-  !eas = do
-    !loopArts <- case asr of
-      WildReceiver -> return []
-      PackReceiver !ars -> defLoopArts ars
-      SingleReceiver !ar -> defLoopArts [ar]
-    unless (null loopArts) $ do
-      iopdUpdate loopArts $ el'scope'attrs'wip pwip
-      iopdUpdate loopArts attrs
-      -- record a region before the loop body for current scope
-      iopdSnapshot attrs
-        >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-          . EL'Region (src'start body'span)
+  !eas = ( case asr of
+             WildReceiver -> ($ [])
+             PackReceiver !ars -> defLoopArts ars
+             SingleReceiver !ar -> defLoopArts [ar]
+         )
+    $ \ !loopArts -> do
+      unless (null loopArts) $ do
+        iopdUpdate loopArts $ el'scope'attrs'wip pwip
+        iopdUpdate loopArts attrs
+        -- record a region before the loop body for current scope
+        iopdSnapshot attrs
+          >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+            . EL'Region (src'start body'span)
 
-    el'RunTx eas $
-      el'AnalyzeExpr Nothing it $
-        const $
-          el'AnalyzeStmt body $ \_result _eas -> do
-            -- record a new region following this for-from-do loop
-            -- TODO check whether new attrs actually added, don't record if not
-            !scope'attrs <- iopdSnapshot (el'scope'attrs'wip pwip)
-            modifyTVar'
-              (el'branch'regions'wip bwip)
-              (EL'Region (src'end body'span) scope'attrs :)
+      el'RunTx eas $
+        el'AnalyzeExpr Nothing it $
+          const $
+            el'AnalyzeStmt body $ \_result _eas -> do
+              -- record a new region following this for-from-do loop
+              -- TODO check whether new attrs actually added, don't record if not
+              !scope'attrs <- iopdSnapshot (el'scope'attrs'wip pwip)
+              modifyTVar'
+                (el'branch'regions'wip bwip)
+                (EL'Region (src'end body'span) scope'attrs :)
 
-            el'Exit eas exit $ EL'Expr x
+              el'Exit eas exit $ EL'Expr x
     where
       !eac = el'context eas
       !swip = el'ctx'scope eac
@@ -3540,27 +3608,28 @@ el'AnalyzeExpr
       !annos = el'branch'annos'wip bwip
 
       -- define artifacts from loop receivers
-      defLoopArts :: [ArgReceiver] -> STM [(AttrKey, EL'AttrDef)]
+      defLoopArts :: [ArgReceiver] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
       defLoopArts !ars = go [] ars
         where
           go ::
             [(AttrKey, EL'AttrDef)] ->
             [ArgReceiver] ->
-            STM [(AttrKey, EL'AttrDef)]
-          go !args [] = return $ reverse args
-          go !args (ar : rest) = case ar of
+            ([(AttrKey, EL'AttrDef)] -> STM ()) ->
+            STM ()
+          go !args [] !exit' = exit' $ reverse args
+          go !args (ar : rest) !exit' = case ar of
             RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
-              Nothing -> defLoopArt argAddr maybeDef
-              Just (DirectRef !argAddr') -> defLoopArt argAddr' Nothing
-              Just _otherRename -> go args rest -- TODO elaborate?
-            RecvRestPkArgs !argAddr -> defLoopArt argAddr Nothing
-            RecvRestKwArgs !argAddr -> defLoopArt argAddr Nothing
-            RecvRestPosArgs !argAddr -> defLoopArt argAddr Nothing
+              Nothing -> defLoopArt argAddr maybeDef exit'
+              Just (DirectRef !argAddr') -> defLoopArt argAddr' Nothing exit'
+              Just _otherRename -> go args rest exit' -- TODO elaborate?
+            RecvRestPkArgs !argAddr -> defLoopArt argAddr Nothing exit'
+            RecvRestKwArgs !argAddr -> defLoopArt argAddr Nothing exit'
+            RecvRestPosArgs !argAddr -> defLoopArt argAddr Nothing exit'
             where
-              defLoopArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest
-              defLoopArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
-                el'ResolveAttrAddr eas argAddr >>= \case
-                  Nothing -> go args rest
+              defLoopArt (AttrAddrSrc (NamedAttr "_") _) _ !exit'' = go args rest exit''
+              defLoopArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr !exit'' =
+                el'ResolveAttrAddr eas argAddr $ \case
+                  Nothing -> go args rest exit''
                   Just !argKey ->
                     iopdLookup argKey annos >>= newTVar >>= \ !anno ->
                       go
@@ -3585,6 +3654,7 @@ el'AnalyzeExpr
                           args
                         )
                         rest
+                        exit''
 --
 
 -- yield
@@ -3720,8 +3790,7 @@ el'DefineMethod
       _mth'proc'loc
     )
   !exit
-  !eas = do
-    !maybeMthName <- el'ResolveAttrAddr eas mth'name
+  !eas = el'ResolveAttrAddr eas mth'name $ \ !maybeMthName -> do
     let !mthPhase = case maybeMthName of
           Just (AttrByName "__init__") -> DefinePhase
           -- TODO other cases ?
@@ -4015,7 +4084,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                   -- record as reference symbol, for completion
                   recordAttrRef eac $
                     EL'UnsolvedRef (Just tgtVal) addr'span
-                  el'ResolveAttrAddr easDone' addr >>= \case
+                  el'ResolveAttrAddr easDone' addr $ \case
                     Nothing ->
                       -- record as reference symbol, for completion
                       recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
@@ -4079,7 +4148,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
       where
         defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest exit
         defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
-          el'ResolveAttrAddr eas argAddr >>= \case
+          el'ResolveAttrAddr eas argAddr $ \case
             Nothing -> go args rest exit
             Just !argKey -> do
               -- check if it shadows attr from outer scopes

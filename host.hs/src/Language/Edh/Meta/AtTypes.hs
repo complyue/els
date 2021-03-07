@@ -163,53 +163,6 @@ el'ResolveContextAttr !eas !key =
   where
     !eac = el'context eas
 
-el'ResolveAttrAddr :: EL'AnalysisState -> AttrAddrSrc -> STM (Maybe AttrKey)
-el'ResolveAttrAddr _ (AttrAddrSrc (NamedAttr !attrName) _) =
-  return $ Just $ AttrByName attrName
-el'ResolveAttrAddr _ (AttrAddrSrc (QuaintAttr !attrName) _) =
-  return $ Just $ AttrByName attrName
-el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) =
-  el'ResolveContextAttr eas (AttrByName symName) >>= \case
-    Nothing -> do
-      el'LogDiag
-        diags
-        el'Error
-        addr'span
-        "bad-attr-ref"
-        "no such attribute defined"
-      return Nothing
-    Just !def -> case el'UltimateValue $ el'attr'def'value def of
-      EL'Const (EdhSymbol !symKey) -> return $ Just $ AttrBySym symKey
-      EL'Const (EdhString !nameKey) -> return $ Just $ AttrByName nameKey
-      _ -> do
-        el'LogDiag
-          diags
-          el'Warning
-          addr'span
-          "dyn-attr-ref"
-          "dynamic attribute reference"
-        !dynSym <- mkSymbol "<dynamic-attr-key>"
-        return $ Just $ AttrBySym dynSym
-  where
-    eac = el'context eas
-    diags = el'ctx'diags eac
-el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrName !addr'span) = do
-  el'LogDiag
-    (el'ctx'diags $ el'context eas)
-    el'Error
-    addr'span
-    "missing-attr"
-    "missing attribute name"
-  return Nothing
-el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrSymbol !addr'span) = do
-  el'LogDiag
-    (el'ctx'diags $ el'context eas)
-    el'Error
-    addr'span
-    "missing-sym"
-    "missing symbolic attribute name"
-  return Nothing
-
 el'ResolveAnnotation :: EL'ScopeWIP -> AttrKey -> STM (Maybe EL'AttrAnno)
 el'ResolveAnnotation !swip !key =
   iopdLookup key $ el'branch'annos'wip $ el'BranchWIP swip
