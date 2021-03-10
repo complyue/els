@@ -1112,7 +1112,7 @@ el'AnalyzeStmt (StmtSrc FallthroughStmt _stmt'span) !exit !eas =
 --
 
 -- return
-el'AnalyzeStmt (StmtSrc (ReturnStmt !expr) _stmt'span) !exit !eas =
+el'AnalyzeStmt (StmtSrc (ReturnStmt !expr _docCmt) _stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr Nothing expr $
       el'ExitTx exit . EL'Return
@@ -2463,6 +2463,7 @@ el'AnalyzeExpr
                                   )
                                 _
                               )
+                              _docCmt
                   )
                 _
               ] -> do
@@ -2480,7 +2481,7 @@ el'AnalyzeExpr
                         Nothing
                 analyzeBranch [(valKey, attrDef)]
             -- { return <expr> } -- match with expected return value
-            [StmtSrc (ReturnStmt _expectExpr) _] -> analyzeBranch []
+            [StmtSrc (ReturnStmt _expectExpr _docCmt ) _] -> analyzeBranch []
             --
 
             -- { term := value } -- definition pattern

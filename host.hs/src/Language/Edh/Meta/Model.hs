@@ -909,7 +909,7 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
     stmtSymbols (StmtSrc (WhileStmt !x !stmt) _) =
       exprSymbols' Nothing x ++ stmtSymbols stmt
     stmtSymbols (StmtSrc (ThrowStmt !x) _) = exprSymbols' Nothing x
-    stmtSymbols (StmtSrc (ReturnStmt !x) _) = exprSymbols' Nothing x
+    stmtSymbols (StmtSrc (ReturnStmt !x _docCmt) _) = exprSymbols' Nothing x
     stmtSymbols _ = []
 
     exprSymbols' :: Maybe DocComment -> ExprSrc -> [DocumentSymbol]
@@ -1089,7 +1089,7 @@ blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
     stmtFoldRngs (StmtSrc (WhileStmt !x !stmt) _) =
       exprFoldRngs' x ++ stmtFoldRngs stmt
     stmtFoldRngs (StmtSrc (ThrowStmt !x) _) = exprFoldRngs' x
-    stmtFoldRngs (StmtSrc (ReturnStmt !x) _) = exprFoldRngs' x
+    stmtFoldRngs (StmtSrc (ReturnStmt !x _docCmt) _) = exprFoldRngs' x
     stmtFoldRngs _ = []
 
     exprFoldRngs' :: ExprSrc -> [FoldingRange]
