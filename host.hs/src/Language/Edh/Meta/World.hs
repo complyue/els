@@ -149,7 +149,7 @@ createMetaWorldClass !msClass !clsOuterScope =
                   !elw = EL'World homes ambient
 
               -- return the world
-              ctorExit $ HostStore (toDyn elw)
+              ctorExit Nothing $ HostStore (toDyn elw)
       where
         world = edh'prog'world $ edh'thread'prog etsCtor
         console = edh'world'console world

@@ -106,7 +106,7 @@ createLangServerClass !addrClass !clsOuterScope =
                         . void
                         . tryPutTMVar servEoL
                     )
-                atomically $ ctorExit $ HostStore (toDyn server)
+                atomically $ ctorExit Nothing $ HostStore (toDyn server)
 
           serverThread :: LangServer -> IO ()
           serverThread
