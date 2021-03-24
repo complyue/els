@@ -657,6 +657,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
   !branchRegions <- newTVar [EL'Region beginningSrcPos builtinAttrs]
   !moduScopes <- newTVar []
   !moduRegions <- newTVar []
+  !docCmtVar <- newTVar Nothing
   let !moduObj =
         EL'Object
           el'ModuleClass
@@ -692,6 +693,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
           { el'world = world,
             el'ana'queue = aqv,
             el'context = eac,
+            el'doc'cmt = docCmtVar,
             el'ets = ets
           }
 
@@ -746,22 +748,22 @@ el'PackArgs (ArgsPacker !argSndrs _) !exit !eas =
         exit
         $ EL'ArgsPack (reverse args) $ odFromList $ reverse kwargs
     collectArgs !args !kwargs (asndr : rest) = case asndr of
-      UnpackPosArgs !ax -> el'AnalyzeExpr Nothing ax $ \_argVal ->
+      UnpackPosArgs !ax -> el'AnalyzeExpr ax $ \_argVal ->
         -- TODO try analyze the unpacking
         collectArgs args kwargs rest
-      UnpackKwArgs !ax -> el'AnalyzeExpr Nothing ax $ \_argVal ->
+      UnpackKwArgs !ax -> el'AnalyzeExpr ax $ \_argVal ->
         -- TODO try analyze the unpacking
         collectArgs args kwargs rest
-      UnpackPkArgs !ax -> el'AnalyzeExpr Nothing ax $ \_argVal ->
+      UnpackPkArgs !ax -> el'AnalyzeExpr ax $ \_argVal ->
         -- TODO try analyze the unpacking
         collectArgs args kwargs rest
-      SendPosArg !ax -> el'AnalyzeExpr Nothing ax $ \ !argVal ->
+      SendPosArg !ax -> el'AnalyzeExpr ax $ \ !argVal ->
         collectArgs (argVal : args) kwargs rest
       SendKwArg !argAddr !ax -> \ !easDone ->
         el'ResolveAttrAddr easDone argAddr $ \case
           Nothing -> el'RunTx easDone $ collectArgs args kwargs rest
           Just !argKey -> el'RunTx easDone $
-            el'AnalyzeExpr Nothing ax $ \ !argVal ->
+            el'AnalyzeExpr ax $ \ !argVal ->
               collectArgs args ((argKey, argVal) : kwargs) rest
 
 -- * statement analysis
@@ -782,8 +784,9 @@ el'AnalyzeStmt :: StmtSrc -> EL'Analysis EL'Value
 --
 
 -- a standalone expression
-el'AnalyzeStmt (StmtSrc (ExprStmt !expr !docCmt) !stmt'span) !exit !eas =
-  el'RunTx eas $ el'AnalyzeExpr docCmt (ExprSrc expr stmt'span) exit
+el'AnalyzeStmt (StmtSrc (ExprStmt !expr !docCmt) !stmt'span) !exit !eas = do
+  writeTVar (el'doc'cmt eas) docCmt
+  el'RunTx eas $ el'AnalyzeExpr (ExprSrc expr stmt'span) exit
 --
 
 -- a let statement
@@ -792,7 +795,7 @@ el'AnalyzeStmt
   !exit
   !eas = case argsSndr of
     ArgsPacker [SendPosArg !singleArg] apk'span -> el'RunTx eas $
-      el'AnalyzeExpr Nothing singleArg $ \ !singleVal _eas -> case singleVal of
+      el'AnalyzeExpr singleArg $ \ !singleVal _eas -> case singleVal of
         EL'Apk !apk -> doRecv apk
         _ -> case argsRcvr of
           SingleReceiver
@@ -958,7 +961,7 @@ el'AnalyzeStmt
                           done args kwargs
                         Just !defExpr -> el'RunTx
                           eas {el'context = eac {el'ctx'pure = True}}
-                          $ el'AnalyzeExpr Nothing defExpr $
+                          $ el'AnalyzeExpr defExpr $
                             \ !defVal _eas -> do
                               received recvKey defVal
                               done args kwargs
@@ -1018,9 +1021,10 @@ el'AnalyzeStmt
 --
 
 -- effect defining
-el'AnalyzeStmt (StmtSrc (EffectStmt !effs !docCmt) _stmt'span) !exit !eas =
+el'AnalyzeStmt (StmtSrc (EffectStmt !effs !docCmt) _stmt'span) !exit !eas = do
+  writeTVar (el'doc'cmt eas) docCmt
   el'RunTx eas {el'context = eac {el'ctx'eff'defining = True}} $
-    el'AnalyzeExpr docCmt effs $ \_ _eas -> el'Exit eas exit $ EL'Const nil
+    el'AnalyzeExpr effs $ \_ _eas -> el'Exit eas exit $ EL'Const nil
   where
     !eac = el'context eas
 --
@@ -1031,7 +1035,7 @@ el'AnalyzeStmt
   !exit
   !eas =
     el'RunTx eas $
-      el'AnalyzeExpr Nothing superExpr $ \case
+      el'AnalyzeExpr superExpr $ \case
         superVal@EL'ObjVal {} -> \_eas -> do
           modifyTVar' exts (++ [superVal])
           el'Exit eas exit $ EL'Const nil
@@ -1071,19 +1075,19 @@ el'AnalyzeStmt
 -- go
 el'AnalyzeStmt (StmtSrc (GoStmt !expr) _stmt'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+    el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Const nil
 --
 
 -- defer
 el'AnalyzeStmt (StmtSrc (DeferStmt !expr) _stmt'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+    el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Const nil
 --
 
 -- perceive
 el'AnalyzeStmt (StmtSrc (PerceiveStmt !expr !body) _stmt'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $
+    el'AnalyzeExpr expr $
       const $
         el'AnalyzeStmt body $
           const $ el'ExitTx exit $ EL'Const nil
@@ -1092,7 +1096,7 @@ el'AnalyzeStmt (StmtSrc (PerceiveStmt !expr !body) _stmt'span) !exit !eas =
 -- while
 el'AnalyzeStmt (StmtSrc (WhileStmt !expr !body) _stmt'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $
+    el'AnalyzeExpr expr $
       const $ el'AnalyzeStmt body $ const $ el'ExitTx exit $ EL'Const nil
 --
 
@@ -1114,14 +1118,14 @@ el'AnalyzeStmt (StmtSrc FallthroughStmt _stmt'span) !exit !eas =
 -- return
 el'AnalyzeStmt (StmtSrc (ReturnStmt !expr _docCmt) _stmt'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $
+    el'AnalyzeExpr expr $
       el'ExitTx exit . EL'Return
 --
 
 -- throw
 el'AnalyzeStmt (StmtSrc (ThrowStmt !expr) _stmt'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $
+    el'AnalyzeExpr expr $
       el'ExitTx exit . EL'Throw
 --
 
@@ -1159,7 +1163,7 @@ el'AnalyzeExprs !exprs !exit !eas = el'RunTx easPure $ go exprs []
 
     go :: [ExprSrc] -> [EL'Value] -> EL'Tx
     go [] _ = error "bug: impossible"
-    go [!expr] !vals = el'AnalyzeExpr Nothing expr $ \ !result !easDone ->
+    go [!expr] !vals = el'AnalyzeExpr expr $ \ !result !easDone ->
       el'Exit
         easDone
           { el'context = (el'context easDone) {el'ctx'pure = originPure}
@@ -1167,7 +1171,7 @@ el'AnalyzeExprs !exprs !exit !eas = el'RunTx easPure $ go exprs []
         exit
         $! reverse
         $ result : vals
-    go (expr : rest) !vals = el'AnalyzeExpr Nothing expr $ \ !r ->
+    go (expr : rest) !vals = el'AnalyzeExpr expr $ \ !r ->
       go rest (r : vals)
 
 el'ResolveAttrAddr :: EL'AnalysisState -> AttrAddrSrc -> (Maybe AttrKey -> STM ()) -> STM ()
@@ -1202,7 +1206,7 @@ el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) !exit =
     diags = el'ctx'diags eac
 el'ResolveAttrAddr !eas (AttrAddrSrc (IntplSymAttr _src !x) !addr'span) !exit =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing x $ \ !symVal _eas -> case symVal of
+    el'AnalyzeExpr x $ \ !symVal _eas -> case symVal of
       EL'Const (EdhSymbol !sym) ->
         exit $ Just $ AttrBySym sym
       _ -> do
@@ -1236,11 +1240,11 @@ el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrSymbol !addr'span) !exit = do
   exit Nothing
 
 -- | analyze an expression in context
-el'AnalyzeExpr :: Maybe DocComment -> ExprSrc -> EL'Analysis EL'Value
+el'AnalyzeExpr :: ExprSrc -> EL'Analysis EL'Value
 --
 
 -- block
-el'AnalyzeExpr _docCmt (ExprSrc (BlockExpr !stmts) !blk'span) !exit !eas =
+el'AnalyzeExpr (ExprSrc (BlockExpr !stmts) !blk'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeStmts stmts $ \ !blkResult !easDone -> do
       let closeBlk = do
@@ -1281,7 +1285,6 @@ el'AnalyzeExpr _docCmt (ExprSrc (BlockExpr !stmts) !blk'span) !exit !eas =
 
 -- direct attribute addressing
 el'AnalyzeExpr
-  _docCmt
   xsrc@( ExprSrc
            (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span)))
            _expr'span
@@ -1324,7 +1327,6 @@ el'AnalyzeExpr
 
 -- that reference
 el'AnalyzeExpr
-  _docCmt
   (ExprSrc (AttrExpr ThatRef {}) _expr'span)
   !exit
   !eas = el'Exit eas exit $ EL'ObjVal mwip thisObj
@@ -1338,7 +1340,6 @@ el'AnalyzeExpr
 
 -- this reference
 el'AnalyzeExpr
-  _docCmt
   (ExprSrc (AttrExpr ThisRef {}) _expr'span)
   !exit
   !eas = el'Exit eas exit $ EL'ObjVal mwip thisObj
@@ -1350,7 +1351,6 @@ el'AnalyzeExpr
 
 -- super reference
 el'AnalyzeExpr
-  _docCmt
   (ExprSrc (AttrExpr SuperRef {}) _expr'span)
   !exit
   !eas = el'Exit eas exit $ EL'ObjVal mwip thisObj
@@ -1364,7 +1364,6 @@ el'AnalyzeExpr
 
 -- indirect attribute addressing (dot-notation)
 el'AnalyzeExpr
-  _docCmt
   xsrc@( ExprSrc
            ( AttrExpr
                ( IndirectRef
@@ -1376,7 +1375,7 @@ el'AnalyzeExpr
          )
   !exit
   !eas = el'RunTx eas $
-    el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal _eas ->
+    el'AnalyzeExpr tgtExpr $ \ !tgtVal _eas ->
       el'ResolveAttrAddr eas addr $ \case
         Nothing -> do
           recordAttrRef eac $ EL'UnsolvedRef (Just tgtVal) addr'span
@@ -1504,7 +1503,6 @@ el'AnalyzeExpr
 
 -- infix operator application
 el'AnalyzeExpr
-  !docCmt
   xsrc@( ExprSrc
            ( InfixExpr
                (!opSym, SrcRange op'start _op'end)
@@ -1528,9 +1526,9 @@ el'AnalyzeExpr
           "unintended-at-notation"
           "you want to put a semicolon here, or it is infix at-notation"
       el'RunTx eas $
-        el'AnalyzeExpr Nothing lhExpr $
+        el'AnalyzeExpr lhExpr $
           const $ -- TODO validate attribute key available from lhs value
-            el'AnalyzeExpr Nothing rhExpr $ const returnAsExpr
+            el'AnalyzeExpr rhExpr $ const returnAsExpr
 
     -- comparisons
     "==" -> doCmp
@@ -1579,7 +1577,7 @@ el'AnalyzeExpr
           Nothing -> returnAsExpr eas
           Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
           Just !attrKey -> do
-            let !attrAnno = EL'AttrAnno rhExpr docCmt
+            !attrAnno <- EL'AttrAnno rhExpr <$> readTVar (el'doc'cmt eas)
             iopdInsert attrKey attrAnno (el'branch'annos'wip bwip)
             el'Exit eas exit $ EL'Const nil
       ExprSrc (InfixExpr ("@", _) _ _) _ ->
@@ -1587,7 +1585,7 @@ el'AnalyzeExpr
         -- unintended to be parsed as infix at-notation,
         -- will be diag'ed by analyzing it
         el'RunTx eas $
-          el'AnalyzeExpr Nothing lhExpr $ \_lhVal !eas' -> returnAsExpr eas'
+          el'AnalyzeExpr lhExpr $ \_lhVal !eas' -> returnAsExpr eas'
       ExprSrc _ !bad'anno'span -> do
         el'LogDiag
           diags
@@ -1605,7 +1603,7 @@ el'AnalyzeExpr
           Nothing -> returnAsExpr eas
           Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
           Just !attrKey -> do
-            let !attrAnno = EL'AttrAnno rhExpr docCmt
+            !attrAnno <- EL'AttrAnno rhExpr <$> readTVar (el'doc'cmt eas)
             -- TODO use separate fields
             iopdInsert attrKey attrAnno (el'branch'annos'wip bwip)
             el'Exit eas exit $ EL'Const nil
@@ -1620,7 +1618,7 @@ el'AnalyzeExpr
     --
 
     -- free-form lhs annotation
-    "!" -> el'RunTx eas $ el'AnalyzeExpr docCmt rhExpr exit
+    "!" -> el'RunTx eas $ el'AnalyzeExpr rhExpr exit
     --
 
     -- TODO special treatment of ($) (|) (&) etc. ?
@@ -1628,9 +1626,9 @@ el'AnalyzeExpr
     -- other operations without special treatment
     _ ->
       el'RunTx eas $
-        el'AnalyzeExpr Nothing lhExpr $
+        el'AnalyzeExpr lhExpr $
           const $
-            el'AnalyzeExpr Nothing rhExpr $ const returnAsExpr
+            el'AnalyzeExpr rhExpr $ const returnAsExpr
             --
 
             --
@@ -1646,179 +1644,181 @@ el'AnalyzeExpr
       doCmp :: STM ()
       doCmp =
         el'RunTx eas $
-          el'AnalyzeExpr Nothing lhExpr $
+          el'AnalyzeExpr lhExpr $
             const $
-              el'AnalyzeExpr Nothing rhExpr $ const returnAsExpr
+              el'AnalyzeExpr rhExpr $ const returnAsExpr
 
       doAssign :: STM ()
-      doAssign = el'RunTx eas $
-        el'AnalyzeExpr Nothing rhExpr $ \ !rhVal !easDone -> do
-          case lhExpr of
-            ExprSrc
-              ( AttrExpr
-                  (DirectRef addr@(AttrAddrSrc _ !addr'span))
-                )
-              _ ->
-                el'ResolveAttrAddr easDone addr $ \case
-                  Nothing -> returnAsExpr easDone
-                  Just (AttrByName "_") -> el'Exit easDone exit $ EL'Const nil
-                  Just !attrKey -> do
-                    !attrAnno <-
-                      newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
-                    !maybePrevDef <-
-                      iopdLookup attrKey $
-                        if el'ctx'eff'defining eac
-                          then el'branch'effs'wip bwip
-                          else el'branch'attrs'wip bwip
-                    let !attrDef =
-                          EL'AttrDef
-                            attrKey
-                            docCmt
-                            opSym
-                            addr'span
-                            xsrc
-                            rhVal
-                            attrAnno
-                            maybePrevDef
+      doAssign = do
+        !docCmt <- takeDocComment eas
+        el'RunTx eas $
+          el'AnalyzeExpr rhExpr $ \ !rhVal !easDone -> do
+            case lhExpr of
+              ExprSrc
+                ( AttrExpr
+                    (DirectRef addr@(AttrAddrSrc _ !addr'span))
+                  )
+                _ ->
+                  el'ResolveAttrAddr easDone addr $ \case
+                    Nothing -> returnAsExpr easDone
+                    Just (AttrByName "_") -> el'Exit easDone exit $ EL'Const nil
+                    Just !attrKey -> do
+                      !attrAnno <-
+                        newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
+                      !maybePrevDef <-
+                        iopdLookup attrKey $
+                          if el'ctx'eff'defining eac
+                            then el'branch'effs'wip bwip
+                            else el'branch'attrs'wip bwip
+                      let !attrDef =
+                            EL'AttrDef
+                              attrKey
+                              docCmt
+                              opSym
+                              addr'span
+                              xsrc
+                              rhVal
+                              attrAnno
+                              maybePrevDef
 
-                    -- record as artifact of current scope
-                    -- note the assignment defines attr regardless of pure ctx
-                    if el'ctx'eff'defining eac
-                      then do
-                        let !effs = el'branch'effs'wip bwip
-                        case rhVal of
-                          EL'Const EdhNil -> iopdDelete attrKey effs
-                          _ -> iopdInsert attrKey attrDef effs
-                      else do
-                        let !attrs = el'branch'attrs'wip bwip
-                        if el'IsNil rhVal && "=" == opSym
-                          then do
-                            iopdDelete attrKey $ el'scope'attrs'wip pwip
-                            iopdDelete attrKey attrs
-                            iopdSnapshot attrs
-                              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-                                . EL'Region (src'end expr'span)
-                          else do
-                            iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
-                            iopdInsert attrKey attrDef attrs
-                            case maybePrevDef of
-                              -- assignment created a new attr, record a region
-                              -- after this assignment expr for current scope
-                              Nothing ->
-                                iopdSnapshot attrs
-                                  >>= modifyTVar' (el'branch'regions'wip bwip)
-                                    . (:)
-                                    . EL'Region (src'end expr'span)
-                              _ -> pure ()
-                    when (el'ctx'exporting eac) $
-                      iopdInsert attrKey attrDef $
-                        el'obj'exps $ el'scope'this'obj pwip
-                    --
+                      -- record as artifact of current scope
+                      -- note the assignment defines attr regardless of pure ctx
+                      if el'ctx'eff'defining eac
+                        then do
+                          let !effs = el'branch'effs'wip bwip
+                          case rhVal of
+                            EL'Const EdhNil -> iopdDelete attrKey effs
+                            _ -> iopdInsert attrKey attrDef effs
+                        else do
+                          let !attrs = el'branch'attrs'wip bwip
+                          if el'IsNil rhVal && "=" == opSym
+                            then do
+                              iopdDelete attrKey $ el'scope'attrs'wip pwip
+                              iopdDelete attrKey attrs
+                              iopdSnapshot attrs
+                                >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                                  . EL'Region (src'end expr'span)
+                            else do
+                              iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
+                              iopdInsert attrKey attrDef attrs
+                              case maybePrevDef of
+                                -- assignment created a new attr, record a region
+                                -- after this assignment expr for current scope
+                                Nothing ->
+                                  iopdSnapshot attrs
+                                    >>= modifyTVar' (el'branch'regions'wip bwip)
+                                      . (:)
+                                      . EL'Region (src'end expr'span)
+                                _ -> pure ()
+                      when (el'ctx'exporting eac) $
+                        iopdInsert attrKey attrDef $
+                          el'obj'exps $ el'scope'this'obj pwip
+                      --
 
-                    if "=" == opSym || ":=" == opSym -- "?=" goes otherwise
-                      then do
-                        -- check if it shadows attr from outer scopes
-                        case swip of
-                          EL'InitObject {} -> pure () -- not eligible
-                          EL'DefineClass {} -> pure () -- not eligible
-                          EL'InitModule {} -> pure () -- need check?
-                          EL'ProcFlow {} ->
-                            el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
-                              >>= \case
-                                Nothing -> pure ()
-                                Just !shadowedDef -> do
-                                  el'LogDiag
-                                    diags
-                                    el'Warning
-                                    addr'span
-                                    "attr-shadow"
-                                    "shadows the attribute defined in outer scope"
-                                  -- record a reference to the shadowed attr
-                                  let !attrRef =
-                                        EL'AttrRef Nothing addr mwip shadowedDef
-                                  recordAttrRef eac attrRef
+                      if "=" == opSym || ":=" == opSym -- "?=" goes otherwise
+                        then do
+                          -- check if it shadows attr from outer scopes
+                          case swip of
+                            EL'InitObject {} -> pure () -- not eligible
+                            EL'DefineClass {} -> pure () -- not eligible
+                            EL'InitModule {} -> pure () -- need check?
+                            EL'ProcFlow {} ->
+                              el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
+                                >>= \case
+                                  Nothing -> pure ()
+                                  Just !shadowedDef -> do
+                                    el'LogDiag
+                                      diags
+                                      el'Warning
+                                      addr'span
+                                      "attr-shadow"
+                                      "shadows the attribute defined in outer scope"
+                                    -- record a reference to the shadowed attr
+                                    let !attrRef =
+                                          EL'AttrRef Nothing addr mwip shadowedDef
+                                    recordAttrRef eac attrRef
 
-                        -- record as reference symbol, for completion
-                        recordAttrRef eac $
-                          EL'UnsolvedRef Nothing addr'span
-                        -- record as definition symbol
-                        recordAttrDef eac attrDef
-                        el'Exit easDone exit rhVal
-                      else case maybePrevDef of
-                        Just !prevDef -> do
-                          -- record as reference symbol
+                          -- record as reference symbol, for completion
                           recordAttrRef eac $
-                            EL'AttrRef Nothing addr mwip prevDef
-                          returnAsExpr easDone
-                        Nothing -> do
+                            EL'UnsolvedRef Nothing addr'span
                           -- record as definition symbol
                           recordAttrDef eac attrDef
-                          returnAsExpr easDone
-            ExprSrc
-              ( AttrExpr
-                  (IndirectRef !tgtExpr addr@(AttrAddrSrc _ !addr'span))
-                )
-              _expr'span ->
+                          el'Exit easDone exit rhVal
+                        else case maybePrevDef of
+                          Just !prevDef -> do
+                            -- record as reference symbol
+                            recordAttrRef eac $
+                              EL'AttrRef Nothing addr mwip prevDef
+                            returnAsExpr easDone
+                          Nothing -> do
+                            -- record as definition symbol
+                            recordAttrDef eac attrDef
+                            returnAsExpr easDone
+              ExprSrc
+                ( AttrExpr
+                    (IndirectRef !tgtExpr addr@(AttrAddrSrc _ !addr'span))
+                  )
+                _expr'span ->
+                  el'RunTx easDone $
+                    el'AnalyzeExpr tgtExpr $ \ !tgtVal !easDone' -> do
+                      -- record as reference symbol, for completion
+                      recordAttrRef eac $
+                        EL'UnsolvedRef (Just tgtVal) addr'span
+                      el'ResolveAttrAddr easDone' addr $ \case
+                        Nothing ->
+                          -- record as reference symbol, for completion
+                          recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
+                        Just !attrKey ->
+                          case tgtVal of
+                            EL'ObjVal _ms !obj -> do
+                              let !cls = el'obj'class obj
+                                  !objAttrs = el'obj'attrs obj
+                              !maybePrevDef <- el'ResolveObjAttr obj attrKey
+                              case maybePrevDef of
+                                Just !prevDef ->
+                                  -- record as reference symbol
+                                  recordAttrRef eac $
+                                    EL'AttrRef Nothing addr mwip prevDef
+                                Nothing -> pure ()
+                              !attrAnno <-
+                                (newTVar =<<) $
+                                  tryReadTMVar (el'class'defi cls) >>= \case
+                                    Nothing -> return Nothing
+                                    Just !defi ->
+                                      return $
+                                        odLookup attrKey $ el'class'annos defi
+                              let !attrDef =
+                                    EL'AttrDef
+                                      attrKey
+                                      docCmt
+                                      opSym
+                                      addr'span
+                                      xsrc
+                                      rhVal
+                                      attrAnno
+                                      maybePrevDef
+                              iopdInsert attrKey attrDef objAttrs
+                            -- TODO more to do?
+                            _ -> pure ()
+                      returnAsExpr easDone'
+              ExprSrc (IndexExpr !idxExpr !tgtExpr) _expr'span ->
                 el'RunTx easDone $
-                  el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal !easDone' -> do
-                    -- record as reference symbol, for completion
-                    recordAttrRef eac $
-                      EL'UnsolvedRef (Just tgtVal) addr'span
-                    el'ResolveAttrAddr easDone' addr $ \case
-                      Nothing ->
-                        -- record as reference symbol, for completion
-                        recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
-                      Just !attrKey ->
-                        case tgtVal of
-                          EL'ObjVal _ms !obj -> do
-                            let !cls = el'obj'class obj
-                                !objAttrs = el'obj'attrs obj
-                            !maybePrevDef <- el'ResolveObjAttr obj attrKey
-                            case maybePrevDef of
-                              Just !prevDef ->
-                                -- record as reference symbol
-                                recordAttrRef eac $
-                                  EL'AttrRef Nothing addr mwip prevDef
-                              Nothing -> pure ()
-                            !attrAnno <-
-                              (newTVar =<<) $
-                                tryReadTMVar (el'class'defi cls) >>= \case
-                                  Nothing -> return Nothing
-                                  Just !defi ->
-                                    return $
-                                      odLookup attrKey $ el'class'annos defi
-                            let !attrDef =
-                                  EL'AttrDef
-                                    attrKey
-                                    docCmt
-                                    opSym
-                                    addr'span
-                                    xsrc
-                                    rhVal
-                                    attrAnno
-                                    maybePrevDef
-                            iopdInsert attrKey attrDef objAttrs
-                          -- TODO more to do?
-                          _ -> pure ()
-                    returnAsExpr easDone'
-            ExprSrc (IndexExpr !idxExpr !tgtExpr) _expr'span ->
-              el'RunTx easDone $
-                el'AnalyzeExpr Nothing idxExpr $
-                  const $
-                    el'AnalyzeExpr Nothing tgtExpr $ const returnAsExpr
-            ExprSrc (InfixExpr ("@", _) _ _) _ ->
-              el'RunTx easDone $
-                el'AnalyzeExpr Nothing lhExpr $ -- assuming it be update, i.e.
-                -- initial assignment should not happen this way
-                  \_lhVal !easDone' -> returnAsExpr easDone'
-            ExprSrc _ !bad'assign'tgt'span -> do
-              el'LogDiag
-                diags
-                el'Error
-                bad'assign'tgt'span
-                "bad-assign-target"
-                "bad assignment target"
-              returnAsExpr easDone
+                  el'AnalyzeExpr idxExpr $
+                    const $
+                      el'AnalyzeExpr tgtExpr $ const returnAsExpr
+              ExprSrc (InfixExpr ("@", _) _ _) _ ->
+                el'RunTx easDone $
+                  el'AnalyzeExpr lhExpr $ -- assuming it be update, i.e.
+                  -- initial assignment should not happen this way
+                    \_lhVal !easDone' -> returnAsExpr easDone'
+              ExprSrc _ !bad'assign'tgt'span -> do
+                el'LogDiag
+                  diags
+                  el'Error
+                  bad'assign'tgt'span
+                  "bad-assign-target"
+                  "bad assignment target"
+                returnAsExpr easDone
 
       doBranch :: STM ()
       doBranch = do
@@ -2013,7 +2013,7 @@ el'AnalyzeExpr
                   !easBranch = eas {el'context = eacBranch}
 
                   analyzeContent =
-                    el'AnalyzeExpr Nothing rhExpr $
+                    el'AnalyzeExpr rhExpr $
                       -- XXX the branch fallthrough has bug, later artifacts
                       -- are not available during analyze of inner scopes
                       -- of previous scopes, need further investigation
@@ -2038,7 +2038,7 @@ el'AnalyzeExpr
                 Nothing -> el'RunTx easBranch analyzeContent
                 Just !guardExpr ->
                   el'RunTx easBranch $
-                    el'AnalyzeExpr Nothing guardExpr $ const analyzeContent
+                    el'AnalyzeExpr guardExpr $ const analyzeContent
 
             invalidPattern :: STM ()
             invalidPattern = do
@@ -2133,7 +2133,7 @@ el'AnalyzeExpr
                   )
                 _
               ] -> el'RunTx eas $
-                el'AnalyzeExpr Nothing clsExpr $
+                el'AnalyzeExpr clsExpr $
                   \ !clsResult _eas -> case el'UltimateValue clsResult of
                     EL'ClsVal !clsModu !cls ->
                       defDfAttrs clsModu cls apkr analyzeBranch
@@ -2161,7 +2161,7 @@ el'AnalyzeExpr
                   )
                 _
               ] -> el'RunTx eas $
-                el'AnalyzeExpr Nothing clsExpr $
+                el'AnalyzeExpr clsExpr $
                   \ !clsResult _eas -> case el'UltimateValue clsResult of
                     EL'ClsVal !clsModu !cls -> do
                       !obj <- el'ObjNew cls
@@ -2224,7 +2224,6 @@ el'AnalyzeExpr
                   Nothing -> analyzeBranch []
                   Just !instKey -> el'RunTx eas $
                     el'AnalyzeExpr
-                      Nothing
                       (ExprSrc (AttrExpr clsRef) (attrRefSpan clsRef))
                       $ \ !clsResult _eas -> case el'UltimateValue clsResult of
                         EL'ClsVal !clsModu !cls -> do
@@ -2344,7 +2343,7 @@ el'AnalyzeExpr
                   )
                 _
               ] -> el'RunTx eas $
-                el'AnalyzeExpr Nothing matchExpr $ \_result _eas ->
+                el'AnalyzeExpr matchExpr $ \_result _eas ->
                   defExprAttrs
                     [ (AttrByName prefixName, prefixExpr),
                       (AttrByName suffixName, suffixExpr)
@@ -2372,7 +2371,7 @@ el'AnalyzeExpr
                   )
                 _
               ] -> el'RunTx eas $
-                el'AnalyzeExpr Nothing prefixExpr $ \_result _eas ->
+                el'AnalyzeExpr prefixExpr $ \_result _eas ->
                   defExprAttrs
                     [(AttrByName suffixName, suffixExpr)]
                     analyzeBranch
@@ -2398,7 +2397,7 @@ el'AnalyzeExpr
                   )
                 _
               ] -> el'RunTx eas $
-                el'AnalyzeExpr Nothing suffixExpr $ \_result _eas ->
+                el'AnalyzeExpr suffixExpr $ \_result _eas ->
                   defExprAttrs
                     [(AttrByName prefixName, prefixExpr)]
                     analyzeBranch
@@ -2463,7 +2462,7 @@ el'AnalyzeExpr
                                   )
                                 _
                               )
-                              _docCmt
+                    _docCmt
                   )
                 _
               ] -> do
@@ -2481,7 +2480,7 @@ el'AnalyzeExpr
                         Nothing
                 analyzeBranch [(valKey, attrDef)]
             -- { return <expr> } -- match with expected return value
-            [StmtSrc (ReturnStmt _expectExpr _docCmt ) _] -> analyzeBranch []
+            [StmtSrc (ReturnStmt _expectExpr _docCmt) _] -> analyzeBranch []
             --
 
             -- { term := value } -- definition pattern
@@ -2529,7 +2528,7 @@ el'AnalyzeExpr
 
           -- guarded condition branch
           PrefixExpr Guard !condExpr -> el'RunTx eas $
-            el'AnalyzeExpr Nothing condExpr $
+            el'AnalyzeExpr condExpr $
               \_cndResult _eas -> analyzeBranch []
           --
 
@@ -2543,23 +2542,23 @@ el'AnalyzeExpr
 
           -- not a pattern, value match
           _ -> el'RunTx eas $
-            el'AnalyzeExpr Nothing lhExpr $
+            el'AnalyzeExpr lhExpr $
               \_lhResult _eas -> analyzeBranch []
 --
 
 -- apk ctor
-el'AnalyzeExpr _ (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
+el'AnalyzeExpr (ExprSrc (ArgsPackExpr !argSndrs) _expr'span) !exit !eas =
   el'RunTx eas $ el'PackArgs argSndrs $ \ !apk -> el'ExitTx exit $ EL'Apk apk
 --
 
 -- list ctor
-el'AnalyzeExpr _docCmt (ExprSrc (ListExpr !xs) _) !exit !eas = el'RunTx eas $
+el'AnalyzeExpr (ExprSrc (ListExpr !xs) _) !exit !eas = el'RunTx eas $
   el'AnalyzeExprs xs $ \ !vs !easDone ->
     el'Exit easDone exit . EL'List =<< newTVar vs
 --
 
 -- dict ctor
-el'AnalyzeExpr _docCmt (ExprSrc (DictExpr !es) _) !exit !eas =
+el'AnalyzeExpr (ExprSrc (DictExpr !es) _) !exit !eas =
   el'RunTx easPure $ collectEntries [] es
   where
     !eac = el'context eas
@@ -2577,23 +2576,22 @@ el'AnalyzeExpr _docCmt (ExprSrc (DictExpr !es) _) !exit !eas =
         . EL'Dict
         =<< (newTVar $! reverse evs)
     collectEntries !evs ((!dkx, !vx) : rest) =
-      el'AnalyzeExpr Nothing vx $ \ !v -> case dkx of
+      el'AnalyzeExpr vx $ \ !v -> case dkx of
         LitDictKey !lit -> \ !easDone ->
           el'LiteralValue lit >>= \ !k ->
             el'RunTx easDone $ collectEntries ((k, v) : evs) rest
         AddrDictKey !kaddr -> el'AnalyzeExpr
-          Nothing
           (ExprSrc (AttrExpr kaddr) noSrcRange)
           $ \ !k ->
             collectEntries ((k, v) : evs) rest
-        ExprDictKey !kx -> el'AnalyzeExpr Nothing kx $ \ !k ->
+        ExprDictKey !kx -> el'AnalyzeExpr kx $ \ !k ->
           collectEntries ((k, v) : evs) rest
 --
 
 -- parenthesis
-el'AnalyzeExpr !docCmt (ExprSrc (ParenExpr !x) _) !exit !eas =
+el'AnalyzeExpr (ExprSrc (ParenExpr !x) _) !exit !eas =
   el'RunTx easPure $
-    el'AnalyzeExpr docCmt x $ \ !val !easDone ->
+    el'AnalyzeExpr x $ \ !val !easDone ->
       el'Exit
         easDone
           { el'context = (el'context easDone) {el'ctx'pure = originPure}
@@ -2607,13 +2605,12 @@ el'AnalyzeExpr !docCmt (ExprSrc (ParenExpr !x) _) !exit !eas =
 --
 
 -- literal value
-el'AnalyzeExpr _docCmt (ExprSrc (LitExpr !lit) _expr'span) !exit !eas =
+el'AnalyzeExpr (ExprSrc (LitExpr !lit) _expr'span) !exit !eas =
   el'Exit eas exit =<< el'LiteralValue lit
 --
 
 -- call making
 el'AnalyzeExpr
-  _docCmt
   xsrc@(ExprSrc (CallExpr !calleeExpr !apkr) _expr'span)
   !exit
   !eas = do
@@ -2629,7 +2626,7 @@ el'AnalyzeExpr
         "you want to put a semicolon here, or it is procedure call making"
 
     el'RunTx eas $
-      el'AnalyzeExpr Nothing calleeExpr $ \ !calleeVal -> el'PackArgs apkr $
+      el'AnalyzeExpr calleeExpr $ \ !calleeVal -> el'PackArgs apkr $
         \_apk !easDone -> case el'UltimateValue calleeVal of
           EL'ClsVal !clsModu !cls -> do
             !obj <- el'ObjNew cls
@@ -2655,16 +2652,15 @@ el'AnalyzeExpr
 --
 
 -- exporting
-el'AnalyzeExpr !docCmt (ExprSrc (ExportExpr !expr') _expr'span) !exit !eas =
+el'AnalyzeExpr (ExprSrc (ExportExpr !expr') _expr'span) !exit !eas =
   el'RunTx eas {el'context = eac {el'ctx'exporting = True}} $
-    el'AnalyzeExpr docCmt expr' exit
+    el'AnalyzeExpr expr' exit
   where
     !eac = el'context eas
 --
 
 -- importing
 el'AnalyzeExpr
-  !docCmt
   xsrc@( ExprSrc
            ( ImportExpr
                !argsRcvr
@@ -2698,280 +2694,280 @@ el'AnalyzeExpr
       !localExps = el'obj'exps $ el'scope'this'obj pwip
 
       doImp :: EL'ArtsWIP -> EL'ArtsWIP -> STM ()
-      doImp !intoScope !withExps = case specExpr of
-        LitExpr (StringLiteral !litSpec) -> case el'ContextModule' eac of
-          Nothing -> do
-            el'LogDiag
-              diags
-              el'Error
-              spec'span
-              "moduleless-import"
-              "import from non-module context"
-            el'Exit eas exit $ EL'Const nil
-          Just (!msImporter, !resolvImporter) -> el'RunTx eas $
-            el'LocateImportee msImporter litSpec $ \ !impResult _eas ->
-              case impResult of
-                Left !err -> do
-                  el'LogDiag diags el'Error spec'span "err-import" err
-                  el'Exit eas exit $ EL'Const nil
-                Right !msImportee -> do
-                  -- record a reference to the src module
-                  let !moduVal = EL'ModuVal msImportee
-                      !importeeDef =
+      doImp !intoScope !withExps = do
+        !docCmt <- takeDocComment eas
+        let chkExport :: STM (AttrKey -> EL'AttrDef -> STM ())
+            chkExport =
+              if not (el'ctx'exporting eac)
+                then return $ \_ _ -> return ()
+                else return $ \ !localKey !attrDef ->
+                  iopdInsert localKey attrDef withExps
+
+            impIntoScope ::
+              (AttrKey -> EL'AttrDef -> STM ()) ->
+              EL'ModuSlot ->
+              EL'Artifacts ->
+              ArgsReceiver ->
+              STM ()
+            impIntoScope !chkExp !srcModu !srcExps !asr = do
+              case asr of
+                WildReceiver -> forM_ (odToList srcExps) wildImp
+                PackReceiver !ars -> go srcExps ars
+                SingleReceiver !ar -> go srcExps [ar]
+              -- record a region after this import, for current scope
+              iopdSnapshot (el'branch'attrs'wip bwip)
+                >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                  . EL'Region (src'end expr'span)
+              where
+                wildImp :: (AttrKey, EL'AttrDef) -> STM ()
+                wildImp (!k, !def) = do
+                  !artAnno <- newTVar =<< el'ResolveAnnotation swip k
+                  let !attrDef =
                         EL'AttrDef
-                          (AttrByName "this")
-                          Nothing
-                          "<module>"
-                          zeroSrcRange
-                          ( ExprSrc
-                              (AttrExpr (ThisRef noSrcRange))
-                              noSrcRange
-                          )
-                          moduVal
-                          maoAnnotation
-                          Nothing
-                      !impDef =
-                        EL'AttrDef
-                          (AttrByName litSpec)
+                          k
                           docCmt
                           "<import>"
-                          noSrcRange
+                          expr'span
                           xsrc
-                          (EL'External msImportee importeeDef)
-                          maoAnnotation
+                          (EL'External srcModu def)
+                          artAnno
                           Nothing
-                      !impRef =
-                        EL'AttrRef
-                          Nothing
-                          (AttrAddrSrc (QuaintAttr litSpec) spec'span)
-                          msImportee
-                          impDef
-                  recordAttrRef eac impRef
+                  iopdInsert k attrDef intoScope
+                  chkExp k attrDef
 
-                  -- record as a dependency
-                  modifyTVar' (el'modu'dependencies'wip resolvImporter) $
-                    Map.insert msImportee True
-                  -- do importing whether it is resolving or resolved
-                  !chkExp <- chkExport
-                  runEdhTx ets $
-                    asModuleResolving world msImportee $ \case
-                      EL'ModuResolved !resolved -> \_ets -> do
-                        -- record importer as a dependant
-                        modifyTVar' (el'modu'dependants resolved) $
-                          Map.insert msImporter True
-                        -- do import
-                        let !exps = el'modu'exports resolved
-                        impIntoScope chkExp msImportee exps argsRcvr
-                        el'Exit eas exit moduVal
-                      EL'ModuResolving !resolving _acts -> \_ets -> do
-                        -- record importer as a dependant
-                        modifyTVar' (el'resolving'dependants resolving) $
-                          Map.insert msImporter True
-                        -- do import
-                        !exps <- iopdSnapshot $ el'modu'exps'wip resolving
-                        impIntoScope chkExp msImportee exps argsRcvr
-                        el'Exit eas exit moduVal
-        AttrExpr {} ->
-          el'RunTx eas $ -- dynamic string or obj import
-          -- TODO analyzetime string/object eval?
-            el'AnalyzeExpr Nothing impSpec $ \ !impFromVal -> do
-              -- TODO validate it is object type, import from it
-              el'ExitTx exit impFromVal
-        _ -> do
-          el'LogDiag
-            diags
-            el'Warning
-            spec'span
-            "dynamic-import"
-            "dynamic import specification not analyzed yet"
-          el'Exit eas exit $ EL'Const nil
-        where
-          chkExport :: STM (AttrKey -> EL'AttrDef -> STM ())
-          chkExport =
-            if not (el'ctx'exporting eac)
-              then return $ \_ _ -> return ()
-              else return $ \ !localKey !attrDef ->
-                iopdInsert localKey attrDef withExps
-
-          impIntoScope ::
-            (AttrKey -> EL'AttrDef -> STM ()) ->
-            EL'ModuSlot ->
-            EL'Artifacts ->
-            ArgsReceiver ->
-            STM ()
-          impIntoScope !chkExp !srcModu !srcExps !asr = do
-            case asr of
-              WildReceiver -> forM_ (odToList srcExps) wildImp
-              PackReceiver !ars -> go srcExps ars
-              SingleReceiver !ar -> go srcExps [ar]
-            -- record a region after this import, for current scope
-            iopdSnapshot (el'branch'attrs'wip bwip)
-              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-                . EL'Region (src'end expr'span)
-            where
-              wildImp :: (AttrKey, EL'AttrDef) -> STM ()
-              wildImp (!k, !def) = do
-                !artAnno <- newTVar =<< el'ResolveAnnotation swip k
-                let !attrDef =
-                      EL'AttrDef
-                        k
-                        docCmt
-                        "<import>"
-                        expr'span
-                        xsrc
-                        (EL'External srcModu def)
-                        artAnno
-                        Nothing
-                iopdInsert k attrDef intoScope
-                chkExp k attrDef
-
-              go :: OrderedDict AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
-              go !srcArts [] =
-                if odNull srcArts
-                  then return () -- very well expected
-                  else
-                    el'LogDiag
-                      diags
-                      el'Error
-                      spec'span
-                      "non-exhaustive-import"
-                      $ "import is not exhaustive, "
-                        <> if odSize srcArts <= 8
-                          then
-                            "also exported: "
-                              <> T.intercalate
-                                ", "
-                                (attrKeyStr <$> odKeys srcArts)
-                          else T.pack (show $ odSize srcArts) <> " more exported"
-              go !srcArts (ar : rest) = case ar of
-                RecvArg srcAddr@(AttrAddrSrc _ !item'span) !maybeAs !defExpr -> do
-                  case defExpr of
-                    Nothing -> pure ()
-                    Just {} ->
-                      el'LogDiag
-                        diags
-                        el'Warning
-                        item'span
-                        "unusual-import"
-                        "defaults in import specificatin is not analyzed yet"
-                  case maybeAs of
-                    Nothing -> processImp srcAddr srcAddr
-                    Just (DirectRef !asAddr) -> processImp srcAddr asAddr
-                    Just !badRename ->
+                go :: OrderedDict AttrKey EL'AttrDef -> [ArgReceiver] -> STM ()
+                go !srcArts [] =
+                  if odNull srcArts
+                    then return () -- very well expected
+                    else
                       el'LogDiag
                         diags
                         el'Error
-                        item'span
-                        "invalid-import-rename"
-                        $ "invalid rename of import: " <> T.pack (show badRename)
-                RecvRestPosArgs (AttrAddrSrc _ bad'span) ->
-                  el'LogDiag
-                    diags
-                    el'Error
-                    bad'span
-                    "rest-pos-import"
-                    "rest positional receiver in import specification"
-                RecvRestPkArgs (AttrAddrSrc _ bad'span) ->
-                  el'LogDiag
-                    diags
-                    el'Error
-                    bad'span
-                    "rest-apk-import"
-                    "rest apk receiver in import specification"
-                RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) ->
-                  el'ResolveAttrAddr eas localAddr $ \case
-                    Nothing ->
-                      -- invalid attr addr, error should have been logged
-                      go srcArts rest
-                    Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
-                    Just !localKey -> do
-                      !artAnno <- newTVar =<< el'ResolveAnnotation swip localKey
-                      let !kwVal =
-                            EL'Apk $
-                              EL'ArgsPack [] $
-                                odMap (EL'External srcModu) srcArts
-                          !attrDef =
-                            EL'AttrDef
-                              localKey
-                              docCmt
-                              "<import>"
-                              addr'span
-                              xsrc
-                              kwVal
-                              artAnno
-                              Nothing
-                      -- record as definition symbol
-                      recordAttrDef eac attrDef
+                        spec'span
+                        "non-exhaustive-import"
+                        $ "import is not exhaustive, "
+                          <> if odSize srcArts <= 8
+                            then
+                              "also exported: "
+                                <> T.intercalate
+                                  ", "
+                                  (attrKeyStr <$> odKeys srcArts)
+                            else T.pack (show $ odSize srcArts) <> " more exported"
+                go !srcArts (ar : rest) = case ar of
+                  RecvArg srcAddr@(AttrAddrSrc _ !item'span) !maybeAs !defExpr -> do
+                    case defExpr of
+                      Nothing -> pure ()
+                      Just {} ->
+                        el'LogDiag
+                          diags
+                          el'Warning
+                          item'span
+                          "unusual-import"
+                          "defaults in import specificatin is not analyzed yet"
+                    case maybeAs of
+                      Nothing -> processImp srcAddr srcAddr
+                      Just (DirectRef !asAddr) -> processImp srcAddr asAddr
+                      Just !badRename ->
+                        el'LogDiag
+                          diags
+                          el'Error
+                          item'span
+                          "invalid-import-rename"
+                          $ "invalid rename of import: " <> T.pack (show badRename)
+                  RecvRestPosArgs (AttrAddrSrc _ bad'span) ->
+                    el'LogDiag
+                      diags
+                      el'Error
+                      bad'span
+                      "rest-pos-import"
+                      "rest positional receiver in import specification"
+                  RecvRestPkArgs (AttrAddrSrc _ bad'span) ->
+                    el'LogDiag
+                      diags
+                      el'Error
+                      bad'span
+                      "rest-apk-import"
+                      "rest apk receiver in import specification"
+                  RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) ->
+                    el'ResolveAttrAddr eas localAddr $ \case
+                      Nothing ->
+                        -- invalid attr addr, error should have been logged
+                        go srcArts rest
+                      Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
+                      Just !localKey -> do
+                        !artAnno <- newTVar =<< el'ResolveAnnotation swip localKey
+                        let !kwVal =
+                              EL'Apk $
+                                EL'ArgsPack [] $
+                                  odMap (EL'External srcModu) srcArts
+                            !attrDef =
+                              EL'AttrDef
+                                localKey
+                                docCmt
+                                "<import>"
+                                addr'span
+                                xsrc
+                                kwVal
+                                artAnno
+                                Nothing
+                        -- record as definition symbol
+                        recordAttrDef eac attrDef
 
-                      -- register as local attribute
-                      iopdInsert localKey attrDef intoScope
-                      -- export it if specified so
-                      chkExp localKey attrDef
+                        -- register as local attribute
+                        iopdInsert localKey attrDef intoScope
+                        -- export it if specified so
+                        chkExp localKey attrDef
 
-                      go odEmpty rest
-                where
-                  processImp :: AttrAddrSrc -> AttrAddrSrc -> STM ()
-                  processImp
-                    srcAddr@(AttrAddrSrc _ !src'span)
-                    localAddr@(AttrAddrSrc _ !local'span) = do
-                      el'ResolveAttrAddr eas localAddr $ \case
-                        Nothing ->
-                          -- invalid attr addr, error should have been logged
-                          go srcArts rest
-                        Just !localKey ->
-                          el'ResolveAttrAddr eas srcAddr $ \case
-                            Nothing ->
-                              -- invalid attr addr, error should have been logged
-                              go srcArts rest
-                            Just !srcKey ->
-                              let (!gotArt, !srcArts') = odTakeOut srcKey srcArts
-                               in case gotArt of
-                                    Nothing -> do
-                                      el'LogDiag
-                                        diags
-                                        el'Error
-                                        src'span
-                                        "missing-import"
-                                        $ "no such artifact to import: "
-                                          <> attrKeyStr srcKey
-                                      go srcArts' rest
-                                    Just !srcDef -> do
-                                      !artAnno <-
-                                        newTVar
-                                          =<< el'ResolveAnnotation swip localKey
-                                      let !impDef =
-                                            EL'AttrDef
-                                              localKey
-                                              docCmt
-                                              "<import>"
-                                              local'span
-                                              xsrc
-                                              (EL'External srcModu srcDef)
-                                              artAnno
-                                              Nothing
-                                      -- record as definition symbol
-                                      recordAttrDef eac impDef
-                                      -- record as referencing symbol
-                                      recordAttrRef eac $
-                                        EL'AttrRef
-                                          Nothing
-                                          localAddr
-                                          srcModu
-                                          srcDef
+                        go odEmpty rest
+                  where
+                    processImp :: AttrAddrSrc -> AttrAddrSrc -> STM ()
+                    processImp
+                      srcAddr@(AttrAddrSrc _ !src'span)
+                      localAddr@(AttrAddrSrc _ !local'span) = do
+                        el'ResolveAttrAddr eas localAddr $ \case
+                          Nothing ->
+                            -- invalid attr addr, error should have been logged
+                            go srcArts rest
+                          Just !localKey ->
+                            el'ResolveAttrAddr eas srcAddr $ \case
+                              Nothing ->
+                                -- invalid attr addr, error should have been logged
+                                go srcArts rest
+                              Just !srcKey ->
+                                let (!gotArt, !srcArts') = odTakeOut srcKey srcArts
+                                 in case gotArt of
+                                      Nothing -> do
+                                        el'LogDiag
+                                          diags
+                                          el'Error
+                                          src'span
+                                          "missing-import"
+                                          $ "no such artifact to import: "
+                                            <> attrKeyStr srcKey
+                                        go srcArts' rest
+                                      Just !srcDef -> do
+                                        !artAnno <-
+                                          newTVar
+                                            =<< el'ResolveAnnotation swip localKey
+                                        let !impDef =
+                                              EL'AttrDef
+                                                localKey
+                                                docCmt
+                                                "<import>"
+                                                local'span
+                                                xsrc
+                                                (EL'External srcModu srcDef)
+                                                artAnno
+                                                Nothing
+                                        -- record as definition symbol
+                                        recordAttrDef eac impDef
+                                        -- record as referencing symbol
+                                        recordAttrRef eac $
+                                          EL'AttrRef
+                                            Nothing
+                                            localAddr
+                                            srcModu
+                                            srcDef
 
-                                      -- register as local attribute
-                                      iopdInsert localKey impDef intoScope
-                                      -- export it if specified so
-                                      chkExp localKey impDef
+                                        -- register as local attribute
+                                        iopdInsert localKey impDef intoScope
+                                        -- export it if specified so
+                                        chkExp localKey impDef
 
-                                      go srcArts' rest
+                                        go srcArts' rest
+        case specExpr of
+          LitExpr (StringLiteral !litSpec) -> case el'ContextModule' eac of
+            Nothing -> do
+              el'LogDiag
+                diags
+                el'Error
+                spec'span
+                "moduleless-import"
+                "import from non-module context"
+              el'Exit eas exit $ EL'Const nil
+            Just (!msImporter, !resolvImporter) -> el'RunTx eas $
+              el'LocateImportee msImporter litSpec $ \ !impResult _eas ->
+                case impResult of
+                  Left !err -> do
+                    el'LogDiag diags el'Error spec'span "err-import" err
+                    el'Exit eas exit $ EL'Const nil
+                  Right !msImportee -> do
+                    -- record a reference to the src module
+                    let !moduVal = EL'ModuVal msImportee
+                        !importeeDef =
+                          EL'AttrDef
+                            (AttrByName "this")
+                            Nothing
+                            "<module>"
+                            zeroSrcRange
+                            ( ExprSrc
+                                (AttrExpr (ThisRef noSrcRange))
+                                noSrcRange
+                            )
+                            moduVal
+                            maoAnnotation
+                            Nothing
+                        !impDef =
+                          EL'AttrDef
+                            (AttrByName litSpec)
+                            docCmt
+                            "<import>"
+                            noSrcRange
+                            xsrc
+                            (EL'External msImportee importeeDef)
+                            maoAnnotation
+                            Nothing
+                        !impRef =
+                          EL'AttrRef
+                            Nothing
+                            (AttrAddrSrc (QuaintAttr litSpec) spec'span)
+                            msImportee
+                            impDef
+                    recordAttrRef eac impRef
+
+                    -- record as a dependency
+                    modifyTVar' (el'modu'dependencies'wip resolvImporter) $
+                      Map.insert msImportee True
+                    -- do importing whether it is resolving or resolved
+                    !chkExp <- chkExport
+                    runEdhTx ets $
+                      asModuleResolving world msImportee $ \case
+                        EL'ModuResolved !resolved -> \_ets -> do
+                          -- record importer as a dependant
+                          modifyTVar' (el'modu'dependants resolved) $
+                            Map.insert msImporter True
+                          -- do import
+                          let !exps = el'modu'exports resolved
+                          impIntoScope chkExp msImportee exps argsRcvr
+                          el'Exit eas exit moduVal
+                        EL'ModuResolving !resolving _acts -> \_ets -> do
+                          -- record importer as a dependant
+                          modifyTVar' (el'resolving'dependants resolving) $
+                            Map.insert msImporter True
+                          -- do import
+                          !exps <- iopdSnapshot $ el'modu'exps'wip resolving
+                          impIntoScope chkExp msImportee exps argsRcvr
+                          el'Exit eas exit moduVal
+          AttrExpr {} ->
+            el'RunTx eas $ -- dynamic string or obj import
+            -- TODO analyzetime string/object eval?
+              el'AnalyzeExpr impSpec $ \ !impFromVal -> do
+                -- TODO validate it is object type, import from it
+                el'ExitTx exit impFromVal
+          _ -> do
+            el'LogDiag
+              diags
+              el'Warning
+              spec'span
+              "dynamic-import"
+              "dynamic import specification not analyzed yet"
+            el'Exit eas exit $ EL'Const nil
 --
 
 -- defining a class
-el'AnalyzeExpr _ (ExprSrc (ClassExpr HostDecl {}) _expr'span) _exit _eas =
+el'AnalyzeExpr (ExprSrc (ClassExpr HostDecl {}) _expr'span) _exit _eas =
   error "bug: host class decl"
 el'AnalyzeExpr
-  !docCmt
   xsrc@( ExprSrc
            ( ClassExpr
                ( ProcDecl
@@ -2985,6 +2981,7 @@ el'AnalyzeExpr
          )
   !exit
   !eas = el'ResolveAttrAddr eas cls'name $ \ !maybeClsKey -> do
+    !docCmt <- takeDocComment eas
     !clsDefi <- newEmptyTMVar
     !clsAttrs <- iopdEmpty
     !clsExts <- newTVar []
@@ -3211,40 +3208,37 @@ el'AnalyzeExpr
 --
 
 -- defining a method procedure
-el'AnalyzeExpr !docCmt xsrc@(ExprSrc (MethodExpr !pd) _expr'span) !exit !eas =
-  el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
-el'AnalyzeExpr !docCmt xsrc@(ExprSrc (GeneratorExpr !pd) _expr'span) !exit !eas =
-  el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
-el'AnalyzeExpr !docCmt xsrc@(ExprSrc (InterpreterExpr !pd) _expr'span) !exit !eas =
-  el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
-el'AnalyzeExpr !docCmt xsrc@(ExprSrc (ProducerExpr !pd) _expr'span) !exit !eas =
-  el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+el'AnalyzeExpr xsrc@(ExprSrc (MethodExpr !pd) _expr'span) !exit !eas =
+  el'RunTx eas $ el'DefineMethod xsrc pd exit
+el'AnalyzeExpr xsrc@(ExprSrc (GeneratorExpr !pd) _expr'span) !exit !eas =
+  el'RunTx eas $ el'DefineMethod xsrc pd exit
+el'AnalyzeExpr xsrc@(ExprSrc (InterpreterExpr !pd) _expr'span) !exit !eas =
+  el'RunTx eas $ el'DefineMethod xsrc pd exit
+el'AnalyzeExpr xsrc@(ExprSrc (ProducerExpr !pd) _expr'span) !exit !eas =
+  el'RunTx eas $ el'DefineMethod xsrc pd exit
 -- defining an operator procedure
 el'AnalyzeExpr
-  !docCmt
   xsrc@( ExprSrc
            (OpDefiExpr _fixity _precedence _opSym !pd)
            _expr'span
          )
   !exit
   !eas =
-    el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+    el'RunTx eas $ el'DefineMethod xsrc pd exit
 el'AnalyzeExpr
-  !docCmt
   xsrc@( ExprSrc
            (OpOvrdExpr _fixity _precedence _opSym !pd)
            _expr'span
          )
   !exit
   !eas =
-    el'RunTx eas $ el'DefineMethod docCmt xsrc pd exit
+    el'RunTx eas $ el'DefineMethod xsrc pd exit
 --
 
 -- defining a namespace
-el'AnalyzeExpr _ (ExprSrc (NamespaceExpr HostDecl {} _) _) _exit _eas =
+el'AnalyzeExpr (ExprSrc (NamespaceExpr HostDecl {} _) _) _exit _eas =
   error "bug: host ns decl"
 el'AnalyzeExpr
-  !docCmt
   xsrc@( ExprSrc
            ( NamespaceExpr
                ( ProcDecl
@@ -3259,6 +3253,7 @@ el'AnalyzeExpr
          )
   !exit
   !eas = do
+    !docCmt <- takeDocComment eas
     defNsArgs argsPkr $ \ !argArts -> do
       !nsExts <- newTVar []
       !nsExps <- iopdEmpty
@@ -3401,7 +3396,7 @@ el'AnalyzeExpr
               el'ResolveAttrAddr eas argAddr $ \case
                 Nothing -> go argArts rest
                 Just !argKey -> el'RunTx eas $
-                  el'AnalyzeExpr docCmt argExpr $ \ !argVal _eas -> do
+                  el'AnalyzeExpr argExpr $ \ !argVal _eas -> do
                     !argAnno <- newTVar Nothing
                     go
                       ( ( argKey,
@@ -3453,7 +3448,7 @@ el'AnalyzeExpr
 --
 
 -- scoped block
-el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
+el'AnalyzeExpr (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
   do
     !blkAttrs <- iopdEmpty
     !blkEffs <- iopdEmpty
@@ -3514,31 +3509,30 @@ el'AnalyzeExpr _docCmt (ExprSrc (ScopedBlockExpr !stmts) !blk'span) !exit !eas =
 --
 
 -- void operator
-el'AnalyzeExpr _docCmt (ExprSrc (VoidExpr !expr) _expr'span) !exit !eas =
+el'AnalyzeExpr (ExprSrc (VoidExpr !expr) _expr'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Const nil
+    el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Const nil
 --
 
 -- ai operator
-el'AnalyzeExpr _docCmt (ExprSrc (AtoIsoExpr !expr) _expr'span) !exit !eas =
-  el'RunTx eas $ el'AnalyzeExpr Nothing expr exit
+el'AnalyzeExpr (ExprSrc (AtoIsoExpr !expr) _expr'span) !exit !eas =
+  el'RunTx eas $ el'AnalyzeExpr expr exit
 --
 
 -- prefix operator
-el'AnalyzeExpr _docCmt x@(ExprSrc (PrefixExpr _ !expr) _expr'span) !exit !eas =
+el'AnalyzeExpr x@(ExprSrc (PrefixExpr _ !expr) _expr'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+    el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Expr x
 --
 
 -- if
 el'AnalyzeExpr
-  _docCmt
   x@(ExprSrc (IfExpr !cond !cseq !maybeAlt) _expr'span)
   !exit
   !eas =
     -- TODO use branch in cseq/alt, close when it evals to `return`
     el'RunTx eas $
-      el'AnalyzeExpr Nothing cond $
+      el'AnalyzeExpr cond $
         const $
           el'AnalyzeStmt cseq $
             const $ case maybeAlt of
@@ -3548,11 +3542,11 @@ el'AnalyzeExpr
 --
 
 -- case-of
-el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas0 =
+el'AnalyzeExpr x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas0 =
   el'RunTx eas0 $
-    el'AnalyzeExpr Nothing tgt $
+    el'AnalyzeExpr tgt $
       const $
-        el'AnalyzeExpr Nothing bs $ \_result !eas -> do
+        el'AnalyzeExpr bs $ \_result !eas -> do
           let !eac = el'context eas
               !swip = el'ctx'scope eac
               !pwip = el'ProcWIP swip
@@ -3575,7 +3569,6 @@ el'AnalyzeExpr _docCmt x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas0 =
 
 -- for-from-do
 el'AnalyzeExpr
-  _docCmt
   x@(ExprSrc (ForExpr !asr !it body@(StmtSrc _ !body'span)) _expr'span)
   !exit
   !eas = ( case asr of
@@ -3593,7 +3586,7 @@ el'AnalyzeExpr
             . EL'Region (src'start body'span)
 
       el'RunTx eas $
-        el'AnalyzeExpr Nothing it $
+        el'AnalyzeExpr it $
           const $
             el'AnalyzeStmt body $ \_result _eas -> do
               -- record a new region following this for-from-do loop
@@ -3663,46 +3656,43 @@ el'AnalyzeExpr
 --
 
 -- yield
-el'AnalyzeExpr _docCmt x@(ExprSrc (YieldExpr !expr) _expr'span) !exit !eas =
+el'AnalyzeExpr x@(ExprSrc (YieldExpr !expr) _expr'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+    el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Expr x
 --
 
 -- indexing
-el'AnalyzeExpr _docCmt x@(ExprSrc (IndexExpr !idx !tgt) _expr'span) !exit !eas =
+el'AnalyzeExpr x@(ExprSrc (IndexExpr !idx !tgt) _expr'span) !exit !eas =
   el'RunTx eas $
-    el'AnalyzeExpr Nothing tgt $
-      const $ el'AnalyzeExpr Nothing idx $ const $ el'ExitTx exit $ EL'Expr x
+    el'AnalyzeExpr tgt $
+      const $ el'AnalyzeExpr idx $ const $ el'ExitTx exit $ EL'Expr x
 --
 
 -- default
 el'AnalyzeExpr
-  _docCmt
   x@(ExprSrc (DefaultExpr Nothing !expr) _expr'span)
   !exit
   !eas =
     el'RunTx eas $
-      el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+      el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Expr x
 el'AnalyzeExpr
-  _docCmt
   x@(ExprSrc (DefaultExpr (Just !argSndrs) !expr) _expr'span)
   !exit
   !eas =
     el'RunTx eas $
       el'PackArgs argSndrs $ \_apk ->
-        el'AnalyzeExpr Nothing expr $ const $ el'ExitTx exit $ EL'Expr x
+        el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Expr x
 --
 
 -- interpolated expr
 -- todo should this reachable ? as the original expr in ExprWithSrc won't be
 -- analyzed.
-el'AnalyzeExpr _docCmt (ExprSrc (IntplExpr !expr) _expr'span) !exit !eas =
-  el'RunTx eas $ el'AnalyzeExpr Nothing expr exit
+el'AnalyzeExpr (ExprSrc (IntplExpr !expr) _expr'span) !exit !eas =
+  el'RunTx eas $ el'AnalyzeExpr expr exit
 --
 
 -- expr with source (including interpolations)
 el'AnalyzeExpr
-  _docCmt
   (ExprSrc (ExprWithSrc !expr !segs) _expr'span)
   !exit
   !eas = go segs
@@ -3710,24 +3700,25 @@ el'AnalyzeExpr
       go [] = el'Exit eas exit $ EL'Expr expr
       go (SrcSeg {} : rest) = go rest
       go (IntplSeg !ix : rest) = el'RunTx eas $
-        el'AnalyzeExpr Nothing ix $ \_ _eas -> go rest
+        el'AnalyzeExpr ix $ \_ _eas -> go rest
 --
 
 -- perform
 -- todo analyze dynamic scoped effects
-el'AnalyzeExpr _docCmt x@(ExprSrc (PerformExpr _addr) _expr'span) !exit !eas =
+el'AnalyzeExpr x@(ExprSrc (PerformExpr _addr) _expr'span) !exit !eas =
   el'Exit eas exit $ EL'Expr x
 --
 
 -- behave
 -- todo analyze dynamic scoped effects
-el'AnalyzeExpr _docCmt x@(ExprSrc (BehaveExpr _addr) _expr'span) !exit !eas =
+el'AnalyzeExpr x@(ExprSrc (BehaveExpr _addr) _expr'span) !exit !eas =
   el'Exit eas exit $ EL'Expr x
 --
 
 -- symbol definition
-el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
+el'AnalyzeExpr xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
   do
+    !docCmt <- takeDocComment eas
     !sym <- mkSymbol $ "@" <> attr
     !symAnno <-
       newTVar
@@ -3775,18 +3766,16 @@ el'AnalyzeExpr !docCmt xsrc@(ExprSrc (SymbolExpr !attr) !expr'span) !exit !eas =
 --
 
 -- the rest of expressions not analyzed
--- el'AnalyzeExpr _docCmt !xsrc !exit !eas = el'Exit eas exit $ EL'Expr xsrc
+-- el'AnalyzeExpr  !xsrc !exit !eas = el'Exit eas exit $ EL'Expr xsrc
 
 -- | define a method procedure
 el'DefineMethod ::
-  Maybe DocComment ->
   ExprSrc ->
   ProcDecl ->
   EL'Analysis EL'Value
-el'DefineMethod _ _ HostDecl {} _exit _eas =
+el'DefineMethod _ HostDecl {} _exit _eas =
   error "bug: host method decl"
 el'DefineMethod
-  !docCmt
   !xsrc
   ( ProcDecl
       mth'name@(AttrAddrSrc _mth'name'addr !mth'name'span)
@@ -3796,6 +3785,7 @@ el'DefineMethod
     )
   !exit
   !eas = el'ResolveAttrAddr eas mth'name $ \ !maybeMthName -> do
+    !docCmt <- takeDocComment eas
     let !mthPhase = case maybeMthName of
           Just (AttrByName "__init__") -> DefinePhase
           -- TODO other cases ?
@@ -4017,7 +4007,7 @@ el'DefineArrowProc
             iopdUpdate argArts mthAttrs
 
             el'RunTx easMth $
-              el'AnalyzeExpr Nothing rhExpr $ \_ !easDone -> do
+              el'AnalyzeExpr rhExpr $ \_ !easDone -> do
                 let !eacDone = el'context easDone
                     !swipDone = el'ctx'scope eacDone
                     !pwipDone = el'ProcWIP swipDone
@@ -4085,7 +4075,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                     addr@(AttrAddrSrc _ !addr'span)
                   ) -> do
               el'RunTx eas $
-                el'AnalyzeExpr Nothing tgtExpr $ \ !tgtVal !easDone' -> do
+                el'AnalyzeExpr tgtExpr $ \ !tgtVal !easDone' -> do
                   -- record as reference symbol, for completion
                   recordAttrRef eac $
                     EL'UnsolvedRef (Just tgtVal) addr'span
