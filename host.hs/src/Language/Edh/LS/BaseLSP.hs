@@ -32,7 +32,7 @@ type RpcContent = B.ByteString
 
 type RpcSink = TMVar Rpc
 
-type EndOfStream = TMVar (Either SomeException ())
+type StreamResult = TMVar (Either SomeException ())
 
 data Rpc = Rpc !RpcHeaders !RpcContent
   deriving (Eq, Show)
@@ -78,7 +78,7 @@ sendRpc !outletter (Rpc !headers !content) = do
 -- The caller is responsible to close the handle anyway appropriate, but
 -- only after eos is signaled.
 receiveRpcStream ::
-  Text -> (Int -> IO B.ByteString) -> RpcSink -> EndOfStream -> IO ()
+  Text -> (Int -> IO B.ByteString) -> RpcSink -> StreamResult -> IO ()
 receiveRpcStream peerSite !intaker !pktSink !eos = do
   !recvThId <- myThreadId -- async kill the receiving action on eos
   void $ forkIO $ atomically (readTMVar eos) >> killThread recvThId
