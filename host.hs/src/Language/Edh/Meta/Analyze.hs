@@ -1147,7 +1147,7 @@ el'LiteralValue = \case
   BoolLiteral !v -> return $ EL'Const (EdhBool v)
   NilLiteral -> return $ EL'Const nil
   TypeLiteral !v -> return $ EL'Const (EdhType v)
-  SinkCtor -> EL'Const . EdhSink <$> newEventSink
+  SinkCtor -> EL'Const . EdhEvs <$> newEdhSink
   ValueLiteral !v -> return $ EL'Const v
 
 -- | analyze a sequence of expressions in pure context
