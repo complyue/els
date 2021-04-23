@@ -385,10 +385,10 @@ asModuleParsed !ms !exit !ets =
       atomically $ asModuleParsed ms exit ets
     True -> do
       !otf <- readTVar otfVar
-      !otfVersion <- case otf of
-        Just (!ver, _, _) -> return ver
-        _ -> return 0
-      let doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
+      let !otfVersion = case otf of
+            Just (!ver, _, _) -> ver
+            _ -> 0
+          doParseModule :: (EL'ParsedModule -> STM ()) -> STM ()
           doParseModule !exit' = edhCatch ets doParse exit' $
             \ !etsCatching !exv !recover !rethrow -> case exv of
               EdhNil -> rethrow nil
@@ -484,15 +484,21 @@ el'FillModuleSource !docVersion !moduSource !ms !exit !ets =
 
 parseModuleSource :: Int -> Text -> SrcDoc -> EdhProc EL'ParsedModule
 parseModuleSource !srcVersion !moduSource (SrcDoc !moduFile) !exit !ets =
-  parseEdh world moduFile moduSource >>= \case
-    Left !err -> do
-      let !msg = T.pack $ errorBundlePretty err
-          !edhWrapException = edh'exception'wrapper world
-          !edhErr = EdhError ParseError msg (toDyn nil) $ getEdhErrCtx 0 ets
-      edhWrapException (toException edhErr)
-        >>= \ !exo -> edhThrow ets (EdhObject exo)
-    Right (!stmts, !docCmt) ->
-      exitEdh ets exit $ EL'ParsedModule srcVersion docCmt stmts []
+  runEdhTx ets $
+    edhContIO $
+      atomically
+        (parseEdh world moduFile moduSource)
+        >>= \case
+          Left !err -> atomically $ do
+            let !msg = T.pack $ errorBundlePretty err
+                !edhWrapException = edh'exception'wrapper world
+                !edhErr =
+                  EdhError ParseError msg (toDyn nil) $ getEdhErrCtx 0 ets
+            edhWrapException (toException edhErr)
+              >>= \ !exo -> edhThrow ets (EdhObject exo)
+          Right (!stmts, !docCmt) ->
+            atomically $
+              exitEdh ets exit $ EL'ParsedModule srcVersion docCmt stmts []
   where
     !world = edh'prog'world $ edh'thread'prog ets
 
