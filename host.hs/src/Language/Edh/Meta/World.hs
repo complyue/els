@@ -238,7 +238,7 @@ createMetaWorldClass !msClass !clsOuterScope =
           runEdhTx ets $
             asModuleResolved elw ms $ \ !resolved _ets ->
               case el'AttrRefDoc <$> locateAttrRefInModule line char resolved of
-                Nothing -> exitEdh ets exit $ jsonArray []
+                Nothing -> exitEdh ets exit jsonNull
                 Just !doc -> exitEdh ets exit $ toLSP doc
 
     suggestProc ::

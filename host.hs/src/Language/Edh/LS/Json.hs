@@ -5,6 +5,9 @@ import Prelude
 
 -- * helper functions converting arbitrary value to json native `EdhValue`
 
+jsonNull :: EdhValue
+jsonNull = EdhNamedValue "null" EdhNil
+
 jsonArray :: [EdhValue] -> EdhValue
 jsonArray !xs = EdhArgsPack $ ArgsPack xs odEmpty
 
