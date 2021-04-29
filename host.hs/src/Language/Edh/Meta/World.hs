@@ -181,7 +181,7 @@ createMetaWorldClass !msClass !clsOuterScope =
       withThisHostObj ets $ \ !elw ->
         runEdhTx ets $
           el'LocateModule elw moduSpec $ \ !ms _ets ->
-            edhCreateHostObj msClass (toDyn ms) []
+            edhCreateHostObj msClass ms
               >>= \ !msObj -> exitEdh ets exit $ EdhObject msObj
 
     locateByFileProc :: "moduleFile" !: Text -> EdhHostProc
@@ -189,7 +189,7 @@ createMetaWorldClass !msClass !clsOuterScope =
       withThisHostObj ets $ \ !elw ->
         runEdhTx ets $
           el'LocateModuleByFile elw moduFile $ \ !ms _ets ->
-            edhCreateHostObj msClass (toDyn ms) []
+            edhCreateHostObj msClass ms
               >>= \ !msObj -> exitEdh ets exit $ EdhObject msObj
 
     diagsProc :: "modu" !: EL'ModuSlot -> EdhHostProc
