@@ -1180,7 +1180,11 @@ el'AnalyzeExprs !exprs !exit !eas = el'RunTx easPure $ go exprs []
     go (expr : rest) !vals = el'AnalyzeExpr expr $ \ !r ->
       go rest (r : vals)
 
-el'ResolveAttrAddr :: EL'AnalysisState -> AttrAddrSrc -> (Maybe AttrKey -> STM ()) -> STM ()
+el'ResolveAttrAddr ::
+  EL'AnalysisState ->
+  AttrAddrSrc ->
+  (Maybe AttrKey -> STM ()) ->
+  STM ()
 el'ResolveAttrAddr _ (AttrAddrSrc (NamedAttr !attrName) _) !exit =
   exit $ Just $ AttrByName attrName
 el'ResolveAttrAddr _ (AttrAddrSrc (QuaintAttr !attrName) _) !exit =
@@ -1213,16 +1217,17 @@ el'ResolveAttrAddr !eas (AttrAddrSrc (SymbolicAttr !symName) !addr'span) !exit =
 el'ResolveAttrAddr !eas (AttrAddrSrc (IntplSymAttr _src !x) !addr'span) !exit =
   el'RunTx eas $
     el'AnalyzeExpr x $ \ !symVal _eas -> case symVal of
-      EL'Const (EdhSymbol !sym) ->
-        exit $ Just $ AttrBySym sym
+      EL'Const (EdhSymbol !symKey) -> exit $ Just $ AttrBySym symKey
+      EL'Const (EdhString !nameKey) -> exit $ Just $ AttrByName nameKey
       _ -> do
         el'LogDiag
           diags
-          el'Error
+          el'Warning
           addr'span
-          "bad-attr-ref"
-          "no such attribute defined"
-        exit Nothing
+          "dyn-attr-ref"
+          "dynamic attribute reference"
+        !dynSym <- mkSymbol "<dynamic-attr-key>"
+        exit $ Just $ AttrBySym dynSym
   where
     eac = el'context eas
     diags = el'ctx'diags eac
@@ -2954,20 +2959,18 @@ el'AnalyzeExpr
                           !exps <- iopdSnapshot $ el'modu'exps'wip resolving
                           impIntoScope chkExp msImportee exps argsRcvr
                           el'Exit eas exit moduVal
-          AttrExpr {} ->
-            el'RunTx eas $ -- dynamic string or obj import
-            -- TODO analyzetime string/object eval?
-              el'AnalyzeExpr impSpec $ \ !impFromVal -> do
-                -- TODO validate it is object type, import from it
-                el'ExitTx exit impFromVal
           _ -> do
             el'LogDiag
               diags
               el'Warning
               spec'span
               "dynamic-import"
-              "dynamic import specification not analyzed yet"
-            el'Exit eas exit $ EL'Const nil
+              "els does not analyze dynamic import specification yet"
+            el'RunTx eas $ -- dynamic string or obj import
+            -- TODO analyzetime string/object eval?
+              el'AnalyzeExpr impSpec $ \ !impFromVal -> do
+                -- TODO validate it is object type, import from it
+                el'ExitTx exit impFromVal
 --
 
 -- defining a class
