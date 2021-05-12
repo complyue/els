@@ -1122,7 +1122,8 @@ el'AnalyzeStmt (StmtSrc FallthroughStmt _stmt'span) !exit !eas =
 --
 
 -- return
-el'AnalyzeStmt (StmtSrc (ReturnStmt !expr _docCmt) _stmt'span) !exit !eas =
+el'AnalyzeStmt (StmtSrc (ReturnStmt !expr !docCmt) _stmt'span) !exit !eas = do
+  writeTVar (el'doc'cmt eas) docCmt
   el'RunTx eas $
     el'AnalyzeExpr expr $
       el'ExitTx exit . EL'Return
