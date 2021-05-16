@@ -4386,6 +4386,11 @@ suggestCompletions !elw !line !char !modu =
               "the type of a pair value"
               "100", -- category
             completionToken
+              "RangeType"
+              "a type value literal"
+              "the type of a range value"
+              "100", -- category
+            completionToken
               "ArgsPackType"
               "a type value literal"
               "the type of an apk value"
