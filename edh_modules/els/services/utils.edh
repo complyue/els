@@ -51,17 +51,17 @@ export data Range( start, end ) {
 
 }
 
-export data Location( uri, range_ ) {
+export data Location( uri, range ) {
 
   method __match__( jsonRepr ) {
     case jsonRepr[ 'uri' ] of { URI() = uri } ->
-    case jsonRepr[ 'range' ] of { Range() = range_ } ->
-    Location( uri, range_ )
+    case jsonRepr[ 'range' ] of { Range() = range } ->
+    Location( uri, range )
   } $=> nil
 
   method __json__() {
     'uri': json( this.uri ),
-    'range': json( this.range_ ),
+    'range': json( this.range ),
   }
 
 }
