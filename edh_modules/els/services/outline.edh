@@ -9,7 +9,7 @@ import * './utils'
  # shown in the outline view of side bar, as *navigable* table-of-contents
  # reflecting the hierarchical structure of the code/document organization.
  #}
-export method @'textDocument/documentSymbol' ( textDocument, ***_ ) void {
+export method @'textDocument/documentSymbol' ( textDocument, *** ) void {
   case textDocument of { TxtDocFile ( absFilePath ) } ->
   { return { go {
         modu = world.locateByFile( absFilePath )
@@ -22,7 +22,7 @@ export method @'textDocument/documentSymbol' ( textDocument, ***_ ) void {
  # Closely tracking the ToC shown in the outline view (from symbols),
  # making each level individually foldable in the code editor.
  #}
-export method @'textDocument/foldingRange' ( textDocument, ***_ ) void {
+export method @'textDocument/foldingRange' ( textDocument, *** ) void {
   case textDocument of { TxtDocFile ( absFilePath ) } ->
   { return { go {
         modu = world.locateByFile( absFilePath )

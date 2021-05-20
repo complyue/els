@@ -1,10 +1,10 @@
 
-import ( world, elsDebug, **_ ) 'els'
+import ( world, elsDebug, ** ) 'els'
 
 import * './utils'
 
 
-export method @'textDocument/didOpen' ( textDocument, ***_ ) void
+export method @'textDocument/didOpen' ( textDocument, *** ) void
 # try parse & resolve then publish the diagnostics asynchronously,
 # to not block subsequent requests from the lsp client
 case textDocument of { TxtDocFile ( absFilePath ) } -> { go {
@@ -16,12 +16,12 @@ case textDocument of { TxtDocFile ( absFilePath ) } -> { go {
     )
 } }
 
-export method @'textDocument/didClose' ( textDocument, ***_ )
+export method @'textDocument/didClose' ( textDocument, *** )
 pass # notification, don't mandate a response
 
 
 export method @'textDocument/didChange' (
-  textDocument, contentChanges, ***_
+  textDocument, contentChanges, ***
 ) void {
   case contentChanges of {
     { chgContent :> moreChgs } | null( moreChgs )
@@ -55,5 +55,5 @@ export method @'textDocument/didChange' (
 }
 
 
-export method @'textDocument/didSave' ( textDocument, ***_ )
+export method @'textDocument/didSave' ( textDocument, *** )
 pass # notification, don't mandate a response

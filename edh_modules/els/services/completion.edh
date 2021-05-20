@@ -1,5 +1,5 @@
 
-import ( world, elsDebug, **_ ) 'els'
+import ( world, elsDebug, ** ) 'els'
 
 import * './utils'
 
@@ -20,7 +20,7 @@ data CompletionContext( triggerKind, triggerCharacter ) {
 
 
 export method @'textDocument/completion' (
-  textDocument, position, context= {}, ***_
+  textDocument, position, context= {}, ***
 ) void {
   case textDocument of { TxtDocFile( absFilePath ) } ->
   case position of { Position( line, character ) } ->

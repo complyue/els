@@ -2766,6 +2766,8 @@ el'AnalyzeExpr
                                   (attrKeyStr <$> odKeys srcArts)
                             else T.pack (show $ odSize srcArts) <> " more exported"
                 go !srcArts (ar : rest) = case ar of
+                  RecvRestPkArgs (AttrAddrSrc (NamedAttr "_") _) -> pure ()
+                  RecvRestKwArgs (AttrAddrSrc (NamedAttr "_") _) -> pure ()
                   RecvArg srcAddr@(AttrAddrSrc _ !item'span) !maybeAs !defExpr -> do
                     case defExpr of
                       Nothing -> pure ()

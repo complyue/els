@@ -1,5 +1,5 @@
 # just dump the configured port
 # meant for the lsc VSCode extension to read the config via shell command:
 #   epm x edhm els/config/port
-import ( port, **_ ) 'els/config'
+import ( port, ** ) 'els/config'
 console.print( port )

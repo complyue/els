@@ -1,6 +1,6 @@
 
 
-export import ( f, **_ ) './lib'
+export import ( f, ** ) './lib'
 
 {##
  # we are re-exporting `f` as `succ` from the demo lib here

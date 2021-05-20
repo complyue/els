@@ -1,5 +1,5 @@
 
-import ( elsDebug, **_ ) 'els/debug'
+import ( elsDebug, ** ) 'els/debug'
 
 
 export data TxtDocFile ( absFilePath, version= 0 ) {

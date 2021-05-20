@@ -2,7 +2,7 @@
  # this is the entry module of Đ (Edh) Language Server
  #}
 
-import ( LangServer, sendTextToFd, **_ ) 'els/RT'
+import ( LangServer, sendTextToFd, ** ) 'els/RT'
 
 # this'll trigger the instantiation of the globally shared world at analysis
 # time (by importing 'els/world' there),  as well as the globally shared web

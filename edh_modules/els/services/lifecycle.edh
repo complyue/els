@@ -6,7 +6,7 @@ export method initialize(
   capabilities= {},
   workspaceFolders= [],
   trace= 'off',
-  ***_
+  ***
 ) {
 
   console.debug<| 'Initializing els for client ' ++ clientInfo
