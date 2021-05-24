@@ -986,7 +986,7 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
       exprSymbols' doc src ++ maybe [] (exprSymbols' doc) into
     exprSymbols !doc !full'span (ExportExpr !x) = exprSymbols'' doc full'span x
     exprSymbols !doc _full'span (YieldExpr !x) = exprSymbols' doc x
-    exprSymbols !doc _full'span (ForExpr _rcvrs !from !body) =
+    exprSymbols !doc _full'span (ForExpr _scoped _rcvrs !from !body) =
       exprSymbols' doc from ++ stmtSymbols body
     exprSymbols !doc _full'span (WhileExpr !x !stmt) =
       exprSymbols' doc x ++ stmtSymbols stmt
@@ -1155,7 +1155,7 @@ blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
       exprFoldRngs' src ++ maybe [] exprFoldRngs' into
     exprFoldRngs !full'span (ExportExpr !x) = exprFoldRngs'' full'span x
     exprFoldRngs _full'span (YieldExpr !x) = exprFoldRngs' x
-    exprFoldRngs _full'span (ForExpr _rcvrs !from !body) =
+    exprFoldRngs _full'span (ForExpr _scoped _rcvrs !from !body) =
       exprFoldRngs' from ++ stmtFoldRngs body
     exprFoldRngs _full'span (WhileExpr !x !stmt) =
       exprFoldRngs' x ++ stmtFoldRngs stmt

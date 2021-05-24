@@ -1687,14 +1687,17 @@ el'AnalyzeExpr
                               maybePrevDef
 
                       -- record as artifact of current scope
-                      -- note the assignment defines attr regardless of pure ctx
                       if el'ctx'eff'defining eac
                         then do
+                          -- todo (+=) (*=) etc. are working but confusing for effect definition
+                          --      log errors/warnings case by case, for ops other than (=) or (:=)
                           let !effs = el'branch'effs'wip bwip
                           case rhVal of
                             EL'Const EdhNil -> iopdDelete attrKey effs
                             _ -> iopdInsert attrKey attrDef effs
+                          el'Exit easDone exit rhVal
                         else do
+                          -- note the assignment defines attr regardless of pure ctx
                           let !attrs = el'branch'attrs'wip bwip
                           if el'IsNil rhVal && "=" == opSym
                             then do
@@ -1715,51 +1718,51 @@ el'AnalyzeExpr
                                       . (:)
                                       . EL'Region (src'end expr'span)
                                 _ -> pure ()
-                      when (el'ctx'exporting eac) $
-                        iopdInsert attrKey attrDef $
-                          el'obj'exps $ el'scope'this'obj pwip
-                      --
+                          when (el'ctx'exporting eac) $
+                            iopdInsert attrKey attrDef $
+                              el'obj'exps $ el'scope'this'obj pwip
+                          --
 
-                      unless (el'ctx'eff'defining eac) $
-                        if "=" == opSym || ":=" == opSym -- "?=" goes otherwise
-                          then do
-                            -- check if it shadows attr from outer scopes
-                            case swip of
-                              EL'InitObject {} -> pure () -- not eligible
-                              EL'DefineClass {} -> pure () -- not eligible
-                              EL'InitModule {} -> pure () -- need check?
-                              EL'ProcFlow {} ->
-                                el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
-                                  >>= \case
-                                    Nothing -> pure ()
-                                    Just !shadowedDef -> do
-                                      el'LogDiag
-                                        diags
-                                        el'Warning
-                                        addr'span
-                                        "attr-shadow"
-                                        "shadows the attribute defined in outer scope"
-                                      -- record a reference to the shadowed attr
-                                      let !attrRef =
-                                            EL'AttrRef Nothing addr mwip shadowedDef
-                                      recordAttrRef eac attrRef
+                          -- note "?=" goes otherwise
+                          if "=" == opSym || "|=" == opSym || ":=" == opSym
+                            then do
+                              -- check if it shadows attr from outer scopes
+                              case swip of
+                                EL'InitObject {} -> pure () -- not eligible
+                                EL'DefineClass {} -> pure () -- not eligible
+                                EL'InitModule {} -> pure () -- need check?
+                                EL'ProcFlow {} ->
+                                  el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
+                                    >>= \case
+                                      Nothing -> pure ()
+                                      Just !shadowedDef -> do
+                                        el'LogDiag
+                                          diags
+                                          el'Warning
+                                          addr'span
+                                          "attr-shadow"
+                                          "shadows the attribute defined in outer scope"
+                                        -- record a reference to the shadowed attr
+                                        let !attrRef =
+                                              EL'AttrRef Nothing addr mwip shadowedDef
+                                        recordAttrRef eac attrRef
 
-                            -- record as reference symbol, for completion
-                            recordAttrRef eac $
-                              EL'UnsolvedRef Nothing addr'span
-                            -- record as definition symbol
-                            recordAttrDef eac attrDef
-                            el'Exit easDone exit rhVal
-                          else case maybePrevDef of
-                            Just !prevDef -> do
-                              -- record as reference symbol
+                              -- record as reference symbol, for completion
                               recordAttrRef eac $
-                                EL'AttrRef Nothing addr mwip prevDef
-                              returnAsExpr easDone
-                            Nothing -> do
+                                EL'UnsolvedRef Nothing addr'span
                               -- record as definition symbol
                               recordAttrDef eac attrDef
-                              returnAsExpr easDone
+                              el'Exit easDone exit rhVal
+                            else case maybePrevDef of
+                              Just !prevDef -> do
+                                -- record as reference symbol
+                                recordAttrRef eac $
+                                  EL'AttrRef Nothing addr mwip prevDef
+                                returnAsExpr easDone
+                              Nothing -> do
+                                -- record as definition symbol
+                                recordAttrDef eac attrDef
+                                returnAsExpr easDone
               ExprSrc
                 ( AttrExpr
                     (IndirectRef !tgtExpr addr@(AttrAddrSrc _ !addr'span))
@@ -3573,27 +3576,119 @@ el'AnalyzeExpr x@(ExprSrc (CaseExpr !tgt !bs) !expr'span) !exit !eas0 =
           el'Exit eas exit $ EL'Expr x
 --
 
--- for-from-do
+-- for-from-do loop
 el'AnalyzeExpr
-  x@(ExprSrc (ForExpr !asr !it body@(StmtSrc _ !body'span)) _expr'span)
+  x@(ExprSrc (ForExpr !scoped !asr !it body@(StmtSrc _ !body'span)) _expr'span)
   !exit
-  !eas = ( case asr of
-             WildReceiver -> ($ [])
-             PackReceiver !ars -> defLoopArts ars
-             SingleReceiver !ar -> defLoopArts [ar]
-         )
-    $ \ !loopArts -> do
-      unless (null loopArts) $ do
-        iopdUpdate loopArts $ el'scope'attrs'wip pwip
-        iopdUpdate loopArts attrs
-        -- record a region before the loop body for current scope
-        iopdSnapshot attrs
-          >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-            . EL'Region (src'start body'span)
+  !eas = do
+    !eacLoop <-
+      if not scoped
+        then return eac
+        else do
+          !loopAttrs <- iopdEmpty
+          !loopEffs <- iopdEmpty
+          !loopAnnos <- iopdEmpty
+          !branchRegions <- newTVar []
+          !loopScopes <- newTVar []
+          !loopRegions <- newTVar []
+          let !bwip =
+                looperBranch
+                  { el'branch'attrs'wip = loopAttrs,
+                    el'branch'effs'wip = loopEffs,
+                    el'branch'annos'wip = loopAnnos,
+                    el'branch'regions'wip = branchRegions
+                  }
+              !pwip =
+                looperProc -- inherit exts/exps from looper scope
+                  { el'scope'branch'wip = bwip,
+                    el'scope'attrs'wip = loopAttrs,
+                    el'scope'inner'scopes'wip = loopScopes,
+                    el'scope'regions'wip = loopRegions
+                  }
+              !eacLoop =
+                eac
+                  { el'ctx'scope = EL'ProcFlow pwip,
+                    el'ctx'outers = looperScope : el'ctx'outers eac
+                  }
+          return eacLoop
 
-      el'RunTx eas $
-        el'AnalyzeExpr it $
-          const $
+    let !easLoop = eas {el'context = eacLoop}
+        !swip = el'ctx'scope eacLoop
+        !pwip = el'ProcWIP swip
+        !bwip = el'scope'branch'wip pwip
+        !attrs = el'branch'attrs'wip bwip
+        !annos = el'branch'annos'wip bwip
+
+        -- define artifacts from loop receivers
+        defLoopArts ::
+          [ArgReceiver] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
+        defLoopArts !ars = go [] ars
+          where
+            go ::
+              [(AttrKey, EL'AttrDef)] ->
+              [ArgReceiver] ->
+              ([(AttrKey, EL'AttrDef)] -> STM ()) ->
+              STM ()
+            go !args [] !exit' = exit' $ reverse args
+            go !args (ar : rest) !exit' = case ar of
+              RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
+                Nothing -> defLoopArt argAddr maybeDef exit'
+                Just (DirectRef !argAddr') -> defLoopArt argAddr' Nothing exit'
+                Just _otherRename -> go args rest exit' -- TODO elaborate?
+              RecvRestPkArgs !argAddr -> defLoopArt argAddr Nothing exit'
+              RecvRestKwArgs !argAddr -> defLoopArt argAddr Nothing exit'
+              RecvRestPosArgs !argAddr -> defLoopArt argAddr Nothing exit'
+              where
+                defLoopArt (AttrAddrSrc (NamedAttr "_") _) _ !exit'' =
+                  go args rest exit''
+                defLoopArt
+                  argAddr@(AttrAddrSrc _ arg'name'span)
+                  !knownExpr
+                  !exit'' =
+                    el'ResolveAttrAddr easLoop argAddr $ \case
+                      Nothing -> go args rest exit''
+                      Just !argKey ->
+                        iopdLookup argKey annos >>= newTVar >>= \ !anno ->
+                          go
+                            ( ( argKey,
+                                EL'AttrDef
+                                  argKey
+                                  Nothing
+                                  "<loop-receiver>"
+                                  arg'name'span
+                                  x
+                                  ( EL'Expr $
+                                      fromMaybe
+                                        ( ExprSrc
+                                            (AttrExpr (DirectRef argAddr))
+                                            arg'name'span
+                                        )
+                                        knownExpr
+                                  )
+                                  anno
+                                  Nothing
+                              ) :
+                              args
+                            )
+                            rest
+                            exit''
+
+    ( case asr of
+        WildReceiver -> ($ [])
+        PackReceiver !ars -> defLoopArts ars
+        SingleReceiver !ar -> defLoopArts [ar]
+      )
+      $ \ !loopArts -> do
+        unless (null loopArts) $ do
+          iopdUpdate loopArts $ el'scope'attrs'wip pwip
+          iopdUpdate loopArts attrs
+          -- record a region before the loop body for current scope
+          iopdSnapshot attrs
+            >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+              . EL'Region (src'start body'span)
+
+        el'RunTx eas $
+          el'AnalyzeExpr it $ \_ _eas -> el'RunTx easLoop $
             el'AnalyzeStmt body $ \_result _eas -> do
               -- record a new region following this for-from-do loop
               -- TODO check whether new attrs actually added, don't record if not
@@ -3605,60 +3700,10 @@ el'AnalyzeExpr
               el'Exit eas exit $ EL'Expr x
     where
       !eac = el'context eas
-      !swip = el'ctx'scope eac
-      !pwip = el'ProcWIP swip
-      !bwip = el'scope'branch'wip pwip
-      !attrs = el'branch'attrs'wip bwip
-      !annos = el'branch'annos'wip bwip
+      looperScope = el'ctx'scope eac
+      looperProc = el'ProcWIP looperScope
+      looperBranch = el'scope'branch'wip looperProc
 
-      -- define artifacts from loop receivers
-      defLoopArts :: [ArgReceiver] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
-      defLoopArts !ars = go [] ars
-        where
-          go ::
-            [(AttrKey, EL'AttrDef)] ->
-            [ArgReceiver] ->
-            ([(AttrKey, EL'AttrDef)] -> STM ()) ->
-            STM ()
-          go !args [] !exit' = exit' $ reverse args
-          go !args (ar : rest) !exit' = case ar of
-            RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
-              Nothing -> defLoopArt argAddr maybeDef exit'
-              Just (DirectRef !argAddr') -> defLoopArt argAddr' Nothing exit'
-              Just _otherRename -> go args rest exit' -- TODO elaborate?
-            RecvRestPkArgs !argAddr -> defLoopArt argAddr Nothing exit'
-            RecvRestKwArgs !argAddr -> defLoopArt argAddr Nothing exit'
-            RecvRestPosArgs !argAddr -> defLoopArt argAddr Nothing exit'
-            where
-              defLoopArt (AttrAddrSrc (NamedAttr "_") _) _ !exit'' = go args rest exit''
-              defLoopArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr !exit'' =
-                el'ResolveAttrAddr eas argAddr $ \case
-                  Nothing -> go args rest exit''
-                  Just !argKey ->
-                    iopdLookup argKey annos >>= newTVar >>= \ !anno ->
-                      go
-                        ( ( argKey,
-                            EL'AttrDef
-                              argKey
-                              Nothing
-                              "<loop-receiver>"
-                              arg'name'span
-                              x
-                              ( EL'Expr $
-                                  fromMaybe
-                                    ( ExprSrc
-                                        (AttrExpr (DirectRef argAddr))
-                                        arg'name'span
-                                    )
-                                    knownExpr
-                              )
-                              anno
-                              Nothing
-                          ) :
-                          args
-                        )
-                        rest
-                        exit''
 --
 
 -- while
