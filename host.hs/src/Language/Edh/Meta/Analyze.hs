@@ -1099,20 +1099,6 @@ el'AnalyzeStmt (StmtSrc (PerceiveStmt !expr !body) _stmt'span) !exit !eas =
           const $ el'ExitTx exit $ EL'Const nil
 --
 
--- while
-el'AnalyzeStmt (StmtSrc (WhileStmt !expr !body) _stmt'span) !exit !eas =
-  el'RunTx eas $
-    el'AnalyzeExpr expr $
-      const $ el'AnalyzeStmt body $ const $ el'ExitTx exit $ EL'Const nil
---
-
--- do while
-el'AnalyzeStmt (StmtSrc (DoWhileStmt !body !expr) _stmt'span) !exit !eas =
-  el'RunTx eas $
-    el'AnalyzeStmt body $
-      const $ el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Const nil
---
-
 -- continue
 el'AnalyzeStmt (StmtSrc ContinueStmt _stmt'span) !exit !eas =
   el'Exit eas exit $ EL'Const EdhContinue
@@ -3672,6 +3658,20 @@ el'AnalyzeExpr
                         )
                         rest
                         exit''
+--
+
+-- while
+el'AnalyzeExpr (ExprSrc (WhileExpr !expr !body) _expr'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeExpr expr $
+      const $ el'AnalyzeStmt body $ const $ el'ExitTx exit $ EL'Const nil
+--
+
+-- do while
+el'AnalyzeExpr (ExprSrc (DoWhileExpr !body !expr) _expr'span) !exit !eas =
+  el'RunTx eas $
+    el'AnalyzeStmt body $
+      const $ el'AnalyzeExpr expr $ const $ el'ExitTx exit $ EL'Const nil
 --
 
 -- yield

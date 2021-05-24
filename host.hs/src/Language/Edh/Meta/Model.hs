@@ -906,10 +906,6 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
     stmtSymbols (StmtSrc (ExtendsStmt !x) _) = exprSymbols' Nothing x
     stmtSymbols (StmtSrc (PerceiveStmt !x !stmt) _) =
       exprSymbols' Nothing x ++ stmtSymbols stmt
-    stmtSymbols (StmtSrc (WhileStmt !x !stmt) _) =
-      exprSymbols' Nothing x ++ stmtSymbols stmt
-    stmtSymbols (StmtSrc (DoWhileStmt !stmt !x) _) =
-      stmtSymbols stmt ++ exprSymbols' Nothing x
     stmtSymbols (StmtSrc (ThrowStmt !x) _) = exprSymbols' Nothing x
     stmtSymbols (StmtSrc (ReturnStmt !x _docCmt) _) = exprSymbols' Nothing x
     stmtSymbols _ = []
@@ -992,6 +988,10 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
     exprSymbols !doc _full'span (YieldExpr !x) = exprSymbols' doc x
     exprSymbols !doc _full'span (ForExpr _rcvrs !from !body) =
       exprSymbols' doc from ++ stmtSymbols body
+    exprSymbols !doc _full'span (WhileExpr !x !stmt) =
+      exprSymbols' doc x ++ stmtSymbols stmt
+    exprSymbols !doc _full'span (DoWhileExpr !stmt !x) =
+      stmtSymbols stmt ++ exprSymbols' doc x
     exprSymbols !doc _full'span (IndexExpr !idx !tgt) =
       exprSymbols' doc tgt ++ exprSymbols' doc idx
     exprSymbols !doc _full'span (CallExpr !callee (ArgsPacker !sndrs _)) =
@@ -1088,10 +1088,6 @@ blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
     stmtFoldRngs (StmtSrc (ExtendsStmt !x) _) = exprFoldRngs' x
     stmtFoldRngs (StmtSrc (PerceiveStmt !x !stmt) _) =
       exprFoldRngs' x ++ stmtFoldRngs stmt
-    stmtFoldRngs (StmtSrc (WhileStmt !x !stmt) _) =
-      exprFoldRngs' x ++ stmtFoldRngs stmt
-    stmtFoldRngs (StmtSrc (DoWhileStmt !stmt !x) _) =
-      stmtFoldRngs stmt ++ exprFoldRngs' x
     stmtFoldRngs (StmtSrc (ThrowStmt !x) _) = exprFoldRngs' x
     stmtFoldRngs (StmtSrc (ReturnStmt !x _docCmt) _) = exprFoldRngs' x
     stmtFoldRngs _ = []
@@ -1161,6 +1157,10 @@ blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
     exprFoldRngs _full'span (YieldExpr !x) = exprFoldRngs' x
     exprFoldRngs _full'span (ForExpr _rcvrs !from !body) =
       exprFoldRngs' from ++ stmtFoldRngs body
+    exprFoldRngs _full'span (WhileExpr !x !stmt) =
+      exprFoldRngs' x ++ stmtFoldRngs stmt
+    exprFoldRngs _full'span (DoWhileExpr !stmt !x) =
+      stmtFoldRngs stmt ++ exprFoldRngs' x
     exprFoldRngs _full'span (IndexExpr !idx !tgt) =
       exprFoldRngs' tgt ++ exprFoldRngs' idx
     exprFoldRngs _full'span (CallExpr !callee (ArgsPacker !sndrs _)) =
