@@ -908,6 +908,8 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
       exprSymbols' Nothing x ++ stmtSymbols stmt
     stmtSymbols (StmtSrc (WhileStmt !x !stmt) _) =
       exprSymbols' Nothing x ++ stmtSymbols stmt
+    stmtSymbols (StmtSrc (DoWhileStmt !stmt !x) _) =
+      stmtSymbols stmt ++ exprSymbols' Nothing x
     stmtSymbols (StmtSrc (ThrowStmt !x) _) = exprSymbols' Nothing x
     stmtSymbols (StmtSrc (ReturnStmt !x _docCmt) _) = exprSymbols' Nothing x
     stmtSymbols _ = []
@@ -1088,6 +1090,8 @@ blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
       exprFoldRngs' x ++ stmtFoldRngs stmt
     stmtFoldRngs (StmtSrc (WhileStmt !x !stmt) _) =
       exprFoldRngs' x ++ stmtFoldRngs stmt
+    stmtFoldRngs (StmtSrc (DoWhileStmt !stmt !x) _) =
+      stmtFoldRngs stmt ++ exprFoldRngs' x
     stmtFoldRngs (StmtSrc (ThrowStmt !x) _) = exprFoldRngs' x
     stmtFoldRngs (StmtSrc (ReturnStmt !x _docCmt) _) = exprFoldRngs' x
     stmtFoldRngs _ = []
