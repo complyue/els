@@ -1720,45 +1720,46 @@ el'AnalyzeExpr
                           el'obj'exps $ el'scope'this'obj pwip
                       --
 
-                      if "=" == opSym || ":=" == opSym -- "?=" goes otherwise
-                        then do
-                          -- check if it shadows attr from outer scopes
-                          case swip of
-                            EL'InitObject {} -> pure () -- not eligible
-                            EL'DefineClass {} -> pure () -- not eligible
-                            EL'InitModule {} -> pure () -- need check?
-                            EL'ProcFlow {} ->
-                              el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
-                                >>= \case
-                                  Nothing -> pure ()
-                                  Just !shadowedDef -> do
-                                    el'LogDiag
-                                      diags
-                                      el'Warning
-                                      addr'span
-                                      "attr-shadow"
-                                      "shadows the attribute defined in outer scope"
-                                    -- record a reference to the shadowed attr
-                                    let !attrRef =
-                                          EL'AttrRef Nothing addr mwip shadowedDef
-                                    recordAttrRef eac attrRef
+                      unless (el'ctx'eff'defining eac) $
+                        if "=" == opSym || ":=" == opSym -- "?=" goes otherwise
+                          then do
+                            -- check if it shadows attr from outer scopes
+                            case swip of
+                              EL'InitObject {} -> pure () -- not eligible
+                              EL'DefineClass {} -> pure () -- not eligible
+                              EL'InitModule {} -> pure () -- need check?
+                              EL'ProcFlow {} ->
+                                el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
+                                  >>= \case
+                                    Nothing -> pure ()
+                                    Just !shadowedDef -> do
+                                      el'LogDiag
+                                        diags
+                                        el'Warning
+                                        addr'span
+                                        "attr-shadow"
+                                        "shadows the attribute defined in outer scope"
+                                      -- record a reference to the shadowed attr
+                                      let !attrRef =
+                                            EL'AttrRef Nothing addr mwip shadowedDef
+                                      recordAttrRef eac attrRef
 
-                          -- record as reference symbol, for completion
-                          recordAttrRef eac $
-                            EL'UnsolvedRef Nothing addr'span
-                          -- record as definition symbol
-                          recordAttrDef eac attrDef
-                          el'Exit easDone exit rhVal
-                        else case maybePrevDef of
-                          Just !prevDef -> do
-                            -- record as reference symbol
+                            -- record as reference symbol, for completion
                             recordAttrRef eac $
-                              EL'AttrRef Nothing addr mwip prevDef
-                            returnAsExpr easDone
-                          Nothing -> do
+                              EL'UnsolvedRef Nothing addr'span
                             -- record as definition symbol
                             recordAttrDef eac attrDef
-                            returnAsExpr easDone
+                            el'Exit easDone exit rhVal
+                          else case maybePrevDef of
+                            Just !prevDef -> do
+                              -- record as reference symbol
+                              recordAttrRef eac $
+                                EL'AttrRef Nothing addr mwip prevDef
+                              returnAsExpr easDone
+                            Nothing -> do
+                              -- record as definition symbol
+                              recordAttrDef eac attrDef
+                              returnAsExpr easDone
               ExprSrc
                 ( AttrExpr
                     (IndirectRef !tgtExpr addr@(AttrAddrSrc _ !addr'span))
