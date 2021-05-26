@@ -944,9 +944,9 @@ el'AnalyzeStmt
           recvOne addr $ EL'Apk $ EL'ArgsPack args kwargs
           done [] odEmpty
         RecvArg addr@(AttrAddrSrc _ arg'span) !maybeRename maybeDef ->
-          let goRecv :: AttrAddrSrc -> (AttrKey -> EL'Value -> STM ()) -> STM ()
-              goRecv !recvAddr !received =
-                el'ResolveAttrAddr eas recvAddr $ \case
+          let goRecv :: (AttrKey -> EL'Value -> STM ()) -> STM ()
+              goRecv !received =
+                el'ResolveAttrAddr eas addr $ \case
                   Nothing -> done args kwargs
                   Just !recvKey -> case odTakeOut recvKey kwargs of
                     (Just !kwVal, kwargs') -> do
@@ -964,6 +964,9 @@ el'AnalyzeStmt
                             arg'span
                             "missing-arg"
                             "missing argument"
+                          received recvKey $
+                            EL'Expr $
+                              ExprSrc (AttrExpr $ DirectRef addr) arg'span
                           done args kwargs
                         Just !defExpr -> el'RunTx
                           eas {el'context = eac {el'ctx'pure = True}}
@@ -972,9 +975,8 @@ el'AnalyzeStmt
                               received recvKey defVal
                               done args kwargs
            in case maybeRename of
-                Nothing -> goRecv addr $ recvOne' arg'span
-                Just (DirectRef !addr') ->
-                  goRecv addr $ \_recvKey -> recvOne addr'
+                Nothing -> goRecv $ recvOne' arg'span
+                Just (DirectRef !addr') -> goRecv $ \_recvKey -> recvOne addr'
                 Just IndirectRef {} -> done args kwargs
                 _ -> do
                   el'LogDiag
