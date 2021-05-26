@@ -1072,36 +1072,38 @@ el'AnalyzeStmt
   !exit
   !eas =
     el'RunTx eas $
-      el'AnalyzeExpr superExpr $ \case
-        superVal@EL'ObjVal {} -> \_eas -> do
-          modifyTVar' exts (++ [superVal])
-          el'Exit eas exit $ EL'Const nil
-        superVal@EL'ClsVal {} -> \_eas -> do
-          modifyTVar' exts (++ [superVal])
-          el'Exit eas exit $ EL'Const nil
-        EL'Apk (EL'ArgsPack !superVals !kwargs _dyn'args _dyn'kwargs)
-          | odNull kwargs -> \_eas -> do
-            forM_ superVals $ \case
-              EL'ObjVal {} -> return ()
-              EL'ClsVal {} -> return ()
-              !badSuperVal ->
-                el'LogDiag
-                  diags
-                  el'Warning
-                  super'span
-                  "invalid-super"
-                  $ "invalid super object: " <> T.pack (show badSuperVal)
-            modifyTVar' exts (++ superVals)
+      el'AnalyzeExpr superExpr $ \ !superVal ->
+        case el'UltimateValue superVal of
+          EL'ObjVal {} -> \_eas -> do
+            modifyTVar' exts (++ [superVal])
             el'Exit eas exit $ EL'Const nil
-        !badSuperVal -> \_eas -> do
-          el'LogDiag
-            diags
-            el'Warning
-            super'span
-            "invalid-super"
-            $ "invalid super object: " <> T.pack (show badSuperVal)
-          modifyTVar' exts (++ [badSuperVal]) -- TODO this toxic?
-          el'Exit eas exit $ EL'Const nil
+          EL'ClsVal {} -> \_eas -> do
+            modifyTVar' exts (++ [superVal])
+            el'Exit eas exit $ EL'Const nil
+          EL'Apk (EL'ArgsPack !superVals !kwargs _dyn'args _dyn'kwargs)
+            | odNull kwargs -> \_eas -> do
+              forM_ superVals $ \ !superVal' ->
+                case el'UltimateValue superVal' of
+                  EL'ObjVal {} -> return ()
+                  EL'ClsVal {} -> return ()
+                  _ ->
+                    el'LogDiag
+                      diags
+                      el'Warning
+                      super'span
+                      "invalid-super"
+                      $ "invalid super object: " <> T.pack (show superVal')
+              modifyTVar' exts (++ superVals)
+              el'Exit eas exit $ EL'Const nil
+          _ -> \_eas -> do
+            el'LogDiag
+              diags
+              el'Warning
+              super'span
+              "invalid-super"
+              $ "invalid super object: " <> T.pack (show superVal)
+            modifyTVar' exts (++ [superVal]) -- TODO this toxic?
+            el'Exit eas exit $ EL'Const nil
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
