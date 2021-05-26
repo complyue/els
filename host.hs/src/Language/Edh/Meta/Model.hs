@@ -424,13 +424,22 @@ el'AttrDoc = go []
           EL'External _ms !def' -> go docs' def'
           _ -> reverse docs'
 
-data EL'ArgsPack = EL'ArgsPack ![EL'Value] !(OrderedDict AttrKey EL'Value)
+data EL'ArgsPack = EL'ArgsPack
+  { el'apk'args :: ![EL'Value],
+    el'apk'kwargs :: !(OrderedDict AttrKey EL'Value),
+    el'apk'dyn'args :: !Bool,
+    el'apk'dyn'kwargs :: !Bool
+  }
 
 instance Show EL'ArgsPack where
-  show (EL'ArgsPack !args !kwargs) =
-    if null args && odNull kwargs
+  show (EL'ArgsPack !args !kwargs !dyn'args !dyn'kwargs) =
+    if null args && odNull kwargs && not dyn'args && not dyn'kwargs
       then "()"
-      else "( " <> pos args <> kw (odToList kwargs) <> ")"
+      else
+        "( " <> pos args <> kw (odToList kwargs)
+          <> (if dyn'args then "*(), " else "")
+          <> (if dyn'kwargs then "**(), " else "")
+          <> ")"
     where
       pos [] = ""
       pos (a : rest) = show a <> ", " <> pos rest
