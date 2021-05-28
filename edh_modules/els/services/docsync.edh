@@ -26,7 +26,7 @@ export method @'textDocument/didChange' (
   case contentChanges of {
     { chgContent :> moreChgs } | null( moreChgs )
     -> case chgContent[ 'text' ] of {
-      { fullTxt } | type( fullTxt ) is StringType
+      { fullTxt } | type( fullTxt ) is "String"
       -> { pass }
       error( 'no text in the sole change' )
     }

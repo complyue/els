@@ -104,7 +104,7 @@ defer {
   effect method lspReqSignal() {
     reqDict = behave lspRequest
     case reqDict[ 'id' ] of {
-      { idReq } | type( idReq ) ?<= ( DecimalType, StringType, ) -> { pass }
+      { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
       debug and elsDebug.replHere()
       error( 'bug: obtaining request signal of non-request' )
     }
@@ -124,7 +124,7 @@ defer {
   effect method lspRespond( result, **headers ) {
     reqDict = behave lspRequest
     case reqDict[ 'id' ] of {
-      { idReq } | type( idReq ) ?<= ( DecimalType, StringType, ) -> { pass }
+      { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
       debug and elsDebug.replHere()
       error( 'bug: trying to respond to non-request' )
     }
@@ -138,7 +138,7 @@ defer {
   effect method lspError( message, code= -32001, **headers ) {
     reqDict = behave lspRequest
     case reqDict[ 'id' ] of {
-      { idReq } | type( idReq ) ?<= ( DecimalType, StringType, ) -> { pass }
+      { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
       debug and elsDebug.replHere()
       error( 'bug: trying to report error to non-request' )
     }
@@ -232,7 +232,7 @@ while eol() is false {
 
     # in case of request or notification
     case rpcIn[ 'method' ] of {
-      { mthName } | mthName and type( mthName ) is StringType -> { pass }
+      { mthName } | mthName and type( mthName ) is "String" -> { pass }
       _ -> error( 'unexpected lsp JSONRPC method', rpc=rpcIn )
     }
     # treat carefully about the procedure parameters
@@ -240,7 +240,7 @@ while eol() is false {
       # note Edh null is a procedure instead of a constant
       null -> args = ()
       # normal case
-      { args } | type( args ) is DictType -> { pass }
+      { args } | type( args ) is "Dict" -> { pass }
       # fallback case
       args = ()
     }
@@ -263,9 +263,9 @@ while eol() is false {
         } )
         continue
       }
-      { mth } -> if type( mth ) ?<= [
-        MethodType, HostMethodType,
-      ] then pass
+      { mth } -> if type( mth ) is in (
+        "Method", "HostMethod",
+      ) then pass
       else error( 'bug: bad service method type ' ++ type( mth ), rpc=rpcIn )
     }
 

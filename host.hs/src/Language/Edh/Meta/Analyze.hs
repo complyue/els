@@ -1180,7 +1180,6 @@ el'LiteralValue = \case
   StringLiteral !v -> return $ EL'Const (EdhString v)
   BoolLiteral !v -> return $ EL'Const (EdhBool v)
   NilLiteral -> return $ EL'Const nil
-  TypeLiteral !v -> return $ EL'Const (EdhType v)
   SinkCtor -> EL'Const . EdhEvs <$> newEdhSink
   ValueLiteral !v -> return $ EL'Const v
 
@@ -1589,7 +1588,10 @@ el'AnalyzeExpr
     "<" -> doCmp
     "is" -> doCmp
     "is not" -> doCmp
-    "?<=" -> doCmp
+    "in" -> doCmp
+    "is in" -> doCmp
+    "not in" -> doCmp
+    "is not in" -> doCmp
     --
 
     -- assignment
@@ -4469,204 +4471,6 @@ suggestCompletions !elw !line !char !modu =
               ( "GT carries the same semantics as in Haskell, "
                   <> "while being exactly the same value in the host env"
               )
-              "100", -- category
-            completionToken
-              "DecimalType"
-              "a type value literal"
-              "the type of a numeric value"
-              "100", -- category
-            completionToken
-              "BoolType"
-              "a type value literal"
-              "the type of a boolean value"
-              "100", -- category
-            completionToken
-              "StringType"
-              "a type value literal"
-              "the type of a string value"
-              "100", -- category
-            completionToken
-              "BlobType"
-              "a type value literal"
-              "the type of a blob value"
-              "100", -- category
-            completionToken
-              "SymbolType"
-              "a type value literal"
-              "the type of a symbol value"
-              "100", -- category
-            completionToken
-              "ObjectType"
-              "a type value literal"
-              "the type of an object value"
-              "100", -- category
-            completionToken
-              "DictType"
-              "a type value literal"
-              "the type of a dict value"
-              "100", -- category
-            completionToken
-              "ListType"
-              "a type value literal"
-              "the type of a list value"
-              "100", -- category
-            completionToken
-              "PairType"
-              "a type value literal"
-              "the type of a pair value"
-              "100", -- category
-            completionToken
-              "RangeType"
-              "a type value literal"
-              "the type of a range value"
-              "100", -- category
-            completionToken
-              "ArgsPackType"
-              "a type value literal"
-              "the type of an apk value"
-              "100", -- category
-            completionToken
-              "IntrinsicType"
-              "a type value literal"
-              "the type of an intrinsic operator procedure value"
-              "100", -- category
-            completionToken
-              "HostClassType"
-              "a type value literal"
-              "the type of a host class value"
-              "100", -- category
-            completionToken
-              "HostMethodType"
-              "a type value literal"
-              "the type of a host method procedure value"
-              "100", -- category
-            completionToken
-              "HostOperType"
-              "a type value literal"
-              "the type of a host operator procedure value"
-              "100", -- category
-            completionToken
-              "HostGenrType"
-              "a type value literal"
-              "the type of a host generator procedure value"
-              "100", -- category
-            completionToken
-              "ClassType"
-              "a type value literal"
-              "the type of a class value"
-              "100", -- category
-            completionToken
-              "MethodType"
-              "a type value literal"
-              "the type of a method procedure value"
-              "100", -- category
-            completionToken
-              "OperatorType"
-              "a type value literal"
-              "the type of an operator procedure value"
-              "100", -- category
-            completionToken
-              "GeneratorType"
-              "a type value literal"
-              "the type of a generator procedure value"
-              "100", -- category
-            completionToken
-              "InterpreterType"
-              "a type value literal"
-              "the type of a interpreter procedure value"
-              "100", -- category
-            completionToken
-              "ProducerType"
-              "a type value literal"
-              "the type of a producer procedure value"
-              "100", -- category
-            completionToken
-              "DescriptorType"
-              "a type value literal"
-              "the type of a property descriptor value"
-              "100", -- category
-            completionToken
-              "BreakType"
-              "a type value literal"
-              ( "the type of a break value, which will be resulted by"
-                  <> " evaluating a `break` statement"
-              )
-              "100", -- category
-            completionToken
-              "ContinueType"
-              "a type value literal"
-              ( "the type of a continue value, which will be resulted by"
-                  <> " evaluating a `continue` statement"
-              )
-              "100", -- category
-            completionToken
-              "FallthroughType"
-              "a type value literal"
-              ( "the type of a fallthrough value, which will be resulted by"
-                  <> " evaluating a `fallthrough` statement"
-              )
-              "100", -- category
-            completionToken
-              "CaseCloseType"
-              "a type value literal"
-              ( "the type of a case-match value, which will be resulted by"
-                  <> " evaluating a matched branch"
-              )
-              "100", -- category
-            completionToken
-              "CaseOtherType"
-              "a type value literal"
-              ( "the type of a case-mismatch value, which will be resulted by"
-                  <> " evaluating a mismatched branch"
-              )
-              "100", -- category
-            completionToken
-              "RethrowType"
-              "a type value literal"
-              ( "the type of a rethrow value,"
-                  <> " such a value can rarely be seen by Edh code"
-              )
-              "100", -- category
-            completionToken
-              "YieldType"
-              "a type value literal"
-              ( "the type of a yield value,"
-                  <> " such a value can rarely be seen by Edh code"
-              )
-              "100", -- category
-            completionToken
-              "ReturnType"
-              "a type value literal"
-              ( "the type of a return value,"
-                  <> " such a value can rarely be seen by Edh code"
-              )
-              "100", -- category
-            completionToken
-              "OrdType"
-              "a type value literal"
-              ( "the type of an Ord value,"
-                  <> " which can only be one of `EQ` `LT` or `GT`"
-              )
-              "100", -- category
-            completionToken
-              "DefaultType"
-              "a type value literal"
-              "the type of a default value"
-              "100", -- category
-            completionToken
-              "SinkType"
-              "a type value literal"
-              "the type of an event sink value"
-              "100", -- category
-            completionToken
-              "ExprType"
-              "a type value literal"
-              "the type of an expression value"
-              "100", -- category
-            completionToken
-              "TypeType"
-              "a type value literal"
-              "the type of a type value"
               "100" -- category
           ]
 

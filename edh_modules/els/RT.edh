@@ -87,19 +87,19 @@ export {
    #}
   class MetaWorld {
 
-    locate :: ( StringType ) -> MetaModule
+    locate :: ( String ) -> MetaModule
     {##
      # locate the meta module by import specification
      #}
     method locate( moduSpec ) pass
 
-    locateByFile :: ( StringType ) -> MetaModule
+    locateByFile :: ( String ) -> MetaModule
     {##
      # locate the meta module by absolute path
      #}
     method locateByFile( absFilePath ) pass
 
-    diags :: ( MetaModule ) -> json![ json!DictType ]
+    diags :: ( MetaModule ) -> json![ json!Dict ]
     {##
      # obtain diagnostics generated during parsing and resolution of the module
      #
@@ -108,22 +108,22 @@ export {
      #}
     method diags( modu ) pass
 
-    defi :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
-    -> json!DictType
+    defi :: ( MetaModule, line!int!Decimal, char!int!Decimal )
+    -> json!Dict
     {##
      # obtain symbol definition at the specified location
      #}
     method defi( modu, line, char ) pass
 
-    hover :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
-    -> json!DictType
+    hover :: ( MetaModule, line!int!Decimal, char!int!Decimal )
+    -> json!Dict
     {##
      # obtain symbol documentation at the specified location
      #}
     method hover( modu, line, char ) pass
 
-    suggest :: ( MetaModule, line!int!DecimalType, char!int!DecimalType )
-    -> json!DictType
+    suggest :: ( MetaModule, line!int!Decimal, char!int!Decimal )
+    -> json!Dict
     {##
      # obtain suggestions (autocompletion) at the specified location
      #}
