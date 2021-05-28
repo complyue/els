@@ -1622,6 +1622,54 @@ el'AnalyzeExpr
           exit
     --
 
+    -- attribute prototype annotation
+    "=:" -> case lhExpr of
+      ExprSrc (AttrExpr (DirectRef !addr)) !addr'span -> do
+        !docCmt <- takeDocComment eas
+        el'RunTx eas $
+          el'AnalyzeExpr rhExpr $ \ !rhVal !easDone -> do
+            el'ResolveAttrAddr easDone addr $ \case
+              Nothing -> returnAsExpr easDone
+              Just (AttrByName "_") -> el'Exit easDone exit $ EL'Const nil
+              Just !attrKey -> do
+                !attrAnno <-
+                  newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
+                !maybePrevDef <-
+                  iopdLookup attrKey $
+                    if el'ctx'eff'defining eac
+                      then el'branch'effs'wip bwip
+                      else el'branch'attrs'wip bwip
+                let !attrDef =
+                      EL'AttrDef
+                        attrKey
+                        docCmt
+                        opSym
+                        addr'span
+                        xsrc
+                        rhVal
+                        attrAnno
+                        maybePrevDef
+                let !attrs = el'branch'attrs'wip bwip
+                iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
+                iopdInsert attrKey attrDef attrs
+                recordAttrDef eac attrDef
+                el'Exit easDone exit $ EL'Const nil
+      ExprSrc (InfixExpr ("@", _) _ _) _ ->
+        -- very possibly to be annotation of bare at-notation,
+        -- unintended to be parsed as infix at-notation,
+        -- will be diag'ed by analyzing it
+        el'RunTx eas $
+          el'AnalyzeExpr lhExpr $ \_lhVal !eas' -> returnAsExpr eas'
+      ExprSrc _ !bad'anno'span -> do
+        el'LogDiag
+          diags
+          el'Warning
+          bad'anno'span
+          "bad-attr-anno"
+          "bad attribute annotation"
+        returnAsExpr eas
+    --
+
     -- attribute type annotation
     "::" -> case lhExpr of
       ExprSrc (AttrExpr (DirectRef !addr)) _ ->
@@ -1771,7 +1819,7 @@ el'AnalyzeExpr
                           --
 
                           -- note "?=" goes otherwise
-                          if "=" == opSym || "|=" == opSym || ":=" == opSym
+                          if opSym `elem` ["=", ":=", "|="]
                             then do
                               -- check if it shadows attr from outer scopes
                               case swip of
