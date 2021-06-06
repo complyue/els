@@ -29,15 +29,15 @@ data EL'AnalysisState = EL'AnalysisState
   { el'world :: !EL'World,
     el'ana'queue :: !(TVar AnalysisQueue),
     el'context :: !EL'Context,
-    el'doc'cmt :: TVar (Maybe DocComment),
+    el'doc'cmt :: TVar OptDocCmt,
     el'ets :: !EdhThreadState
   }
 
-takeDocComment :: EL'AnalysisState -> STM (Maybe DocComment)
-takeDocComment !eas = do
-  !docCmt <- readTVar docCmtVar
-  maybe (pure ()) (const $ writeTVar docCmtVar Nothing) docCmt
-  return docCmt
+takeDocComment :: EL'AnalysisState -> STM OptDocCmt
+takeDocComment !eas =
+  readTVar docCmtVar >>= \case
+    NoDocCmt -> return NoDocCmt
+    !docCmt -> docCmt <$ writeTVar docCmtVar NoDocCmt
   where
     docCmtVar = el'doc'cmt eas
 

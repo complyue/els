@@ -396,7 +396,7 @@ asModuleParsed !ms !exit !ets =
                 recover $
                   EL'ParsedModule
                     otfVersion
-                    Nothing
+                    NoDocCmt
                     []
                     [el'Diag el'Error noSrcRange "err-parse" exDesc]
             where
@@ -611,7 +611,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !name'def =
         EL'AttrDef
           (AttrByName "__name__")
-          (Just ["import name of current module"])
+          (DocCmt ["import name of current module"])
           "<module>"
           noSrcRange
           (ExprSrc (LitExpr (StringLiteral modu'name)) noSrcRange)
@@ -629,7 +629,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !file'def =
         EL'AttrDef
           (AttrByName "__file__")
-          (Just ["absolute path of current module's source file"])
+          (DocCmt ["absolute path of current module's source file"])
           "<module>"
           noSrcRange
           (ExprSrc (LitExpr (StringLiteral modu'file)) noSrcRange)
@@ -639,7 +639,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
       !path'def =
         EL'AttrDef
           (AttrByName "__path__")
-          ( Just
+          ( DocCmt
               [ "absolute path of the directory containing current module's"
                   <> " source file"
               ]
@@ -663,7 +663,7 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
   !branchRegions <- newTVar [EL'Region beginningSrcPos builtinAttrs]
   !moduScopes <- newTVar []
   !moduRegions <- newTVar []
-  !docCmtVar <- newTVar Nothing
+  !docCmtVar <- newTVar NoDocCmt
   let !moduObj =
         EL'Object
           el'ModuleClass
@@ -909,7 +909,7 @@ el'AnalyzeStmt
         let !attrDef =
               EL'AttrDef
                 attrKey
-                Nothing
+                NoDocCmt
                 "<let>"
                 focus'span
                 (ExprSrc (BlockExpr [let'stmt]) stmt'span)
@@ -1554,7 +1554,7 @@ el'AnalyzeExpr
 el'AnalyzeExpr
   xsrc@( ExprSrc
            ( InfixExpr
-               (!opSym, SrcRange op'start _op'end)
+               (OpSymSrc !opSym (SrcRange op'start _op'end))
                lhExpr@(ExprSrc !lhx lh'span@(SrcRange _lh'start lh'end))
                !rhExpr
              )
@@ -1636,7 +1636,7 @@ el'AnalyzeExpr
             !attrAnno <- EL'AttrAnno rhExpr <$> readTVar (el'doc'cmt eas)
             iopdInsert attrKey attrAnno (el'branch'annos'wip bwip)
             el'Exit eas exit $ EL'Const nil
-      ExprSrc (InfixExpr ("@", _) _ _) _ ->
+      ExprSrc (InfixExpr (OpSymSrc "@" _) _ _) _ ->
         -- very possibly to be annotation of bare at-notation,
         -- unintended to be parsed as infix at-notation,
         -- will be diag'ed by analyzing it
@@ -1866,7 +1866,7 @@ el'AnalyzeExpr
                   el'AnalyzeExpr idxExpr $
                     const $
                       el'AnalyzeExpr tgtExpr $ const returnAsExpr
-              ExprSrc (InfixExpr ("@", _) _ _) _ ->
+              ExprSrc (InfixExpr (OpSymSrc "@" _) _ _) _ ->
                 el'RunTx easDone $
                   el'AnalyzeExpr lhExpr $ -- assuming it be update, i.e.
                   -- initial assignment should not happen this way
@@ -1884,7 +1884,7 @@ el'AnalyzeExpr
       doBranch = do
         let (!fullExpr, !maybeGuardExpr) = case lhx of
               -- pattern or value match, guarded
-              InfixExpr ("|", _) (ExprSrc !matchExpr _) !guardExpr ->
+              InfixExpr (OpSymSrc "|" _) (ExprSrc !matchExpr _) !guardExpr ->
                 (matchExpr, Just guardExpr)
               -- pattern or value match
               _ -> (lhx, Nothing)
@@ -1909,7 +1909,7 @@ el'AnalyzeExpr
                   let !attrDef =
                         EL'AttrDef
                           attrKey
-                          Nothing
+                          NoDocCmt
                           opSym
                           (exprSrcSpan attrExpr)
                           xsrc
@@ -1958,7 +1958,7 @@ el'AnalyzeExpr
                             let !attrDef =
                                   EL'AttrDef
                                     key
-                                    Nothing
+                                    NoDocCmt
                                     opSym
                                     arg'span
                                     xsrc
@@ -1995,7 +1995,7 @@ el'AnalyzeExpr
                                 let !attrDef =
                                       EL'AttrDef
                                         tgtKey
-                                        Nothing
+                                        NoDocCmt
                                         opSym
                                         arg'span
                                         xsrc
@@ -2036,7 +2036,7 @@ el'AnalyzeExpr
                             let !attrDef =
                                   EL'AttrDef
                                     key
-                                    Nothing
+                                    NoDocCmt
                                     opSym
                                     arg'span
                                     xsrc
@@ -2126,7 +2126,7 @@ el'AnalyzeExpr
                         !p1Def =
                           EL'AttrDef
                             p1Key
-                            Nothing
+                            NoDocCmt
                             opSym
                             p1Span
                             xsrc
@@ -2135,7 +2135,7 @@ el'AnalyzeExpr
                             Nothing
                     analyzeBranch $! (p1Key, p1Def) : defs
                 InfixExpr
-                  (":", _)
+                  (OpSymSrc ":" _)
                   !p2Expr
                   p1Expr'@( ExprSrc
                               ( AttrExpr
@@ -2150,7 +2150,7 @@ el'AnalyzeExpr
                         !p1Def =
                           EL'AttrDef
                             p1Key
-                            Nothing
+                            NoDocCmt
                             opSym
                             p1Span
                             xsrc
@@ -2204,7 +2204,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        ("=", _)
+                        (OpSymSrc "=" _)
                         ( ExprSrc
                             ( CallExpr
                                 clsExpr@ExprSrc {}
@@ -2233,7 +2233,7 @@ el'AnalyzeExpr
                             let !attrDef =
                                   EL'AttrDef
                                     instKey
-                                    Nothing
+                                    NoDocCmt
                                     opSym
                                     inst'span
                                     instExpr
@@ -2249,7 +2249,7 @@ el'AnalyzeExpr
                           let !attrDef =
                                 EL'AttrDef
                                   instKey
-                                  Nothing
+                                  NoDocCmt
                                   opSym
                                   inst'span
                                   instExpr
@@ -2292,7 +2292,7 @@ el'AnalyzeExpr
                           let !attrDef =
                                 EL'AttrDef
                                   instKey
-                                  Nothing
+                                  NoDocCmt
                                   opSym
                                   inst'span
                                   instExpr
@@ -2305,7 +2305,7 @@ el'AnalyzeExpr
                           let !attrDef =
                                 EL'AttrDef
                                   instKey
-                                  Nothing
+                                  NoDocCmt
                                   opSym
                                   inst'span
                                   instExpr
@@ -2327,7 +2327,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        (":>", _)
+                        (OpSymSrc ":>" _)
                         headExpr@( ExprSrc
                                      ( AttrExpr
                                          ( DirectRef
@@ -2366,10 +2366,10 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        (">@", _)
+                        (OpSymSrc ">@" _)
                         prefixExpr@( ExprSrc
                                        ( InfixExpr
-                                           ("@<", _)
+                                           (OpSymSrc "@<" _)
                                            ( ExprSrc
                                                ( AttrExpr
                                                    ( DirectRef
@@ -2413,7 +2413,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        (">@", _)
+                        (OpSymSrc ">@" _)
                         !prefixExpr
                         suffixExpr@( ExprSrc
                                        ( AttrExpr
@@ -2439,7 +2439,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        ("@<", _)
+                        (OpSymSrc "@<" _)
                         prefixExpr@( ExprSrc
                                        ( AttrExpr
                                            ( DirectRef
@@ -2495,7 +2495,9 @@ el'AnalyzeExpr
             -- {( x:y:z:... )} -- pair pattern
             [ StmtSrc
                 ( ExprStmt
-                    (ParenExpr p1Expr@(ExprSrc (InfixExpr (":", _) _ _) _))
+                    ( ParenExpr
+                        p1Expr@(ExprSrc (InfixExpr (OpSymSrc ":" _) _ _) _)
+                      )
                     _docCmt
                   )
                 _
@@ -2531,7 +2533,7 @@ el'AnalyzeExpr
                     !attrDef =
                       EL'AttrDef
                         valKey
-                        Nothing
+                        NoDocCmt
                         opSym
                         val'span
                         valExpr
@@ -2547,7 +2549,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        (":=", _)
+                        (OpSymSrc ":=" _)
                         termExpr@( ExprSrc
                                      ( AttrExpr
                                          ( DirectRef
@@ -2989,7 +2991,7 @@ el'AnalyzeExpr
                         !importeeDef =
                           EL'AttrDef
                             (AttrByName "this")
-                            Nothing
+                            NoDocCmt
                             "<module>"
                             zeroSrcRange
                             ( ExprSrc
@@ -3169,7 +3171,7 @@ el'AnalyzeExpr
                         ( ( dfKey,
                             EL'AttrDef
                               dfKey
-                              Nothing
+                              NoDocCmt
                               "<data-class-field>"
                               df'name'span
                               xsrc
@@ -3201,7 +3203,7 @@ el'AnalyzeExpr
             ( AttrByName mthName,
               EL'AttrDef
                 (AttrByName mthName)
-                (Just [mthDoc])
+                (DocCmt [mthDoc])
                 "<data-class-def>"
                 cls'name'span
                 xsrc
@@ -3492,7 +3494,7 @@ el'AnalyzeExpr
                       ( ( argKey,
                           EL'AttrDef
                             argKey
-                            Nothing
+                            NoDocCmt
                             "<namespace-arg>"
                             arg'name'span
                             xsrc
@@ -3734,7 +3736,7 @@ el'AnalyzeExpr
                             ( ( argKey,
                                 EL'AttrDef
                                   argKey
-                                  Nothing
+                                  NoDocCmt
                                   "<loop-receiver>"
                                   arg'name'span
                                   x
@@ -4251,7 +4253,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                           let !attrDef =
                                 EL'AttrDef
                                   attrKey
-                                  Nothing
+                                  NoDocCmt
                                   opSym
                                   addr'span
                                   ( ExprSrc
@@ -4319,7 +4321,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                   ( ( argKey,
                       EL'AttrDef
                         argKey
-                        Nothing
+                        NoDocCmt
                         opSym
                         arg'name'span
                         srcExpr

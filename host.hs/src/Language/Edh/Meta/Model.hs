@@ -20,6 +20,8 @@ import Language.Edh.LS.SymbolKind (SymbolKind)
 import qualified Language.Edh.LS.SymbolKind as SymbolKind
 import Prelude
 
+type DocComment = [Text]
+
 -- diagnostic data structures per LSP specification 3.15
 
 el'LogDiag ::
@@ -202,7 +204,7 @@ data EL'ModuParsing
 
 data EL'ParsedModule = EL'ParsedModule
   { el'modu'src'version :: !Int,
-    el'modu'doc'comment :: !(Maybe DocComment),
+    el'modu'doc'comment :: !OptDocCmt,
     el'modu'stmts :: ![StmtSrc],
     -- | diagnostics generated from this stage of analysis
     el'parsing'diags :: ![EL'Diagnostic]
@@ -278,7 +280,7 @@ data EL'AttrDef = EL'AttrDef
   { -- | the key of this attribute
     el'attr'def'key :: !AttrKey,
     -- | doc comment preceeding this definition
-    el'attr'def'doc :: !(Maybe DocComment),
+    el'attr'def'doc :: !OptDocCmt,
     -- | the operation created this attribute
     -- in addition to assignment operators e.g. @=@ @+=@ etc. it can be
     -- @<arrow>@, @<proc-def>@, @<import>@ and @<let>@ etc.
@@ -329,7 +331,7 @@ data EL'AttrAnno = EL'AttrAnno
     -- | doc comment of the annotation
     -- this can show up on IDE hover, at least before we can generate more
     -- sophisticated descriptions for that
-    el'anno'doc :: !(Maybe DocComment)
+    el'anno'doc :: !OptDocCmt
   }
 
 -- | 冇 annotation
@@ -417,8 +419,8 @@ el'AttrDoc :: EL'AttrDef -> [DocComment]
 el'AttrDoc = go []
   where
     go !docs !def = case el'attr'def'doc def of
-      Nothing -> go' docs
-      Just !doc -> go' (doc : docs)
+      NoDocCmt -> go' docs
+      DocCmt !doc -> go' (doc : docs)
       where
         go' !docs' = case el'attr'def'value def of
           EL'External _ms !def' -> go docs' def'
@@ -851,7 +853,7 @@ titledBlock
         line1 : _ -> (decorTitle line1, "")
 
 procDecl ::
-  Maybe DocComment ->
+  OptDocCmt ->
   AttrAddrSrc ->
   SymbolKind ->
   SrcRange ->
@@ -873,11 +875,11 @@ procDecl
       }
     where
       detail = case cmt of
-        Nothing -> ""
-        Just [] -> ""
-        Just (line1 : _) -> line1
+        NoDocCmt -> ""
+        DocCmt [] -> ""
+        DocCmt (line1 : _) -> line1
 
-moduSymbols :: Text -> Maybe DocComment -> [StmtSrc] -> [DocumentSymbol]
+moduSymbols :: Text -> OptDocCmt -> [StmtSrc] -> [DocumentSymbol]
 moduSymbols !name !cmt !stmts = [moduSym]
   where
     !moduSym =
@@ -890,7 +892,7 @@ moduSymbols !name !cmt !stmts = [moduSym]
           el'sym'children = blockSymbols stmts
         }
     !detail = case cmt of
-      Just (line1 : _) -> line1
+      DocCmt (line1 : _) -> line1
       _ -> ""
     (!range, !selRange) = case stmts of
       [] -> (zeroSrcRange, zeroSrcRange)
@@ -908,36 +910,36 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
     stmtSymbols :: StmtSrc -> [DocumentSymbol]
     stmtSymbols (StmtSrc (ExprStmt !x !doc) !stmt'span) =
       exprSymbols doc stmt'span x
-    stmtSymbols (StmtSrc (GoStmt !x) _) = exprSymbols' Nothing x
-    stmtSymbols (StmtSrc (DeferStmt !x) _) = exprSymbols' Nothing x
+    stmtSymbols (StmtSrc (GoStmt !x) _) = exprSymbols' NoDocCmt x
+    stmtSymbols (StmtSrc (DeferStmt !x) _) = exprSymbols' NoDocCmt x
     stmtSymbols (StmtSrc (LetStmt _ (ArgsPacker !sndrs _)) _) =
-      concat $ exprSymbols' Nothing . sentArgExprSrc <$> sndrs
-    stmtSymbols (StmtSrc (ExtendsStmt !x) _) = exprSymbols' Nothing x
+      concat $ exprSymbols' NoDocCmt . sentArgExprSrc <$> sndrs
+    stmtSymbols (StmtSrc (ExtendsStmt !x) _) = exprSymbols' NoDocCmt x
     stmtSymbols (StmtSrc (PerceiveStmt !x !stmt) _) =
-      exprSymbols' Nothing x ++ stmtSymbols stmt
-    stmtSymbols (StmtSrc (ThrowStmt !x) _) = exprSymbols' Nothing x
-    stmtSymbols (StmtSrc (ReturnStmt !x _docCmt) _) = exprSymbols' Nothing x
+      exprSymbols' NoDocCmt x ++ stmtSymbols stmt
+    stmtSymbols (StmtSrc (ThrowStmt !x) _) = exprSymbols' NoDocCmt x
+    stmtSymbols (StmtSrc (ReturnStmt !x _docCmt) _) = exprSymbols' NoDocCmt x
     stmtSymbols _ = []
 
-    exprSymbols' :: Maybe DocComment -> ExprSrc -> [DocumentSymbol]
+    exprSymbols' :: OptDocCmt -> ExprSrc -> [DocumentSymbol]
     exprSymbols' !doc (ExprSrc !x !expr'span) = exprSymbols doc expr'span x
 
-    exprSymbols'' :: Maybe DocComment -> SrcRange -> ExprSrc -> [DocumentSymbol]
+    exprSymbols'' :: OptDocCmt -> SrcRange -> ExprSrc -> [DocumentSymbol]
     exprSymbols'' !doc !full'span (ExprSrc !x _) = exprSymbols doc full'span x
 
-    exprSymbols :: Maybe DocComment -> SrcRange -> Expr -> [DocumentSymbol]
+    exprSymbols :: OptDocCmt -> SrcRange -> Expr -> [DocumentSymbol]
     exprSymbols !doc !full'span (BlockExpr !nested'stmts) = case doc of
-      Just !cmt -> [titledBlock cmt full'span $ blockSymbols nested'stmts]
-      Nothing -> blockSymbols nested'stmts
+      DocCmt !cmt -> [titledBlock cmt full'span $ blockSymbols nested'stmts]
+      NoDocCmt -> blockSymbols nested'stmts
     exprSymbols !doc !full'span (ScopedBlockExpr !nested'stmts) = case doc of
-      Just !cmt -> [titledBlock cmt full'span $ blockSymbols nested'stmts]
-      Nothing -> blockSymbols nested'stmts
+      DocCmt !cmt -> [titledBlock cmt full'span $ blockSymbols nested'stmts]
+      NoDocCmt -> blockSymbols nested'stmts
     exprSymbols
       !doc
       !full'span
       (NamespaceExpr (ProcDecl !name _args !body _loc) (ArgsPacker !sndrs _)) =
         [ procDecl doc name SymbolKind.Namespace full'span $
-            concat (exprSymbols' Nothing . sentArgExprSrc <$> sndrs)
+            concat (exprSymbols' NoDocCmt . sentArgExprSrc <$> sndrs)
               ++ stmtSymbols body
         ]
     exprSymbols
