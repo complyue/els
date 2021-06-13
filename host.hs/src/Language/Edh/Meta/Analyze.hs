@@ -1168,6 +1168,23 @@ el'AnalyzeStmt (StmtSrc RethrowStmt _stmt'span) !exit !eas =
   el'Exit eas exit EL'Rethrow
 --
 
+-- parse error
+el'AnalyzeStmt
+  (StmtSrc (IllegalSegment !errMsg !errPos) !stmt'span)
+  !exit
+  !eas = do
+    el'LogDiag
+      diags
+      el'Error
+      stmt'span {src'end = errPos}
+      "illegal-code"
+      errMsg
+    el'Exit eas exit $ EL'Const nil
+    where
+      eac = el'context eas
+      diags = el'ctx'diags eac
+--
+
 -- the rest of statements not analyzed
 el'AnalyzeStmt _stmt !exit !eas = el'Exit eas exit $ EL'Const nil
 
