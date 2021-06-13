@@ -43,11 +43,8 @@ installLanguageServerBatteries !world =
                      (AttrByName "MetaWorld", EdhObject mwClass),
                      (AttrByName "LangServer", EdhObject lsClass)
                    ]
-        !artsDict <-
-          EdhDict
-            <$> createEdhDict [(attrKeyValue k, v) | (k, v) <- moduArts]
-        flip iopdUpdate (edh'scope'entity moduScope) $
-          [(k, v) | (k, v) <- moduArts]
-            ++ [(AttrByName "__exports__", artsDict)]
+        iopdUpdate moduArts $ edh'scope'entity moduScope
+        prepareExpStore ets (edh'scope'this moduScope) $ \ !esExps ->
+          iopdUpdate moduArts esExps
 
         exit
