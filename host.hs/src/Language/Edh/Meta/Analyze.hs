@@ -494,7 +494,7 @@ parseModuleSource !srcVersion !moduSource (SrcDoc !moduFile) !exit !ets =
                 !edhWrapException = edh'exception'wrapper world
                 !edhErr =
                   EdhError ParseError msg (toDyn nil) $ getEdhErrCtx 0 ets
-            edhWrapException (toException edhErr)
+            edhWrapException (Just ets) (toException edhErr)
               >>= \ !exo -> edhThrow ets (EdhObject exo)
           Right (!stmts, !docCmt) ->
             atomically $

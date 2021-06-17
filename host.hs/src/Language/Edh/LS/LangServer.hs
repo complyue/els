@@ -196,7 +196,7 @@ createLangServerClass !addrClass !clsOuterScope =
                         tryReadTMVar clientEoL >>= \case
                           Nothing -> exitEdh ets exit $ EdhBool False
                           Just (Left !e) ->
-                            edh'exception'wrapper world e
+                            edh'exception'wrapper world (Just ets) e
                               >>= \ !exo -> exitEdh ets exit $ EdhObject exo
                           Just (Right ()) -> exitEdh ets exit $ EdhBool True
 
@@ -211,6 +211,7 @@ createLangServerClass !addrClass !clsOuterScope =
                             Left (Left !ex) ->
                               edh'exception'wrapper
                                 (edh'prog'world $ edh'thread'prog ets)
+                                (Just ets)
                                 ex
                                 >>= \ !exo -> edhThrow ets $ EdhObject exo
                             Right (Rpc _headers !content) -> do
@@ -367,7 +368,7 @@ createLangServerClass !addrClass !clsOuterScope =
       tryReadTMVar (edh'lang'server'eol server) >>= \case
         Nothing -> exitEdh ets exit $ EdhBool False
         Just (Left !e) ->
-          edh'exception'wrapper world e
+          edh'exception'wrapper world (Just ets) e
             >>= \ !exo -> exitEdh ets exit $ EdhObject exo
         Just (Right ()) -> exitEdh ets exit $ EdhBool True
       where
@@ -377,7 +378,7 @@ createLangServerClass !addrClass !clsOuterScope =
     joinProc !exit !ets = withThisHostObj ets $ \ !server ->
       readTMVar (edh'lang'server'eol server) >>= \case
         Left !e ->
-          edh'exception'wrapper world e
+          edh'exception'wrapper world (Just ets) e
             >>= \ !exo -> edhThrow ets $ EdhObject exo
         Right () -> exitEdh ets exit nil
       where
