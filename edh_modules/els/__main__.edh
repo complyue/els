@@ -15,7 +15,7 @@ import * '.'
 import (** cfg ) 'els/config'
 
 # start listening
-els = LangServer(** cfg )
+els = LangServer( **cfg )
 
 # wait the result, either sucess or failure
 case els.addrs() of {

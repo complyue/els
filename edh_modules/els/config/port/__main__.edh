@@ -2,4 +2,4 @@
 # meant for the lsc VSCode extension to read the config via shell command:
 #   epm x edhm els/config/port
 import ( port, ** ) 'els/config'
-console.print( port )
+console.print$ port
