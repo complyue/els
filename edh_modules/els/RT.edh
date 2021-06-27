@@ -137,8 +137,8 @@ export {
   class LangServer {
 
     method __init__(
+      service,
       port= 1707, port'max= None, addr= '127.0.0.1',
-      modu= 'els/serve', init= None,
     ) pass
 
     method addrs() pass

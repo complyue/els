@@ -20,7 +20,9 @@ import Prelude
 
 data LangServer = LangServer
   { -- the import spec of the service module
-    edh'lang'server'modu :: !Text,
+    edh'lang'service :: !EdhValue,
+    -- the world in which the service will run
+    edh'lang'service'world :: !EdhWorld,
     -- local network port to bind
     edh'lang'server'port :: !PortNumber,
     -- max port number to try bind
@@ -30,9 +32,7 @@ data LangServer = LangServer
     -- actually listened network addresses
     edh'lang'serving'addrs :: !(TMVar [AddrInfo]),
     -- end-of-life status
-    edh'lang'server'eol :: !(TMVar (Either SomeException ())),
-    -- service module initializer, must callable if not nil
-    edh'lang'server'init :: !EdhValue
+    edh'lang'server'eol :: !(TMVar (Either SomeException ()))
   }
 
 createLangServerClass :: Object -> Scope -> STM Object
@@ -53,18 +53,16 @@ createLangServerClass !addrClass !clsOuterScope =
       iopdUpdate mths $ edh'scope'entity clsScope
   where
     serverAllocator ::
+      "service" !: EdhValue ->
       "port" ?: Int ->
       "port'max" ?: Int ->
       "addr" ?: Text ->
-      "modu" ?: Text ->
-      "init" ?: EdhValue ->
       EdhObjectAllocator
     serverAllocator
+      (mandatoryArg -> !service)
       (defaultArg 1707 -> !ctorPort)
       (defaultArg ctorPort -> port'max)
       (defaultArg "127.0.0.1" -> !ctorAddr)
-      (defaultArg "els/serve" -> !modu)
-      (defaultArg nil -> !init_)
       !ctorExit
       !etsCtor =
         if edh'in'tx etsCtor
@@ -73,25 +71,19 @@ createLangServerClass !addrClass !clsOuterScope =
               etsCtor
               UsageError
               "you don't create network objects within a transaction"
-          else case edhUltimate init_ of
-            EdhNil -> withInit nil
-            mth@(EdhProcedure EdhMethod {} _) -> withInit mth
-            mth@(EdhBoundProc EdhMethod {} _ _ _) -> withInit mth
-            !badInit -> edhValueDesc etsCtor badInit $ \ !badDesc ->
-              throwEdh etsCtor UsageError $ "invalid init: " <> badDesc
-        where
-          withInit !__modu_init__ = do
+          else do
             !servAddrs <- newEmptyTMVar
             !servEoL <- newEmptyTMVar
             let !server =
                   LangServer
-                    { edh'lang'server'modu = modu,
+                    { edh'lang'service = service,
+                      edh'lang'service'world =
+                        edh'prog'world $ edh'thread'prog etsCtor,
                       edh'lang'server'port = fromIntegral ctorPort,
                       edh'lang'server'port'max = fromIntegral port'max,
                       edh'lang'server'addr = ctorAddr,
                       edh'lang'serving'addrs = servAddrs,
-                      edh'lang'server'eol = servEoL,
-                      edh'lang'server'init = __modu_init__
+                      edh'lang'server'eol = servEoL
                     }
             runEdhTx etsCtor $
               edhContIO $ do
@@ -107,17 +99,17 @@ createLangServerClass !addrClass !clsOuterScope =
                         . tryPutTMVar servEoL
                     )
                 atomically $ ctorExit Nothing $ HostStore (toDyn server)
-
+        where
           serverThread :: LangServer -> IO ()
           serverThread
             ( LangServer
-                !servModu
+                !servProc
+                !servWorld
                 !servPort
                 !portMax
                 !servAddr
                 !servAddrs
                 !servEoL
-                !__modu_init__
               ) =
               do
                 servThId <- myThreadId
@@ -247,78 +239,48 @@ createLangServerClass !addrClass !clsOuterScope =
                               edhValueStr ets v $ \ !sv ->
                                 go rest ((attrKeyStr k, sv) : hdrs)
 
-                      prepService :: EdhModulePreparation
-                      prepService !etsModu !exit =
-                        mkObjSandbox etsModu moduObj $ \ !sandboxScope -> do
-                          -- define and implant procedures to the module being
-                          -- prepared
-                          !moduMths <-
-                            sequence
-                              [ (AttrByName nm,)
-                                  <$> mkHostProc moduScope vc nm hp
-                                | (nm, vc, hp) <-
-                                    [ ( "eol",
-                                        EdhMethod,
-                                        wrapHostProc
-                                          ccEoLProc
-                                      ),
-                                      ( "recvOnePkt",
-                                        EdhMethod,
-                                        wrapHostProc $
-                                          recvOnePktProc sandboxScope
-                                      ),
-                                      ( "postOnePkt",
-                                        EdhMethod,
-                                        wrapHostProc postOnePktProc
-                                      )
-                                    ]
-                              ]
-                          let !moduArts =
-                                (AttrByName "clientId", EdhString clientId) :
-                                moduMths
-                          iopdUpdate moduArts $ edh'scope'entity moduScope
+                      edhHandler = pushEdhStack $ \ !etsEffs ->
+                        -- prepare a dedicated scope atop world root scope, with els effects
+                        -- implanted, then call the configured service procedure from there
+                        let effsScope = contextScope $ edh'context etsEffs
+                         in mkScopeSandbox etsEffs effsScope $ \ !sandboxScope -> do
+                              !effMths <-
+                                sequence
+                                  [ (AttrByName nm,) <$> mkHostProc effsScope vc nm hp
+                                    | (nm, vc, hp) <-
+                                        [ ("eol", EdhMethod, wrapHostProc ccEoLProc),
+                                          ( "recvOnePkt",
+                                            EdhMethod,
+                                            wrapHostProc $ recvOnePktProc sandboxScope
+                                          ),
+                                          ("postOnePkt", EdhMethod, wrapHostProc postOnePktProc)
+                                        ]
+                                  ]
+                              let !effArts = (AttrByName "clientId", EdhString clientId) : effMths
+                              prepareEffStore etsEffs (edh'scope'entity effsScope)
+                                >>= iopdUpdate effArts
 
-                          -- call the service module initialization method in
-                          -- the module context (where both contextual this/that
-                          -- are the module object)
-                          if __modu_init__ == nil
-                            then exit
-                            else edhPrepareCall'
-                              etsModu
-                              __modu_init__
-                              ( ArgsPack
-                                  [EdhObject $ edh'scope'this moduScope]
-                                  odEmpty
-                              )
-                              $ \ !mkCall -> runEdhTx etsModu $
-                                mkCall $ \_result _ets -> exit
-                        where
-                          !moduScope = contextScope $ edh'context etsModu
-                          !moduObj = edh'scope'this moduScope
+                              runEdhTx etsEffs $ edhMakeCall servProc [] haltEdhProgram
 
-                  -- run the server module on a separate thread as another
-                  -- program
+                  -- run the service procedure on a separate thread as another Edh program
+                  --
+                  -- this implements structured concurrency per client connection,
+                  -- i.e. all Edh threads spawned by this client will terminate upon its
+                  -- disconnection, while resource cleanups should be scheduled via defer
+                  -- mechanism, or exception handling, that expecting `ThreadTerminate` to be
+                  -- thrown, the cleanup action is usually in a finally block in this way
                   void $
-                    forkFinally
-                      (runEdhModule' world (T.unpack servModu) prepService)
+                    forkFinally (runEdhProgram' servWorld edhHandler) $
                       -- mark client end-of-life with the result anyway
-                      $ void
-                        . atomically
-                        . tryPutTMVar clientEoL
-                        . void
+                      void . atomically . tryPutTMVar clientEoL . void
 
-                  -- pump commands in,
-                  -- make this thread the only one reading the handle
-                  -- note
-                  --   this won't return, will be asynchronously killed on eol
+                  -- pump commands in, make this thread the only one reading the handle
+                  -- note this won't return, will be asynchronously killed on eol
                   void $
                     forkFinally
                       (receiveRpcStream clientId (recv sock) pktSink clientEoL)
                       -- mark client end-of-life upon disconnected or err out
-                      $ void
-                        . atomically
-                        . tryPutTMVar clientEoL
-                        . void
+                      $ void . atomically . tryPutTMVar clientEoL . void
 
                   let serializeCmdsOut :: IO ()
                       serializeCmdsOut =
@@ -339,18 +301,16 @@ createLangServerClass !addrClass !clsOuterScope =
 
     reprProc :: EdhHostProc
     reprProc !exit !ets =
-      withThisHostObj ets $ \(LangServer !modu !port !port'max !addr _ _ _) ->
+      withThisHostObj ets $ \(LangServer _ _ !port !port'max !addr _ _) ->
         exitEdh ets exit $
           EdhString $
-            "LangServer("
+            "LangServer<port= "
               <> T.pack (show port)
-              <> ", "
+              <> ", port'max= "
               <> T.pack (show port'max)
-              <> ", "
+              <> ", addr= "
               <> T.pack (show addr)
-              <> ", "
-              <> T.pack (show modu)
-              <> ")"
+              <> ">"
 
     addrsProc :: EdhHostProc
     addrsProc !exit !ets = withThisHostObj ets $
