@@ -1,0 +1,300 @@
+
+# well known symbols here
+import * './symbols'
+
+# trigger the globally shared web REPL
+import * './debug'
+
+# trigger the instantiation of the globally shared world at analysis time
+import * './world'
+
+
+{## per LSP client service procedure #}
+export method edhLanguageService() {
+
+  {
+
+    # network identifier of the language server client
+    #}
+    clientId = perform clientId
+    clientId =: '<??>'
+
+    {##
+     # post a request/notif/reply in [JSON-RPC](http://www.jsonrpc.org) form,
+     # to the language server client.
+     #
+     # rpcOut should be the payload stringified from an Edh dict compliant to LSP.
+     #}
+    postOnePkt = perform postOnePkt
+    postOnePkt =: (rpcOut, **headers) => pass
+
+    {##
+     # receive a request/notif/reply in [JSON-RPC](http://www.jsonrpc.org) form,
+     # from the language server client.
+     #
+     # a packet payload will be eval'ed within a sandboxed Edh env based off
+     # this module's scope, as JSON format is syntactically valid in Edh, the
+     # result will be an Edh dict, as LSP top level will always be a JSON object.
+     #}
+    recvOnePkt = perform recvOnePkt
+    recvOnePkt =: () => pass
+
+    {##
+     # check end-of-life of the client connection
+     #}
+    eol = perform eol
+    eol =: () => false
+
+
+    console.debug<| 'ELS client ' ++ clientId ++ ' connected.'
+    defer {
+      console.debug<| 'ELS done with client ' ++ clientId
+    }
+
+
+    # put necessary artifacts in to effect here
+    effect import * './effects'
+
+
+    {## Event sinks per lsc request, majorly used for cancellation by lsc
+     # Keyed by lsc request id #}
+    clientRequests = {}
+
+    {## Event sink for all responses from lsc wrt lss requests
+     #}
+    globalResponses = sink
+
+    {## Registered listeners for responses from lsc wrt lss requests
+     # Keyed by lss request id #}
+    responseListeners = {}
+
+    namespace services () {
+
+      # pull-in all services methods from their respective modules
+      # we are sandboxed as `edhLanguageService()` being a  LS service procedure, can only import from objects or apks, `services` is well prepared at top level of this module during loading
+      import * './services'
+
+      method @'$/cancelRequest'( id as idReq ) {
+        ai case clientRequests[ idReq ] of { cancelSignal } -> {
+          cancelSignal <- { break }
+          clientRequests[ idReq ] = nil
+        }
+      }
+
+    }
+
+    {##
+     # for a service method to post a lsp notification
+     #}
+    effect method lspNotify( notifMthName, *arrayParams, **objectParams ) {
+      objectParams and arrayParams and ( console.warn<|
+        'positional args ignored with keyword args present' )
+      outDict = {
+        'method': notifMthName,
+        'params': objectParams or arrayParams or nil, # note nil deletes the entry
+      }
+      postOnePkt( json$ outDict )
+    }
+
+    effect method lspReqSignal() {
+      reqDict = behave lspRequest
+      case reqDict[ 'id' ] of {
+        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
+        debug and elsDebug.replHere()
+        error( 'bug: obtaining request signal of non-request' )
+      }
+      return ai case clientRequests[ idReq ] of {
+        { reqSig } -> reqSig # already armed
+        # need to arm a signal sink
+        # assuming current thread is the owner, cleanup on thread termination
+        defer clientRequests[ idReq ] = nil
+        # arm an event sink by request id
+        clientRequests[ idReq ] = sink
+      }
+    }
+
+    {##
+     # for a service method to post a lsp response
+     #}
+    effect method lspRespond( result, **headers ) {
+      reqDict = behave lspRequest
+      case reqDict[ 'id' ] of {
+        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
+        debug and elsDebug.replHere()
+        error( 'bug: trying to respond to non-request' )
+      }
+      outDict = {
+        'id': idReq,
+        'result': result,
+      }
+      postOnePkt( json$ outDict, **headers )
+    }
+
+    effect method lspError( message, code= -32001, **headers ) {
+      reqDict = behave lspRequest
+      case reqDict[ 'id' ] of {
+        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
+        debug and elsDebug.replHere()
+        error( 'bug: trying to report error to non-request' )
+      }
+      outDict = {
+        'id': idReq,
+        'error': {
+          'code': code,
+          'message': str( message ),
+        },
+      }
+      postOnePkt( json$ outDict, **headers )
+    }
+
+    # global sink of all responses, service threads can choose to perceive this
+    effect lspResponses = globalResponses
+
+    # response listeners can be registered per request id
+    effect method lspReceiveResponse( idReq, listener ) {
+      responseListeners[ idReq ] = listener
+    }
+
+  } $=> { exc } -> {
+    console.error<| 'Failed preparing els service environment: ' ++ desc( exc )
+    rethrow
+  }
+
+
+  # Seems VSCode can make fast concurrent connections at startup, here per a subsequent connection, the importing job into the `services` namespace can, finish before those modules finished initialization.
+  # Wait here and only proceed after the artifacts have actually gotten imported, or we'll be wrong to report `MethodNotFound` back to VSCode
+  for _ from console.everyMillis(200, wait1st= false,)
+  do if services ? initialize is not nil then break
+
+
+  # loop forever until eol on error, or stopped elsewhere
+  while eol() is false {
+
+    case recvOnePkt() of { rpcIn } -> {@
+      # note this scoped block retains effectful context for the lsp request,
+      # e.g. lspRequest
+
+      case rpcIn[ 'jsonrpc' ] of {
+        '2.0' -> { pass }
+        _ -> error( 'unexpected lsp JSONRPC version', rpc=rpcIn )
+      }
+
+      # in case of error response
+      case rpcIn[ 'error' ] of { rpcErr } -> {
+        case rpcIn[ 'id' ] of {
+          nil -> error( 'lsp error response without id' )
+          { idReq } -> {
+            globalResponses <- rpcIn
+            case responseListeners[ idReq ] of {
+              { listener } -> { {
+                  # a listener must return `true` to be kept installed
+                  if listener( NA, error=rpcErr ) is not true
+                  then responseListeners[ idReq ] = nil
+                } $=> { exc } -> {
+                  console.warn<| 'LSP response listener failed: ' ++ desc( exc )
+                  # uninstall the failing one
+                  ai do responseListeners[ idReq ] = nil
+                  if responseListeners[ idReq ] is listener
+              } }
+              # console.warn<| (
+              #   'LSP error not listened: ' ++ rpcErr, rpc=rpcIn
+              # )
+            }
+          }
+        }
+        continue # done with this error response
+      }
+
+      # in case of success response
+      case rpcIn[ 'result' ] of { rpcResult } -> {@
+        case rpcIn[ 'id' ] of {
+          nil -> error( 'lsp response without id' )
+          { idReq } -> {
+            globalResponses <- rpcIn
+            case responseListeners[ idReq ] of {
+              { listener } -> { {
+                  # a listener must return `true` to be kept installed
+                  if listener( rpcResult ) is not true
+                  then responseListeners[ idReq ] = nil
+                } $=> { exc } -> {
+                  console.warn<| 'LSP response listener failed: ' ++ desc( exc )
+                  # uninstall the failing one
+                  ai if responseListeners[ idReq ] is listener
+                  then responseListeners[ idReq ] = nil
+              } }
+              # console.warn<| (
+              #   'LSP result not listened: ' ++ rpcResult, rpc=rpcIn
+              # )
+            }
+          }
+        }
+        continue # done with this response
+      @}
+
+      # in case of request or notification
+      case rpcIn[ 'method' ] of {
+        { mthName } | mthName and type( mthName ) is "String" -> { pass }
+        _ -> error( 'unexpected lsp JSONRPC method', rpc=rpcIn )
+      }
+      # treat carefully about the procedure parameters
+      case rpcIn[ 'params' ] of {
+        # note Edh null is a procedure instead of a constant
+        null -> args = ()
+        # normal case
+        { args } | type( args ) is "Dict" -> { pass }
+        # fallback case
+        args = ()
+      }
+
+      case services ?@ mthName of {
+        nil -> {
+          case mthName of { '$/' >@ _ } -> # protocol implementation dependent
+          case rpcIn[ 'id' ] of nil -> # it's a notification
+          { continue } # ignore this per
+          # https://github.com/microsoft/vscode-languageserver-node/issues/170
+
+          console.warn<| 'Missing service method ' ++ mthName
+          debug and elsDebug.replHere()
+          postOnePkt( json$ {
+              'id': rpcIn[ 'id' ],
+              'error': {
+                'code': -32601, # MethodNotFound
+                'message': 'no such method: ' ++ mthName,
+              },
+          } )
+          continue
+        }
+        { mth } -> if type( mth ) is in (
+          "Method", "HostMethod",
+        ) then pass
+        else error( 'bug: bad service method type ' ++ type( mth ), rpc=rpcIn )
+      }
+
+      # effectful value of original request
+      effect lspRequest = rpcIn
+
+      {
+        # try call the designated lsp method
+        mth(** args )
+      } $=> { exc } -> {
+        console.error<| desc( exc )
+        # report back for an uncaught exception as internal error
+        postOnePkt( json$ {
+            'id': rpcIn[ 'id' ],
+            'error': {
+              'code': -32603, # InternalError
+              'message': str( exc ),
+            },
+        } )
+      }
+    @}
+
+  } $=> { exc } -> {
+    if eol() is false then {
+      # todo post some notification of internal error? what id to use?
+    }
+    console.error<| 'Exception by els client ' ++ clientId
+    ++ ' error: ' ++ desc( exc )
+  }
+
+}
