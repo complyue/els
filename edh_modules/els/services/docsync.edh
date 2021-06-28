@@ -27,7 +27,7 @@ export method @'textDocument/didChange' (
     { chgContent :> moreChgs } | null( moreChgs )
     -> case chgContent[ 'text' ] of {
       { fullTxt } | type( fullTxt ) is "String"
-      -> { pass }
+      -> pass
       error( 'no text in the sole change' )
     }
 

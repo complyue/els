@@ -1,15 +1,15 @@
 
-# well known symbols here
+# well known symbols in els
 import * './symbols'
 
-# trigger the globally shared web REPL
+# the globally shared web REPL
 import * './debug'
 
-# trigger the instantiation of the globally shared world at analysis time
+# the globally shared world at analysis time
 import * './world'
 
 
-{## per LSP client service procedure #}
+{## service procedure to run per LSP client #}
 export method edhLanguageService() {
 
   {
@@ -99,7 +99,7 @@ export method edhLanguageService() {
     effect method lspReqSignal() {
       reqDict = behave lspRequest
       case reqDict[ 'id' ] of {
-        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
+        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> pass
         debug and elsDebug.replHere()
         error( 'bug: obtaining request signal of non-request' )
       }
@@ -119,7 +119,7 @@ export method edhLanguageService() {
     effect method lspRespond( result, **headers ) {
       reqDict = behave lspRequest
       case reqDict[ 'id' ] of {
-        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
+        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> pass
         debug and elsDebug.replHere()
         error( 'bug: trying to respond to non-request' )
       }
@@ -133,7 +133,7 @@ export method edhLanguageService() {
     effect method lspError( message, code= -32001, **headers ) {
       reqDict = behave lspRequest
       case reqDict[ 'id' ] of {
-        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> { pass }
+        { idReq } | type( idReq ) is in ( "Decimal", "String", ) -> pass
         debug and elsDebug.replHere()
         error( 'bug: trying to report error to non-request' )
       }
@@ -175,7 +175,7 @@ export method edhLanguageService() {
       # e.g. lspRequest
 
       case rpcIn[ 'jsonrpc' ] of {
-        '2.0' -> { pass }
+        '2.0' -> pass
         _ -> error( 'unexpected lsp JSONRPC version', rpc=rpcIn )
       }
 
@@ -233,7 +233,7 @@ export method edhLanguageService() {
 
       # in case of request or notification
       case rpcIn[ 'method' ] of {
-        { mthName } | mthName and type( mthName ) is "String" -> { pass }
+        { mthName } | mthName and type( mthName ) is "String" -> pass
         _ -> error( 'unexpected lsp JSONRPC method', rpc=rpcIn )
       }
       # treat carefully about the procedure parameters
@@ -241,7 +241,7 @@ export method edhLanguageService() {
         # note Edh null is a procedure instead of a constant
         null -> args = ()
         # normal case
-        { args } | type( args ) is "Dict" -> { pass }
+        { args } | type( args ) is "Dict" -> pass
         # fallback case
         args = ()
       }
