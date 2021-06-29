@@ -2278,7 +2278,7 @@ el'AnalyzeExpr
             [ StmtSrc
                 ( ExprStmt
                     ( DictExpr
-                        [ ( AddrDictKey !clsRef,
+                        [ ( AddrDictKey clsAddr@(AttrAddrSrc _ !cls'span),
                             instExpr@( ExprSrc
                                          ( AttrExpr
                                              ( DirectRef
@@ -2301,7 +2301,7 @@ el'AnalyzeExpr
                   Nothing -> analyzeBranch []
                   Just !instKey -> el'RunTx eas $
                     el'AnalyzeExpr
-                      (ExprSrc (AttrExpr clsRef) (attrRefSpan clsRef))
+                      (ExprSrc (AttrExpr (DirectRef clsAddr)) cls'span)
                       $ \ !clsResult _eas -> case el'UltimateValue clsResult of
                         EL'ClsVal !clsModu !cls -> do
                           !obj <- el'ObjNew cls
@@ -2660,9 +2660,8 @@ el'AnalyzeExpr (ExprSrc (DictExpr !es) _) !exit !eas =
           el'LiteralValue lit >>= \ !k ->
             el'RunTx easDone $ collectEntries ((k, v) : evs) rest
         AddrDictKey !kaddr -> el'AnalyzeExpr
-          (ExprSrc (AttrExpr kaddr) noSrcRange)
-          $ \ !k ->
-            collectEntries ((k, v) : evs) rest
+          (ExprSrc (AttrExpr (DirectRef kaddr)) noSrcRange)
+          $ \ !k -> collectEntries ((k, v) : evs) rest
         ExprDictKey !kx -> el'AnalyzeExpr kx $ \ !k ->
           collectEntries ((k, v) : evs) rest
 --
