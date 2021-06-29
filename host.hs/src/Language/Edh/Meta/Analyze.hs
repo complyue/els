@@ -3868,15 +3868,9 @@ el'AnalyzeExpr
         el'AnalyzeExpr ix $ \_ _eas -> go rest
 --
 
--- perform
+-- effect callouts
 -- todo analyze dynamic scoped effects
-el'AnalyzeExpr x@(ExprSrc (PerformExpr _addr) _expr'span) !exit !eas =
-  el'Exit eas exit $ EL'Expr x
---
-
--- behave
--- todo analyze dynamic scoped effects
-el'AnalyzeExpr x@(ExprSrc (BehaveExpr _addr) _expr'span) !exit !eas =
+el'AnalyzeExpr x@(ExprSrc (EffExpr _effAddr) _expr'span) !exit !eas =
   el'Exit eas exit $ EL'Expr x
 --
 
