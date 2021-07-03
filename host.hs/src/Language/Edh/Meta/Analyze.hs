@@ -23,6 +23,7 @@ import Language.Edh.EHI
 import Language.Edh.Meta.AQ
 import Language.Edh.Meta.AtTypes
 import Language.Edh.Meta.Model
+import Language.Edh.RtTypes
 import Numeric.Search.Range
 import System.Directory
 import System.FilePath
@@ -822,6 +823,9 @@ el'AnalyzeStmt
       el'AnalyzeExpr singleArg $ \ !singleVal _eas -> case singleVal of
         EL'Apk !apk -> doRecv apk
         _ -> case argsRcvr of
+          SingleReceiver (RecvRestPkArgs !addr) ->
+            -- wild repacking
+            recvOne addr $ EL'Apk $ EL'ArgsPack [singleVal] odEmpty False False
           SingleReceiver
             ( RecvArg
                 addr@(AttrAddrSrc _ arg'span)
@@ -840,23 +844,26 @@ el'AnalyzeStmt
                     "invalid-target"
                     "invalid let target"
               el'Exit eas exit $ EL'Const nil
-          WildReceiver -> el'Exit eas exit $ EL'Const nil
           SingleReceiver !rcvr -> do
             el'LogDiag
               diags
               el'Warning
-              apk'span
-              "dynamic-unpack"
-              "dynamic unpacking"
+              (argReceiverSpan rcvr)
+              "strange-single-rcvr"
+              "strange single arg receiver"
             doUnknownRcvrs [rcvr]
-          PackReceiver !rcvrs -> do
+          PackReceiver !rcvrs _rcvrs'span -> do
             el'LogDiag
               diags
               el'Warning
               apk'span
               "dynamic-unpack"
-              "dynamic unpacking"
+              "els does not analyze source structure of dynamic unpacking yet"
             doUnknownRcvrs rcvrs
+          WildReceiver _ -> el'Exit eas exit $ EL'Const nil
+          NullaryReceiver ->
+            -- TODO this possible at all?
+            el'Exit eas exit $ EL'Const nil
     _ -> el'RunTx eas $ el'PackArgs argsSndr $ \ !apk _eas -> doRecv apk
     where
       {- HLINT ignore "Reduce duplication" -}
@@ -893,6 +900,7 @@ el'AnalyzeStmt
         doUnknownRcvrs rest
 
       recvOne :: AttrAddrSrc -> EL'Value -> STM ()
+      recvOne (AttrAddrSrc (NamedAttr "_") _) _ = pure ()
       recvOne addr@(AttrAddrSrc _ !addr'span) !v =
         el'ResolveAttrAddr eas addr $ \case
           Nothing -> return ()
@@ -935,14 +943,15 @@ el'AnalyzeStmt
       doRecv :: EL'ArgsPack -> STM ()
       doRecv apk@(EL'ArgsPack !args !kwargs _dyn'args _dyn'kwargs) =
         case argsRcvr of
-          PackReceiver !rcvrs -> doRcvrs apk rcvrs
+          PackReceiver !rcvrs _ -> doRcvrs apk rcvrs
           SingleReceiver !rcvr -> doRcvrs apk [rcvr]
-          WildReceiver -> do
+          NullaryReceiver -> doRcvrs apk []
+          WildReceiver !rcvr'span -> do
             unless (null args) $
               el'LogDiag
                 diags
                 el'Error
-                stmt'span
+                rcvr'span
                 "let-wild-pos-arg"
                 "letting positional argument(s) into wild receiver"
 
@@ -2789,9 +2798,10 @@ el'AnalyzeExpr
               STM ()
             impIntoScope !chkExp !srcModu !srcExps !asr = do
               case asr of
-                WildReceiver -> forM_ (odToList srcExps) wildImp
-                PackReceiver !ars -> go srcExps ars
+                WildReceiver _ -> forM_ (odToList srcExps) wildImp
+                PackReceiver !ars _ -> go srcExps ars
                 SingleReceiver !ar -> go srcExps [ar]
+                NullaryReceiver -> go srcExps []
               -- record a region after this import, for current scope
               iopdSnapshot (el'branch'attrs'wip bwip)
                 >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
@@ -3064,7 +3074,7 @@ el'AnalyzeExpr
               el'Warning
               spec'span
               "dynamic-import"
-              "els does not analyze dynamic import specification yet"
+              "els does not analyze source structure of dynamic import yet"
             el'RunTx eas $ -- dynamic string or obj import
             -- TODO analyzetime string/object eval?
               el'AnalyzeExpr impSpec $ \ !impFromVal -> do
@@ -3227,7 +3237,7 @@ el'AnalyzeExpr
                     mwip
                     ( EL'Proc
                         (AttrByName mthName)
-                        WildReceiver -- todo elaborate actual args
+                        NullaryReceiver -- todo elaborate actual args
                     )
                 )
                 anno
@@ -3236,11 +3246,18 @@ el'AnalyzeExpr
 
     -- define data fields as instance attributes
     case argsRcvr of
-      -- a normal class
-      WildReceiver -> pure ()
       -- a data class (ADT)
       SingleReceiver !ar -> defDataArts [ar] $ flip iopdUpdate instAttrs
-      PackReceiver !ars -> defDataArts ars $ flip iopdUpdate instAttrs
+      PackReceiver !ars _ -> defDataArts ars $ flip iopdUpdate instAttrs
+      WildReceiver !rcvr'span ->
+        el'LogDiag
+          diags
+          el'Error
+          rcvr'span
+          "wild-data-fields"
+          "wild data fields (reciver) for data class not supported"
+      -- a normal class
+      NullaryReceiver -> pure ()
 
     el'RunTx easCls $
       el'AnalyzeStmts [cls'body] $ \_ !easDone -> do
@@ -3773,9 +3790,10 @@ el'AnalyzeExpr
                             exit''
 
     ( case asr of
-        WildReceiver -> ($ [])
-        PackReceiver !ars -> defLoopArts ars
+        PackReceiver !ars _ -> defLoopArts ars
         SingleReceiver !ar -> defLoopArts [ar]
+        WildReceiver _ -> ($ [])
+        NullaryReceiver -> ($ [])
       )
       $ \ !loopArts -> do
         unless (null loopArts) $ do
@@ -4042,9 +4060,10 @@ el'DefineMethod
             !easMth = eas {el'context = eacMth}
 
         ( case argsRcvr of
-            WildReceiver -> ($ [])
-            PackReceiver !ars -> defArgArts easMth "<method-arg>" xsrc ars
+            PackReceiver !ars _ -> defArgArts easMth "<method-arg>" xsrc ars
             SingleReceiver !ar -> defArgArts easMth "<method-arg>" xsrc [ar]
+            WildReceiver _ -> ($ [])
+            NullaryReceiver -> ($ [])
           )
           $ \ !argArts -> do
             iopdUpdate argArts mthAttrs
@@ -4099,7 +4118,7 @@ el'DefineArrowProc
     argsRcvrCnvrt argPkr $ \case
       Left !argErr -> do
         el'LogDiag diags el'Error args'span "bad-arrow-args" argErr
-        withArgsRcvr (PackReceiver [])
+        withArgsRcvr (PackReceiver [] noSrcRange)
       Right !argsRcvr -> withArgsRcvr argsRcvr
     where
       !eac = el'context eas
@@ -4157,9 +4176,10 @@ el'DefineArrowProc
             !easMth = eas {el'context = eacMth}
 
         ( case argsRcvr of
-            WildReceiver -> ($ [])
-            PackReceiver !ars -> defArgArts easMth "<arrow-arg>" lhExpr ars
+            PackReceiver !ars _ -> defArgArts easMth "<arrow-arg>" lhExpr ars
             SingleReceiver !ar -> defArgArts easMth "<arrow-arg>" lhExpr [ar]
+            WildReceiver _ -> ($ [])
+            NullaryReceiver -> ($ [])
           )
           $ \ !argArts -> do
             iopdUpdate argArts mthAttrs
