@@ -1,5 +1,3 @@
-{-# LANGUAGE ImplicitParams #-}
-
 module Language.Edh.Meta.Analyze where
 
 -- import Debug.Trace
@@ -33,45 +31,41 @@ import Prelude
 
 el'LocateModule :: EL'World -> Text -> EdhProc EL'ModuSlot
 el'LocateModule !elw !absModuSpec !exit !ets =
-  let ?masterFile = "__init__.edh"
-   in if "." `T.isPrefixOf` nomSpec
-        then
-          throwEdh ets UsageError $
-            "not a valid absolute Edh module spec: " <> absModuSpec
-        else
-          unsafeIOToSTM (resolveAbsoluteImport nomSpec ".") >>= \case
-            Left !err -> throwEdh ets PackageError err
-            Right (_moduName, _moduPath, !moduFile) -> runEdhTx ets $
-              el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
-                exitEdh ets exit ms
+  if "." `T.isPrefixOf` nomSpec
+    then
+      throwEdh ets UsageError $
+        "not a valid absolute Edh module spec: " <> absModuSpec
+    else
+      unsafeIOToSTM (locateEdhModule nomSpec ".") >>= \case
+        Left !err -> throwEdh ets PackageError err
+        Right (_moduPath, !moduFile) -> runEdhTx ets $
+          el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
+            exitEdh ets exit ms
   where
     !nomSpec = normalizeImportSpec absModuSpec
 
 el'LocateModuleByFile :: EL'World -> Text -> EdhProc EL'ModuSlot
 el'LocateModuleByFile !elw !moduFile !exit !ets =
-  if not $ ".edh" `T.isSuffixOf` moduFile
-    then throwEdh ets UsageError $ "not a .edh file: " <> moduFile
-    else
-      runEdhTx ets $
-        edhContIO $
-          fsSearch >>= \case
-            Left !err -> atomically $ throwEdh ets UsageError err
-            Right (Left (!homePath, !scriptName, !absFile)) ->
-              atomically (prepareHome homePath)
-                -- with 2 separate STM txs
-                >>= atomically
-                  . goWith
-                    scriptName
-                    absFile
-                    el'home'scripts
-            Right (Right (!homePath, !moduName, !absFile)) ->
-              atomically (prepareHome homePath)
-                -- with 2 separate STM txs
-                >>= atomically
-                  . goWith
-                    moduName
-                    absFile
-                    el'home'modules
+  runEdhTx ets $
+    edhContIO $
+      fsSearch >>= \case
+        Left !err -> atomically $ throwEdh ets UsageError err
+        Right (Left (!homePath, !scriptName, !absFile)) ->
+          atomically (prepareHome homePath)
+            -- with 2 separate STM txs
+            >>= atomically
+              . goWith
+                scriptName
+                absFile
+                el'home'scripts
+        Right (Right (!homePath, !moduName, !absFile)) ->
+          atomically (prepareHome homePath)
+            -- with 2 separate STM txs
+            >>= atomically
+              . goWith
+                moduName
+                absFile
+                el'home'modules
   where
     goWith ::
       Text ->
@@ -225,16 +219,15 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
          in go $ splitDirFile absFile
 
 el'LocateImportee ::
-  (?masterFile :: FilePath) =>
   EL'ModuSlot ->
   Text ->
   EL'Analysis (Either Text EL'ModuSlot)
 el'LocateImportee !msFrom !impSpec !exit !eas =
   unsafeIOToSTM
-    (locateEdhFile nomSpec $ edhRelativePathFrom $ T.unpack docFile)
+    (locateEdhModule nomSpec $ edhRelativePathFrom $ T.unpack docFile)
     >>= \case
       Left !err -> el'Exit eas exit $ Left err
-      Right (_moduName, _moduPath, !moduFile) -> runEdhTx ets $
+      Right (_moduPath, !moduFile) -> runEdhTx ets $
         el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
           el'Exit eas exit $ Right ms
   where
@@ -242,6 +235,24 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
     ets = el'ets eas
     SrcDoc !docFile = el'modu'doc msFrom
     !nomSpec = normalizeImportSpec impSpec
+
+el'LocateIncludee ::
+  EL'ModuSlot ->
+  Text ->
+  EL'Analysis (Either Text EL'ModuSlot)
+el'LocateIncludee !msFrom !incSpec !exit !eas =
+  unsafeIOToSTM
+    (locateEdhFragment nomSpec $ edhRelativePathFrom $ T.unpack docFile)
+    >>= \case
+      Left !err -> el'Exit eas exit $ Left err
+      Right (_moduPath, !moduFile) -> runEdhTx ets $
+        el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
+          el'Exit eas exit $ Right ms
+  where
+    elw = el'world eas
+    ets = el'ets eas
+    SrcDoc !docFile = el'modu'doc msFrom
+    !nomSpec = normalizeImportSpec incSpec
 
 -- | walk through all diagnostics for a module, including all its dependencies
 el'WalkResolutionDiags ::
@@ -491,8 +502,7 @@ parseModuleSource :: Int -> Text -> SrcDoc -> EdhProc EL'ParsedModule
 parseModuleSource !srcVersion !moduSource (SrcDoc !moduFile) !exit !ets =
   runEdhTx ets $
     edhContIO $
-      atomically
-        (parseEdh world moduFile moduSource)
+      parseEdh world moduFile moduSource
         >>= \case
           Left !err -> atomically $ do
             let !msg = T.pack $ errorBundlePretty err
@@ -628,9 +638,13 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
         Just !path -> path
         Nothing -> case T.stripSuffix "/__main__.edh" modu'file of
           Just !path -> path
-          Nothing -> case T.stripSuffix ".edh" modu'file of
+          Nothing -> case T.stripSuffix "/__include__.edh" modu'file of
             Just !path -> path
-            Nothing -> modu'file
+            Nothing -> case T.stripSuffix ".edh" modu'file of
+              Just !path -> path
+              Nothing -> case T.stripSuffix ".iedh" modu'file of
+                Just !path -> path
+                Nothing -> modu'file
       !file'def =
         EL'AttrDef
           (AttrByName "__file__")
@@ -2766,62 +2780,61 @@ el'AnalyzeExpr
         el'Exit eas exit $ EL'Const nil
       Just (!msImporter, !resolvImporter) ->
         el'RunTx eas $
-          let ?masterFile = "__main__.edh"
-           in el'LocateImportee msImporter litSpec $ \ !incResult _eas ->
-                case incResult of
-                  Left !err -> do
-                    el'LogDiag diags el'Error spec'span "err-include" err
-                    el'Exit eas exit $ EL'Const nil
-                  Right !msImportee -> do
-                    -- record a reference to the src module
-                    let !moduVal = EL'ModuVal msImportee
-                        !incSrcDef =
-                          EL'AttrDef
-                            (AttrByName "this")
-                            NoDocCmt
-                            "<module>"
-                            zeroSrcRange
-                            ( ExprSrc
-                                (AttrExpr (ThisRef noSrcRange))
-                                noSrcRange
-                            )
-                            moduVal
-                            maoAnnotation
-                            Nothing
-                        !incDef =
-                          EL'AttrDef
-                            (AttrByName litSpec)
-                            NoDocCmt
-                            "<include>"
+          el'LocateIncludee msImporter litSpec $ \ !incResult _eas ->
+            case incResult of
+              Left !err -> do
+                el'LogDiag diags el'Error spec'span "err-include" err
+                el'Exit eas exit $ EL'Const nil
+              Right !msImportee -> do
+                -- record a reference to the src module
+                let !moduVal = EL'ModuVal msImportee
+                    !incSrcDef =
+                      EL'AttrDef
+                        (AttrByName "this")
+                        NoDocCmt
+                        "<fragment>"
+                        zeroSrcRange
+                        ( ExprSrc
+                            (AttrExpr (ThisRef noSrcRange))
                             noSrcRange
-                            xsrc
-                            (EL'External msImportee incSrcDef)
-                            maoAnnotation
-                            Nothing
-                        !incRef =
-                          EL'AttrRef
-                            Nothing
-                            (AttrAddrSrc (QuaintAttr litSpec) spec'span)
-                            msImportee
-                            incDef
-                    recordAttrRef eac incRef
+                        )
+                        moduVal
+                        maoAnnotation
+                        Nothing
+                    !incDef =
+                      EL'AttrDef
+                        (AttrByName litSpec)
+                        NoDocCmt
+                        "<include>"
+                        noSrcRange
+                        xsrc
+                        (EL'External msImportee incSrcDef)
+                        maoAnnotation
+                        Nothing
+                    !incRef =
+                      EL'AttrRef
+                        Nothing
+                        (AttrAddrSrc (QuaintAttr litSpec) spec'span)
+                        msImportee
+                        incDef
+                recordAttrRef eac incRef
 
-                    -- record as a dependency
-                    modifyTVar' (el'modu'dependencies'wip resolvImporter) $
-                      Map.insert msImportee True
-                    -- do including whether it is resolving or resolved
-                    runEdhTx ets $
-                      asModuleResolving world msImportee $ \case
-                        EL'ModuResolved !resolved -> \_ets -> do
-                          -- record includer as a dependant
-                          modifyTVar' (el'modu'dependants resolved) $
-                            Map.insert msImporter True
-                          el'Exit eas exit moduVal
-                        EL'ModuResolving !resolving _acts -> \_ets -> do
-                          -- record includer as a dependant
-                          modifyTVar' (el'resolving'dependants resolving) $
-                            Map.insert msImporter True
-                          el'Exit eas exit moduVal
+                -- record as a dependency
+                modifyTVar' (el'modu'dependencies'wip resolvImporter) $
+                  Map.insert msImportee True
+                -- do including whether it is resolving or resolved
+                runEdhTx ets $
+                  asModuleResolving world msImportee $ \case
+                    EL'ModuResolved !resolved -> \_ets -> do
+                      -- record includer as a dependant
+                      modifyTVar' (el'modu'dependants resolved) $
+                        Map.insert msImporter True
+                      el'Exit eas exit moduVal
+                    EL'ModuResolving !resolving _acts -> \_ets -> do
+                      -- record includer as a dependant
+                      modifyTVar' (el'resolving'dependants resolving) $
+                        Map.insert msImporter True
+                      el'Exit eas exit moduVal
     _ -> do
       el'LogDiag
         diags
@@ -3102,69 +3115,68 @@ el'AnalyzeExpr
               el'Exit eas exit $ EL'Const nil
             Just (!msImporter, !resolvImporter) ->
               el'RunTx eas $
-                let ?masterFile = "__init__.edh"
-                 in el'LocateImportee msImporter litSpec $ \ !impResult _eas ->
-                      case impResult of
-                        Left !err -> do
-                          el'LogDiag diags el'Error spec'span "err-import" err
-                          el'Exit eas exit $ EL'Const nil
-                        Right !msImportee -> do
-                          -- record a reference to the src module
-                          let !moduVal = EL'ModuVal msImportee
-                              !importeeDef =
-                                EL'AttrDef
-                                  (AttrByName "this")
-                                  NoDocCmt
-                                  "<module>"
-                                  zeroSrcRange
-                                  ( ExprSrc
-                                      (AttrExpr (ThisRef noSrcRange))
-                                      noSrcRange
-                                  )
-                                  moduVal
-                                  maoAnnotation
-                                  Nothing
-                              !impDef =
-                                EL'AttrDef
-                                  (AttrByName litSpec)
-                                  docCmt
-                                  "<import>"
+                el'LocateImportee msImporter litSpec $ \ !impResult _eas ->
+                  case impResult of
+                    Left !err -> do
+                      el'LogDiag diags el'Error spec'span "err-import" err
+                      el'Exit eas exit $ EL'Const nil
+                    Right !msImportee -> do
+                      -- record a reference to the src module
+                      let !moduVal = EL'ModuVal msImportee
+                          !importeeDef =
+                            EL'AttrDef
+                              (AttrByName "this")
+                              NoDocCmt
+                              "<module>"
+                              zeroSrcRange
+                              ( ExprSrc
+                                  (AttrExpr (ThisRef noSrcRange))
                                   noSrcRange
-                                  xsrc
-                                  (EL'External msImportee importeeDef)
-                                  maoAnnotation
-                                  Nothing
-                              !impRef =
-                                EL'AttrRef
-                                  Nothing
-                                  (AttrAddrSrc (QuaintAttr litSpec) spec'span)
-                                  msImportee
-                                  impDef
-                          recordAttrRef eac impRef
+                              )
+                              moduVal
+                              maoAnnotation
+                              Nothing
+                          !impDef =
+                            EL'AttrDef
+                              (AttrByName litSpec)
+                              docCmt
+                              "<import>"
+                              noSrcRange
+                              xsrc
+                              (EL'External msImportee importeeDef)
+                              maoAnnotation
+                              Nothing
+                          !impRef =
+                            EL'AttrRef
+                              Nothing
+                              (AttrAddrSrc (QuaintAttr litSpec) spec'span)
+                              msImportee
+                              impDef
+                      recordAttrRef eac impRef
 
-                          -- record as a dependency
-                          modifyTVar' (el'modu'dependencies'wip resolvImporter) $
-                            Map.insert msImportee True
-                          -- do importing whether it is resolving or resolved
-                          !chkExp <- chkExport
-                          runEdhTx ets $
-                            asModuleResolving world msImportee $ \case
-                              EL'ModuResolved !resolved -> \_ets -> do
-                                -- record importer as a dependant
-                                modifyTVar' (el'modu'dependants resolved) $
-                                  Map.insert msImporter True
-                                -- do import
-                                let !exps = el'modu'exports resolved
-                                impIntoScope chkExp msImportee exps argsRcvr
-                                el'Exit eas exit moduVal
-                              EL'ModuResolving !resolving _acts -> \_ets -> do
-                                -- record importer as a dependant
-                                modifyTVar' (el'resolving'dependants resolving) $
-                                  Map.insert msImporter True
-                                -- do import
-                                !exps <- iopdSnapshot $ el'modu'exps'wip resolving
-                                impIntoScope chkExp msImportee exps argsRcvr
-                                el'Exit eas exit moduVal
+                      -- record as a dependency
+                      modifyTVar' (el'modu'dependencies'wip resolvImporter) $
+                        Map.insert msImportee True
+                      -- do importing whether it is resolving or resolved
+                      !chkExp <- chkExport
+                      runEdhTx ets $
+                        asModuleResolving world msImportee $ \case
+                          EL'ModuResolved !resolved -> \_ets -> do
+                            -- record importer as a dependant
+                            modifyTVar' (el'modu'dependants resolved) $
+                              Map.insert msImporter True
+                            -- do import
+                            let !exps = el'modu'exports resolved
+                            impIntoScope chkExp msImportee exps argsRcvr
+                            el'Exit eas exit moduVal
+                          EL'ModuResolving !resolving _acts -> \_ets -> do
+                            -- record importer as a dependant
+                            modifyTVar' (el'resolving'dependants resolving) $
+                              Map.insert msImporter True
+                            -- do import
+                            !exps <- iopdSnapshot $ el'modu'exps'wip resolving
+                            impIntoScope chkExp msImportee exps argsRcvr
+                            el'Exit eas exit moduVal
           _ -> do
             el'LogDiag
               diags
