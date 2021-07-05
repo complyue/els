@@ -180,28 +180,46 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                                   T.pack moduName,
                                   T.pack absFile
                                 )
-                _ ->
-                  let !moduName =
-                        fromMaybe relPath $
-                          stripExtension
-                            ".edh"
-                            relPath
-                      !conflictingFile = dir </> moduName </> "__init__.edh"
-                   in doesPathExist conflictingFile >>= \case
-                        True ->
-                          return $
-                            Left $
-                              "conflicting "
-                                <> T.pack conflictingFile
-                        False ->
-                          return $
-                            Right $
-                              Right
-                                ( T.pack homeDir,
-                                  fromJust $
-                                    T.stripSuffix ".edh" $ T.pack relPath,
-                                  T.pack absFile
-                                )
+                _ -> case stripExtension ".edh" relPath of
+                  Just !moduName ->
+                    let !conflictingFile = dir </> moduName </> "__init__.edh"
+                     in doesPathExist conflictingFile >>= \case
+                          True ->
+                            return $
+                              Left $
+                                "conflicting "
+                                  <> T.pack conflictingFile
+                          False ->
+                            return $
+                              Right $
+                                Right
+                                  ( T.pack homeDir,
+                                    T.pack moduName,
+                                    T.pack absFile
+                                  )
+                  Nothing -> case stripExtension ".iedh" relPath of
+                    Just !fragName ->
+                      let !conflictingFile =
+                            dir </> fragName </> "__include__.edh"
+                       in doesPathExist conflictingFile >>= \case
+                            True ->
+                              return $
+                                Left $
+                                  "conflicting "
+                                    <> T.pack conflictingFile
+                            False ->
+                              return $
+                                Right $
+                                  Left
+                                    ( T.pack homeDir,
+                                      T.pack fragName,
+                                      T.pack absFile
+                                    )
+                    Nothing ->
+                      return $
+                        Right $
+                          Right
+                            (T.pack homeDir, T.pack relPath, T.pack absFile)
               (!gpdir, !pdir) ->
                 doesDirectoryExist (gpdir </> "edh_modules") >>= \case
                   False ->
