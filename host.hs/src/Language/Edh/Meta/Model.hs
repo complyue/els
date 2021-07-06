@@ -138,7 +138,8 @@ data EL'Home = EL'Home
     --
     -- a script module is technically a standalone module, only importable with
     -- relative path but seldom get imported in practice, it usually run as an
-    -- entry module.
+    -- entry module. inclusive Edh fragments (i.e. ".iedh" files) are also
+    -- categorized as scripts for the time being.
     --
     -- typical script modules reside outside of the `edh_modules` subdir, one
     -- speciall case is `__main__.edh` e.g.

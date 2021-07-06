@@ -180,6 +180,22 @@ el'LocateModuleByFile !elw !moduFile !exit !ets =
                                   T.pack moduName,
                                   T.pack absFile
                                 )
+                (!moduName, "__include__.edh") ->
+                  let !conflictingFile = dir </> moduName <> ".iedh"
+                   in doesPathExist conflictingFile >>= \case
+                        True ->
+                          return $
+                            Left $
+                              "conflicting "
+                                <> T.pack conflictingFile
+                        False ->
+                          return $
+                            Right $
+                              Left
+                                ( T.pack homeDir,
+                                  T.pack moduName,
+                                  T.pack absFile
+                                )
                 _ -> case stripExtension ".edh" relPath of
                   Just !moduName ->
                     let !conflictingFile = dir </> moduName </> "__init__.edh"
