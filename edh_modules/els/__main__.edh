@@ -1,9 +1,9 @@
 {##
- # this is the entry module of Đ (Edh) Language Server
+ # Entry module of Đ (Edh) Language Server
  #}
 
 import ( LangServer, sendTextToFd, ** ) 'els/RT'
-import (edhLanguageService, **) './service'
+import ( edhLanguageService, ** ) './service'
 
 
 # it's customizable with a nested `els/config.edh`, in `edh_modules` resides in cwd or any upper directory
@@ -11,7 +11,7 @@ import ( **cfg ) 'els/config'
 
 
 # start listening
-let els = LangServer( **cfg ) $@ edhLanguageService
+let els = LangServer( edhLanguageService, **cfg )
 
 # wait the result, either sucess or failure
 case els.addrs() of {
@@ -33,13 +33,12 @@ case els.addrs() of {
 }
 
 # keep the server process running
-
 if debug then {
   import * 'els/debug'
 
   # show session count and url list every 5 minutes
-  for _ from console.everySeconds( 300 )
   do elsDebug.logSessions()
+  for _ from console.everySeconds( 300 )
 
 } else {
   els.join()
