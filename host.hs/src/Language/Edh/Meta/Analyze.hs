@@ -1,3 +1,5 @@
+{-# LANGUAGE ImplicitParams #-}
+
 module Language.Edh.Meta.Analyze where
 
 -- import Debug.Trace
@@ -36,13 +38,18 @@ el'LocateModule !elw !absModuSpec !exit !ets =
       throwEdh ets UsageError $
         "not a valid absolute Edh module spec: " <> absModuSpec
     else
-      unsafeIOToSTM (locateEdhModule nomSpec ".") >>= \case
-        Left !err -> throwEdh ets PackageError err
-        Right (_moduPath, !moduFile) -> runEdhTx ets $
-          el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
-            exitEdh ets exit ms
+      unsafeIOToSTM
+        ( let ?frontFile = "__init__.edh"
+              ?fileExt = ".edh"
+           in locateEdhFile nomSpec "."
+        )
+        >>= \case
+          Left !err -> throwEdh ets PackageError err
+          Right (_moduPath, !moduFile) -> runEdhTx ets $
+            el'LocateModuleByFile elw (T.pack moduFile) $ \ !ms _ets ->
+              exitEdh ets exit ms
   where
-    !nomSpec = normalizeImportSpec absModuSpec
+    !nomSpec = normalizeModuRefSpec absModuSpec
 
 el'LocateModuleByFile :: EL'World -> Text -> EdhProc EL'ModuSlot
 el'LocateModuleByFile !elw !moduFile !exit !ets =
@@ -258,7 +265,10 @@ el'LocateImportee ::
   EL'Analysis (Either Text EL'ModuSlot)
 el'LocateImportee !msFrom !impSpec !exit !eas =
   unsafeIOToSTM
-    (locateEdhModule nomSpec $ edhRelativePathFrom $ T.unpack docFile)
+    ( let ?frontFile = "__init__.edh"
+          ?fileExt = ".edh"
+       in locateEdhFile nomSpec $ takeDirectory $ T.unpack docFile
+    )
     >>= \case
       Left !err -> el'Exit eas exit $ Left err
       Right (_moduPath, !moduFile) -> runEdhTx ets $
@@ -268,7 +278,7 @@ el'LocateImportee !msFrom !impSpec !exit !eas =
     elw = el'world eas
     ets = el'ets eas
     SrcDoc !docFile = el'modu'doc msFrom
-    !nomSpec = normalizeImportSpec impSpec
+    !nomSpec = normalizeModuRefSpec impSpec
 
 el'LocateIncludee ::
   EL'ModuSlot ->
@@ -276,7 +286,10 @@ el'LocateIncludee ::
   EL'Analysis (Either Text EL'ModuSlot)
 el'LocateIncludee !msFrom !incSpec !exit !eas =
   unsafeIOToSTM
-    (locateEdhFragment nomSpec $ edhRelativePathFrom $ T.unpack docFile)
+    ( let ?frontFile = "__include__.edh"
+          ?fileExt = ".iedh"
+       in locateEdhFile nomSpec $ takeDirectory $ T.unpack docFile
+    )
     >>= \case
       Left !err -> el'Exit eas exit $ Left err
       Right (_moduPath, !moduFile) -> runEdhTx ets $
@@ -286,7 +299,7 @@ el'LocateIncludee !msFrom !incSpec !exit !eas =
     elw = el'world eas
     ets = el'ets eas
     SrcDoc !docFile = el'modu'doc msFrom
-    !nomSpec = normalizeImportSpec incSpec
+    !nomSpec = normalizeModuRefSpec incSpec
 
 -- | walk through all diagnostics for a module, including all its dependencies
 el'WalkResolutionDiags ::
@@ -668,17 +681,6 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
           maoAnnotation
           Nothing
       SrcDoc !modu'file = el'modu'doc ms
-      !modu'path = case T.stripSuffix "/__init__.edh" modu'file of
-        Just !path -> path
-        Nothing -> case T.stripSuffix "/__main__.edh" modu'file of
-          Just !path -> path
-          Nothing -> case T.stripSuffix "/__include__.edh" modu'file of
-            Just !path -> path
-            Nothing -> case T.stripSuffix ".edh" modu'file of
-              Just !path -> path
-              Nothing -> case T.stripSuffix ".iedh" modu'file of
-                Just !path -> path
-                Nothing -> modu'file
       !file'def =
         EL'AttrDef
           (AttrByName "__file__")
@@ -689,24 +691,10 @@ resolveParsedModule !world !ms !resolving !body !exit !ets = do
           (EL'Const (EdhString modu'file))
           maoAnnotation
           Nothing
-      !path'def =
-        EL'AttrDef
-          (AttrByName "__path__")
-          ( DocCmt
-              [ "absolute path of the directory containing current module's"
-                  <> " source file"
-              ]
-          )
-          "<module>"
-          noSrcRange
-          (ExprSrc (LitExpr (StringLiteral modu'path)) noSrcRange)
-          (EL'Const (EdhString modu'path))
-          maoAnnotation
-          Nothing
       !builtinAttrs =
         odFromList $
           (\ !def -> (el'attr'def'key def, def))
-            <$> [name'def, file'def, path'def]
+            <$> [name'def, file'def]
   !ctxDefs <- newTVar []
   !ctxRefs <- newTVar []
   !branchAttrs <- iopdFromList $ odToList builtinAttrs
