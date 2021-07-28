@@ -64,14 +64,7 @@ createLangServerClass !addrClass !clsOuterScope =
       (defaultArg ctorPort -> port'max)
       (defaultArg "127.0.0.1" -> !ctorAddr)
       !ctorExit
-      !etsCtor =
-        if edh'in'tx etsCtor
-          then
-            throwEdh
-              etsCtor
-              UsageError
-              "you don't create network objects within a transaction"
-          else do
+      !etsCtor = do
             !servAddrs <- newEmptyTMVar
             !servEoL <- newEmptyTMVar
             let !server =
