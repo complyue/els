@@ -13,9 +13,9 @@ export data TxtDocFile ( absFilePath, version= 0 ) {
   }
 
   method __json__() case this.absFilePath of {
-    { '/' >@ _ } -> { return {
-        'uri': 'file://' ++ this.absFilePath,
-    } }
+    { '/' >@ _ } -> return {
+      'uri': 'file://' ++ this.absFilePath,
+    }
     error( 'path not absolute: ' ++ this.absFilePath )
   }
 
