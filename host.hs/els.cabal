@@ -57,6 +57,7 @@ library
     ScopedTypeVariables
     TupleSections
     TypeApplications
+    AllowAmbiguousTypes
     TypeOperators
     ViewPatterns
 
@@ -104,6 +105,7 @@ executable els
     ScopedTypeVariables
     TupleSections
     TypeApplications
+    AllowAmbiguousTypes
     TypeOperators
     ViewPatterns
 
