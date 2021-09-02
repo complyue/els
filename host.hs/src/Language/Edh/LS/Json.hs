@@ -1,6 +1,6 @@
 module Language.Edh.LS.Json where
 
-import Language.Edh.EHI
+import Language.Edh.CHI
 import Prelude
 
 -- * helper functions converting arbitrary value to json native `EdhValue`

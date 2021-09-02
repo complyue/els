@@ -7,7 +7,7 @@ where
 -- import           Debug.Trace
 
 import Control.Monad
-import Language.Edh.EHI
+import Language.Edh.CHI
 import Language.Edh.LS.LangServer
 import Language.Edh.LS.RT
 import Language.Edh.Meta.World

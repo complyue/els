@@ -21,7 +21,7 @@ import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Vector as V
 import GHC.Clock
 import GHC.Conc (unsafeIOToSTM)
-import Language.Edh.EHI
+import Language.Edh.CHI
 import Language.Edh.Meta.AQ
 import Language.Edh.Meta.AtTypes
 import Language.Edh.Meta.Model

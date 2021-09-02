@@ -8,7 +8,7 @@ import Data.Text (Text)
 -- import qualified Data.Text as T
 import qualified Data.Vector as V
 -- import Debug.Trace
-import Language.Edh.EHI
+import Language.Edh.CHI
 import Language.Edh.LS.Json
 import Language.Edh.Meta.Analyze
 import Language.Edh.Meta.AtTypes
