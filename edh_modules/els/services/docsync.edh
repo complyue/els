@@ -8,7 +8,22 @@ export method @'textDocument/didOpen' ( textDocument, *** ) void
 # try parse & resolve then publish the diagnostics asynchronously,
 # to not block subsequent requests from the lsp client
 case textDocument of { TxtDocFile ( absFilePath ) } -> { go {
-    moduOpen = world.locateByFile( absFilePath )
+    {
+      moduOpen = world.locateByFile( absFilePath )
+    } $=> { exc } -> {
+      perform lspNotify( 'textDocument/publishDiagnostics',
+        uri= textDocument[ 'uri' ],
+        version= textDocument[ 'version' ],
+        diagnostics= [ {
+            'range': {
+              'start': {'line': 0, 'character': 0,},
+              'end': {'line': 0, 'character': 0,},
+            },
+            'message': desc(exc),
+        } ],
+      )
+      return nil
+    }
     perform lspNotify( 'textDocument/publishDiagnostics',
       uri= textDocument[ 'uri' ],
       version= textDocument[ 'version' ],
@@ -36,7 +51,22 @@ export method @'textDocument/didChange' (
   }
 
   case textDocument of { TxtDocFile ( absFilePath, version= docVersion ) } -> {
-    moduChgd = world.locateByFile( absFilePath )
+    {
+      moduChgd = world.locateByFile( absFilePath )
+    } $=> { exc } -> {
+      perform lspNotify( 'textDocument/publishDiagnostics',
+        uri= textDocument[ 'uri' ],
+        version= textDocument[ 'version' ],
+        diagnostics= [ {
+            'range': {
+              'start': {'line': 0, 'character': 0,},
+              'end': {'line': 0, 'character': 0,},
+            },
+            'message': desc(exc),
+        } ],
+      )
+      return nil
+    }
     # the parsing after invalidated, will pend starting until otf source is
     # seen stabilized, i.e. no further otf change after 350 ms.
     #

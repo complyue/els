@@ -10,12 +10,18 @@ export method @'textDocument/definition' (
   # try parse & resolve then obtain definition asynchronously,
   # to not block subsequent requests from the lsp client
   case textDocument of { TxtDocFile( absFilePath ) } ->
-  case position of { Position( line, character ) } ->
-  { return { go {
+  case position of { Position( line, character ) } -> return { go {
+      {
         modu = world.locateByFile( absFilePath )
-        defiLinks = world.defi( modu, line, character )
-        # debug and null( defiLinks ) and elsDebug.replHere()
-        perform lspRespond( defiLinks )
-  } } }
+      } $=> { exc } -> {
+        console.debug<| 'Error locating Đ module ['++ absFilePath ++']\n'
+        ++ desc(exc)
+        perform lspRespond( null )
+        return nil
+      }
+      defiLinks = world.defi( modu, line, character )
+      # debug and null( defiLinks ) and elsDebug.replHere()
+      perform lspRespond( defiLinks )
+  } }
   error( 'unexpected lsp params' )
 }

@@ -24,9 +24,15 @@ export method @'textDocument/completion' (
 ) void {
   case textDocument of { TxtDocFile( absFilePath ) } ->
   case position of { Position( line, character ) } ->
-  case context of { CompletionContext( triggerKind, triggerCharacter ) } ->
-  {
-    modu = world.locateByFile( absFilePath )
+  case context of { CompletionContext( triggerKind, triggerCharacter ) } -> {
+    {
+      modu = world.locateByFile( absFilePath )
+    } $=> { exc } -> {
+      console.debug<| 'Error locating Đ module ['++ absFilePath ++']\n'
+      ++ desc(exc)
+      perform lspRespond( null )
+      return nil
+    }
     go { # not block subsequent requests from the lsp client
       perceive (perform lspReqSignal()) {
         { break } -> {

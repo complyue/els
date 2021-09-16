@@ -42,31 +42,37 @@ export method @'textDocument/signatureHelp' (
   case position of { Position( line, character ) } ->
   case context of { SignatureHelpContext(
       triggerKind, triggerCharacter, isRetrigger, activeSignatureHelp,
-  ) } ->
-  { return { go {
+  ) } -> return { go {
+      {
         modu = world.locateByFile( absFilePath )
-        # completionResult = world.completion( modu, line, character )
-        # debug and null( completionResult ) and elsDebug.replHere()
-        # perform lspRespond( completionResult )
-        perform lspRespond( {
-            'signatures': [
-              {
-                'label': 'sig1-label',
-                'documentation': 'sig1-doc',
-                'parameters': [
-                  {
-                    'label': 'arg1-label',
-                    'documentation': 'arg1-doc',
-                  },
-                  {
-                    'label': 'arg2-label',
-                    'documentation': 'arg2-doc',
-                  },
-                ],
-                'activeParameter': 0,
-              },
-            ],
-        } )
-  } } }
+      } $=> { exc } -> {
+        console.debug<| 'Error locating Đ module ['++ absFilePath ++']\n'
+        ++ desc(exc)
+        perform lspRespond( null )
+        return nil
+      }
+      # completionResult = world.completion( modu, line, character )
+      # debug and null( completionResult ) and elsDebug.replHere()
+      # perform lspRespond( completionResult )
+      perform lspRespond( {
+          'signatures': [
+            {
+              'label': 'sig1-label',
+              'documentation': 'sig1-doc',
+              'parameters': [
+                {
+                  'label': 'arg1-label',
+                  'documentation': 'arg1-doc',
+                },
+                {
+                  'label': 'arg2-label',
+                  'documentation': 'arg2-doc',
+                },
+              ],
+              'activeParameter': 0,
+            },
+          ],
+      } )
+  } }
   error( 'unexpected lsp params' )
 }

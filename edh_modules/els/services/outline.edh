@@ -10,11 +10,17 @@ import * './utils'
  # reflecting the hierarchical structure of the code/document organization.
  #}
 export method @'textDocument/documentSymbol' ( textDocument, *** ) void {
-  case textDocument of { TxtDocFile ( absFilePath ) } ->
-  { return { go {
+  case textDocument of { TxtDocFile ( absFilePath ) } -> return { go {
+      {
         modu = world.locateByFile( absFilePath )
-        perform lspRespond( modu.moduSymbols() )
-  } } }
+      } $=> { exc } -> {
+        console.debug<| 'Error locating Đ module ['++ absFilePath ++']\n'
+        ++ desc(exc)
+        perform lspRespond( null )
+        return nil
+      }
+      perform lspRespond( modu.moduSymbols() )
+  } }
   error( 'unexpected lsp params' )
 }
 
@@ -23,10 +29,16 @@ export method @'textDocument/documentSymbol' ( textDocument, *** ) void {
  # making each level individually foldable in the code editor.
  #}
 export method @'textDocument/foldingRange' ( textDocument, *** ) void {
-  case textDocument of { TxtDocFile ( absFilePath ) } ->
-  { return { go {
+  case textDocument of { TxtDocFile ( absFilePath ) } -> return { go {
+      {
         modu = world.locateByFile( absFilePath )
-        perform lspRespond( modu.foldingRanges() )
-  } } }
+      } $=> { exc } -> {
+        console.debug<| 'Error locating Đ module ['++ absFilePath ++']\n'
+        ++ desc(exc)
+        perform lspRespond([])
+        return nil
+      }
+      perform lspRespond( modu.foldingRanges() )
+  } }
   error( 'unexpected lsp params' )
 }
