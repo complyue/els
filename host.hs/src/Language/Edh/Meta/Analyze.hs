@@ -1178,7 +1178,7 @@ el'AnalyzeStmt (StmtSrc (PerceiveStmt !expr !body) _stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr expr $
       const $
-        el'AnalyzeStmt body $
+        el'AnalyzeExpr body $
           const $ el'ExitTx exit $ EL'Const nil
 --
 

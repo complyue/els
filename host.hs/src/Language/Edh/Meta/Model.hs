@@ -916,8 +916,8 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
     stmtSymbols (StmtSrc (LetStmt _ (ArgsPacker !sndrs _)) _) =
       concat $ exprSymbols' NoDocCmt . sentArgExprSrc <$> sndrs
     stmtSymbols (StmtSrc (ExtendsStmt !x) _) = exprSymbols' NoDocCmt x
-    stmtSymbols (StmtSrc (PerceiveStmt !x !stmt) _) =
-      exprSymbols' NoDocCmt x ++ stmtSymbols stmt
+    stmtSymbols (StmtSrc (PerceiveStmt !x !body) _) =
+      exprSymbols' NoDocCmt x ++ exprSymbols' NoDocCmt body
     stmtSymbols (StmtSrc (ThrowStmt !x) _) = exprSymbols' NoDocCmt x
     stmtSymbols (StmtSrc (ReturnStmt !x _docCmt) _) = exprSymbols' NoDocCmt x
     stmtSymbols _ = []
@@ -1099,8 +1099,8 @@ blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
     stmtFoldRngs (StmtSrc (LetStmt _ (ArgsPacker !sndrs _)) _) =
       concat $ exprFoldRngs' . sentArgExprSrc <$> sndrs
     stmtFoldRngs (StmtSrc (ExtendsStmt !x) _) = exprFoldRngs' x
-    stmtFoldRngs (StmtSrc (PerceiveStmt !x !stmt) _) =
-      exprFoldRngs' x ++ stmtFoldRngs stmt
+    stmtFoldRngs (StmtSrc (PerceiveStmt !x !body) _) =
+      exprFoldRngs' x ++ exprFoldRngs' body
     stmtFoldRngs (StmtSrc (ThrowStmt !x) _) = exprFoldRngs' x
     stmtFoldRngs (StmtSrc (ReturnStmt !x _docCmt) _) = exprFoldRngs' x
     stmtFoldRngs _ = []
