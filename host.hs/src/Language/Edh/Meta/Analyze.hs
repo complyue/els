@@ -2876,6 +2876,87 @@ el'AnalyzeExpr
       diags = el'ctx'diags eac
 --
 
+-- obtaining contents of an includable script
+el'AnalyzeExpr
+  xsrc@(ExprSrc (IncExprExpr incSpec@(ExprSrc !specExpr !spec'span)) _)
+  !exit
+  !eas = case specExpr of
+    LitExpr (StringLiteral !litSpec) -> case el'ContextModule' eac of
+      Nothing -> do
+        el'LogDiag
+          diags
+          el'Error
+          spec'span
+          "moduleless-include"
+          "include from non-module context"
+        el'Exit eas exit $ EL'Const nil
+      Just (!msImporter, !resolvImporter) ->
+        el'RunTx eas $
+          el'LocateIncludee msImporter litSpec $ \ !incResult _eas ->
+            case incResult of
+              Left !err -> do
+                el'LogDiag diags el'Error spec'span "err-include" err
+                el'Exit eas exit $ EL'Const nil
+              Right !msImportee -> do
+                -- record a reference to the src module
+                let !moduVal = EL'ModuVal msImportee
+                    !incSrcDef =
+                      EL'AttrDef
+                        (AttrByName "this")
+                        NoDocCmt
+                        "<fragment>"
+                        zeroSrcRange
+                        ( ExprSrc
+                            (AttrExpr (ThisRef noSrcRange))
+                            noSrcRange
+                        )
+                        moduVal
+                        maoAnnotation
+                        Nothing
+                    !incDef =
+                      EL'AttrDef
+                        (AttrByName litSpec)
+                        NoDocCmt
+                        "<include>"
+                        noSrcRange
+                        xsrc
+                        (EL'External msImportee incSrcDef)
+                        maoAnnotation
+                        Nothing
+                    !incRef =
+                      EL'AttrRef
+                        Nothing
+                        (AttrAddrSrc (QuaintAttr litSpec) spec'span)
+                        msImportee
+                        incDef
+                recordAttrRef eac incRef
+
+                -- record as a dependency
+                modifyTVar' (el'modu'dependencies'wip resolvImporter) $
+                  Map.insert msImportee True
+                -- wrap as an expr as parsed
+                runEdhTx ets $
+                  asModuleParsed msImportee $ \ !parsed _ets ->
+                    el'Exit eas exit $
+                      EL'Expr $ stmtsExpr $ el'modu'stmts parsed
+    _ -> do
+      el'LogDiag
+        diags
+        el'Warning
+        spec'span
+        "dynamic-include"
+        "els does not analyze source structure of dynamic include yet"
+      el'RunTx eas $ -- dynamic string include
+      -- TODO analyzetime string eval?
+        el'AnalyzeExpr incSpec $ \ !impFromVal -> do
+          -- TODO validate it is string type, iexpr from it
+          el'ExitTx exit impFromVal
+    where
+      !ets = el'ets eas
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+--
+
 -- importing
 el'AnalyzeExpr
   xsrc@( ExprSrc
