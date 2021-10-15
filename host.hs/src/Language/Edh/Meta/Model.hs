@@ -450,7 +450,9 @@ instance Show EL'ArgsPack where
       kw ((k, a) : rest) = show k <> "= " <> show a <> ", " <> kw rest
 
 data EL'Value
-  = -- | runtime constant i.e. decidable at analysis time
+  = -- | unable to know for various reasons
+    EL'Unknown
+  | -- | runtime constant i.e. decidable at analysis time
     EL'Const !EdhValue
   | -- | externally defined value, most probably imported
     EL'External !EL'ModuSlot !EL'AttrDef
@@ -480,6 +482,7 @@ data EL'Value
     EL'Expr !ExprSrc
 
 instance Show EL'Value where
+  show EL'Unknown = "<unknown>"
   show (EL'Const !x) = show x
   show (EL'External !ms !adef) =
     let !k = el'attr'def'key adef
@@ -504,8 +507,11 @@ el'IsNil _ = False
 
 -- | a procedure
 data EL'Proc = EL'Proc
-  { el'proc'name :: AttrKey,
-    el'proc'args :: !ArgsReceiver
+  { el'proc'name :: !AttrKey,
+    el'proc'args :: !ArgsReceiver,
+    -- | prototype of its return value as in-place annotated
+    -- may be 'EL'Unknown'
+    el'proc'rtn'prot :: !EL'Value
   }
   deriving (Show)
 
@@ -938,7 +944,10 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
     exprSymbols
       !doc
       !full'span
-      (NamespaceExpr (ProcDecl !name _args !body _loc) (ArgsPacker !sndrs _)) =
+      ( NamespaceExpr
+          (ProcDecl !name _args _anno !body _loc)
+          (ArgsPacker !sndrs _)
+        ) =
         [ procDecl doc name SymbolKind.Namespace full'span $
             concat (exprSymbols' NoDocCmt . sentArgExprSrc <$> sndrs)
               ++ stmtSymbols body
@@ -946,37 +955,37 @@ blockSymbols !stmts = concat $ stmtSymbols <$> stmts
     exprSymbols
       !doc
       !full'span
-      (ClassExpr (ProcDecl !name _args !body _loc)) =
+      (ClassExpr (ProcDecl !name _args _anno !body _loc)) =
         [procDecl doc name SymbolKind.Class full'span $ stmtSymbols body]
     exprSymbols
       !doc
       !full'span
-      (MethodExpr (ProcDecl !name _args !body _loc)) =
+      (MethodExpr (ProcDecl !name _args _anno !body _loc)) =
         [procDecl doc name SymbolKind.Method full'span $ stmtSymbols body]
     exprSymbols
       !doc
       !full'span
-      (GeneratorExpr (ProcDecl !name _args !body _loc)) =
+      (GeneratorExpr (ProcDecl !name _args _anno !body _loc)) =
         [procDecl doc name SymbolKind.Method full'span $ stmtSymbols body]
     exprSymbols
       !doc
       !full'span
-      (InterpreterExpr (ProcDecl !name _args !body _loc)) =
+      (InterpreterExpr (ProcDecl !name _args _anno !body _loc)) =
         [procDecl doc name SymbolKind.Method full'span $ stmtSymbols body]
     exprSymbols
       !doc
       !full'span
-      (ProducerExpr (ProcDecl !name _args !body _loc)) =
+      (ProducerExpr (ProcDecl !name _args _anno !body _loc)) =
         [procDecl doc name SymbolKind.Method full'span $ stmtSymbols body]
     exprSymbols
       !doc
       !full'span
-      (OpDefiExpr _ _ _ (ProcDecl !name _args !body _loc)) =
+      (OpDefiExpr _ _ _ (ProcDecl !name _args _anno !body _loc)) =
         [procDecl doc name SymbolKind.Operator full'span $ stmtSymbols body]
     exprSymbols
       !doc
       !full'span
-      (OpOvrdExpr _ _ _ (ProcDecl !name _args !body _loc)) =
+      (OpOvrdExpr _ _ _ (ProcDecl !name _args _anno !body _loc)) =
         [procDecl doc name SymbolKind.Operator full'span $ stmtSymbols body]
     exprSymbols !doc _full'span (VoidExpr !x) = exprSymbols' doc x
     exprSymbols !doc _full'span (AtoIsoExpr !x) = exprSymbols' doc x
@@ -1119,35 +1128,35 @@ blockFoldRngs (stmt1 : more'stmts) = foldGap stmt1 more'stmts
       foldingRange full'span : blockFoldRngs nested'stmts
     exprFoldRngs
       !full'span
-      (NamespaceExpr (ProcDecl _name _args !body _loc) _apkr) =
+      (NamespaceExpr (ProcDecl _name _args _anno !body _loc) _apkr) =
         foldingRange full'span : stmtFoldRngs body
     exprFoldRngs
       !full'span
-      (ClassExpr (ProcDecl _name _args !body _loc)) =
+      (ClassExpr (ProcDecl _name _args _anno !body _loc)) =
         foldingRange full'span : stmtFoldRngs body
     exprFoldRngs
       !full'span
-      (MethodExpr (ProcDecl _name _args !body _loc)) =
+      (MethodExpr (ProcDecl _name _args _anno !body _loc)) =
         foldingRange full'span : stmtFoldRngs body
     exprFoldRngs
       !full'span
-      (GeneratorExpr (ProcDecl _name _args !body _loc)) =
+      (GeneratorExpr (ProcDecl _name _args _anno !body _loc)) =
         foldingRange full'span : stmtFoldRngs body
     exprFoldRngs
       !full'span
-      (InterpreterExpr (ProcDecl _name _args !body _loc)) =
+      (InterpreterExpr (ProcDecl _name _args _anno !body _loc)) =
         foldingRange full'span : stmtFoldRngs body
     exprFoldRngs
       !full'span
-      (ProducerExpr (ProcDecl _name _args !body _loc)) =
+      (ProducerExpr (ProcDecl _name _args _anno !body _loc)) =
         foldingRange full'span : stmtFoldRngs body
     exprFoldRngs
       !full'span
-      (OpDefiExpr _ _ _ (ProcDecl _name _args !body _loc)) =
+      (OpDefiExpr _ _ _ (ProcDecl _name _args _anno !body _loc)) =
         foldingRange full'span : stmtFoldRngs body
     exprFoldRngs
       !full'span
-      (OpOvrdExpr _ _ _ (ProcDecl _name _args !body _loc)) =
+      (OpOvrdExpr _ _ _ (ProcDecl _name _args _anno !body _loc)) =
         foldingRange full'span : stmtFoldRngs body
     exprFoldRngs _full'span (VoidExpr !x) = exprFoldRngs' x
     exprFoldRngs _full'span (AtoIsoExpr !x) = exprFoldRngs' x

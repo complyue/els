@@ -869,21 +869,26 @@ el'AnalyzeStmt
           SingleReceiver
             ( RecvArg
                 addr@(AttrAddrSrc _ arg'span)
+                !anno
                 !maybeRename
                 _maybeDef
-              ) -> do
-              case maybeRename of
-                Nothing -> recvOne addr singleVal
-                Just (DirectRef !addr') -> recvOne addr' singleVal
-                Just IndirectRef {} -> pure () -- TODO define art into objs
-                _ -> do
-                  el'LogDiag
-                    diags
-                    el'Error
-                    arg'span
-                    "invalid-target"
-                    "invalid let target"
-              el'Exit eas exit $ EL'Const nil
+              ) -> el'RunTx eas $
+              el'AnalyzeAnno anno $ \ !anno'prot _eas -> do
+                let rcvdProt = case anno'prot of
+                      EL'Unknown -> singleVal
+                      _ -> anno'prot
+                case maybeRename of
+                  Nothing -> recvOne addr rcvdProt
+                  Just (DirectRef !addr') -> recvOne addr' rcvdProt
+                  Just IndirectRef {} -> pure () -- TODO define art into objs
+                  _ -> do
+                    el'LogDiag
+                      diags
+                      el'Error
+                      arg'span
+                      "invalid-target"
+                      "invalid let target"
+                el'Exit eas exit $ EL'Const nil
           SingleReceiver !rcvr -> do
             el'LogDiag
               diags
@@ -913,8 +918,6 @@ el'AnalyzeStmt
       !pwip = el'ProcWIP swip
       !bwip = el'scope'branch'wip pwip
 
-      unknownVal = EL'Expr $ ExprSrc (LitExpr NilLiteral) stmt'span
-
       doUnknownRcvrs :: [ArgReceiver] -> STM ()
       doUnknownRcvrs [] = el'Exit eas exit $ EL'Const nil
       doUnknownRcvrs (rcvr : rest) = do
@@ -925,18 +928,25 @@ el'AnalyzeStmt
             recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty False True
           RecvRestPkArgs !addr ->
             recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty True True
-          RecvArg addr@(AttrAddrSrc _ arg'span) !maybeRename _maybeDef ->
-            case maybeRename of
-              Nothing -> recvOne addr unknownVal
-              Just (DirectRef !addr') -> recvOne addr' unknownVal
-              Just IndirectRef {} -> pure () -- TODO define art into objs
-              _ -> do
-                el'LogDiag
-                  diags
-                  el'Error
-                  arg'span
-                  "invalid-target"
-                  "invalid let target"
+          RecvArg
+            addr@(AttrAddrSrc _ arg'span)
+            !anno
+            !maybeRename
+            _maybeDef -> el'RunTx eas $
+              el'AnalyzeAnno anno $ \ !protVal _eas ->
+                case maybeRename of
+                  Nothing ->
+                    recvOne addr protVal
+                  Just (DirectRef !addr') ->
+                    recvOne addr' protVal
+                  Just IndirectRef {} -> pure () -- TODO define art into objs
+                  _ -> do
+                    el'LogDiag
+                      diags
+                      el'Error
+                      arg'span
+                      "invalid-target"
+                      "invalid let target"
         doUnknownRcvrs rest
 
       recvOne :: AttrAddrSrc -> EL'Value -> STM ()
@@ -1050,47 +1060,60 @@ el'AnalyzeStmt
             RecvRestPkArgs !addr -> do
               recvOne addr $ EL'Apk $ EL'ArgsPack args kwargs True True
               done [] odEmpty
-            RecvArg addr@(AttrAddrSrc _ arg'span) !maybeRename maybeDef ->
-              let goRecv :: (AttrKey -> EL'Value -> STM ()) -> STM ()
-                  goRecv !received =
-                    el'ResolveAttrAddr eas addr $ \case
-                      Nothing -> done args kwargs
-                      Just !recvKey -> case odTakeOut recvKey kwargs of
-                        (Just !kwVal, kwargs') -> do
-                          received recvKey kwVal
-                          done args kwargs'
-                        (Nothing, kwargs') -> case args of
-                          argVal : args' -> do
-                            received recvKey argVal
-                            done args' kwargs'
-                          _ -> case maybeDef of
-                            Nothing -> do
-                              if dyn'args || dyn'kwargs
-                                then
-                                  el'LogDiag
-                                    diags
-                                    el'Warning
-                                    arg'span
-                                    "dyn-missing-arg"
-                                    "possible missing argument"
-                                else
-                                  el'LogDiag
-                                    diags
-                                    el'Error
-                                    arg'span
-                                    "missing-arg"
-                                    "missing argument"
-                              received recvKey $
-                                EL'Expr $
-                                  ExprSrc (AttrExpr $ DirectRef addr) arg'span
-                              done args kwargs
-                            Just !defExpr -> el'RunTx
-                              eas {el'context = eac {el'ctx'pure = True}}
-                              $ el'AnalyzeExpr defExpr $
-                                \ !defVal _eas -> do
-                                  received recvKey defVal
+            RecvArg
+              addr@(AttrAddrSrc _ arg'span)
+              !anno
+              !maybeRename
+              maybeDef -> el'RunTx eas $
+                el'AnalyzeAnno anno $ \ !anno'prot _eas -> do
+                  let asRcvd :: EL'Value -> EL'Value
+                      asRcvd = case anno'prot of
+                        EL'Unknown -> id
+                        _ -> const anno'prot
+
+                      goRecv :: (AttrKey -> EL'Value -> STM ()) -> STM ()
+                      goRecv !received =
+                        el'ResolveAttrAddr eas addr $ \case
+                          Nothing -> done args kwargs
+                          Just !recvKey -> case odTakeOut recvKey kwargs of
+                            (Just !kwVal, kwargs') -> do
+                              received recvKey $ asRcvd kwVal
+                              done args kwargs'
+                            (Nothing, kwargs') -> case args of
+                              argVal : args' -> do
+                                received recvKey $ asRcvd argVal
+                                done args' kwargs'
+                              _ -> case maybeDef of
+                                Nothing -> do
+                                  if dyn'args || dyn'kwargs
+                                    then
+                                      el'LogDiag
+                                        diags
+                                        el'Warning
+                                        arg'span
+                                        "dyn-missing-arg"
+                                        "possible missing argument"
+                                    else
+                                      el'LogDiag
+                                        diags
+                                        el'Error
+                                        arg'span
+                                        "missing-arg"
+                                        "missing argument"
+                                  received recvKey $
+                                    asRcvd $
+                                      EL'Expr $
+                                        ExprSrc
+                                          (AttrExpr $ DirectRef addr)
+                                          arg'span
                                   done args kwargs
-               in case maybeRename of
+                                Just !defExpr -> el'RunTx
+                                  eas {el'context = eac {el'ctx'pure = True}}
+                                  $ el'AnalyzeExpr defExpr $
+                                    \ !defVal _eas -> do
+                                      received recvKey $ asRcvd defVal
+                                      done args kwargs
+                  case maybeRename of
                     Nothing -> goRecv $ recvOne' arg'span
                     Just (DirectRef !addr') ->
                       goRecv $ \_recvKey -> recvOne addr'
@@ -1342,6 +1365,41 @@ el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrSymbol !addr'span) !exit = do
     "missing-sym"
     "missing symbolic attribute name"
   exit Nothing
+
+el'AnalyzeAnno :: Maybe AnnoExpr -> EL'Analysis EL'Value
+el'AnalyzeAnno Nothing !exit = el'ExitTx exit EL'Unknown
+el'AnalyzeAnno
+  ( Just
+      ( AnnoExpr
+          ctorSrc@(ExprSrc ctor ctorRng)
+          apkr@(ArgsPacker _ apkrRng)
+        )
+    )
+  !exit =
+    case ctor of
+      AttrExpr {} ->
+        -- formal type annotation referencing a class or a procedure, that
+        -- being a callable constructor
+        ctorPrototypeValue
+      BlockExpr {} ->
+        -- informal annotation, freeform but still structured as some valid
+        -- expressions. code navigation is possible, and missing references
+        -- are diagnosed.
+        -- todo support sum-type annotation in this form?
+        el'ExitTx exit EL'Unknown
+      _ ->
+        -- quaint spec by literal string, etc.
+        -- todo more sophisticated analysis
+        el'ExitTx exit EL'Unknown
+    where
+      protSpan = SrcRange (src'start ctorRng) (src'end apkrRng)
+      ctorPrototypeValue = \ !eas -> do
+        let !eac = el'context eas
+            !easPure = eas {el'context = eac {el'ctx'pure = True}}
+        el'RunTx easPure $
+          el'AnalyzeExpr (ExprSrc (CallExpr ctorSrc apkr) protSpan) $
+            \ !result _eas -> -- restore original eas
+              el'Exit eas exit result
 
 -- | analyze an expression in context
 el'AnalyzeExpr :: ExprSrc -> EL'Analysis EL'Value
@@ -1773,7 +1831,7 @@ el'AnalyzeExpr
       doAssign :: STM ()
       doAssign = do
         !docCmt <- takeDocComment eas
-        el'RunTx eas $
+        el'RunTx eas $ -- TODO use pure ctx?
           el'AnalyzeExpr rhExpr $ \ !rhVal !easDone -> do
             case lhExpr of
               ExprSrc
@@ -2758,10 +2816,9 @@ el'AnalyzeExpr
           EL'ClsVal !clsModu !cls -> do
             !obj <- el'ObjNew cls
             el'Exit easDone exit $ EL'ObjVal clsModu obj
-          _ ->
-            -- TODO honor procedure annotation for return type, thus reified
-            -- value to return from here
-            el'Exit easDone exit $ EL'Expr xsrc
+          EL'ProcVal _mthModu (EL'Proc _name _args !prot) ->
+            el'Exit easDone exit prot
+          _ -> el'Exit easDone exit $ EL'Expr xsrc
     where
       !eac = el'context eas
       diags = el'ctx'diags eac
@@ -3055,26 +3112,30 @@ el'AnalyzeExpr
                 go !srcArts (ar : rest) = case ar of
                   RecvRestPkArgs (AttrAddrSrc (NamedAttr "_") _) -> pure ()
                   RecvRestKwArgs (AttrAddrSrc (NamedAttr "_") _) -> pure ()
-                  RecvArg srcAddr@(AttrAddrSrc _ !item'span) !maybeAs !defExpr -> do
-                    case defExpr of
-                      Nothing -> pure ()
-                      Just {} ->
-                        el'LogDiag
-                          diags
-                          el'Warning
-                          item'span
-                          "unusual-import"
-                          "defaults in import specificatin is not analyzed yet"
-                    case maybeAs of
-                      Nothing -> processImp srcAddr srcAddr
-                      Just (DirectRef !asAddr) -> processImp srcAddr asAddr
-                      Just !badRename ->
-                        el'LogDiag
-                          diags
-                          el'Error
-                          item'span
-                          "invalid-import-rename"
-                          $ "invalid rename of import: " <> T.pack (show badRename)
+                  RecvArg
+                    srcAddr@(AttrAddrSrc _ !item'span)
+                    _anno -- todo honor annotations on imports?
+                    !maybeAs
+                    !defExpr -> do
+                      case defExpr of
+                        Nothing -> pure ()
+                        Just {} ->
+                          el'LogDiag
+                            diags
+                            el'Warning
+                            item'span
+                            "unusual-import"
+                            "defaults in import specificatin is not analyzed yet"
+                      case maybeAs of
+                        Nothing -> processImp srcAddr srcAddr
+                        Just (DirectRef !asAddr) -> processImp srcAddr asAddr
+                        Just !badRename ->
+                          el'LogDiag
+                            diags
+                            el'Error
+                            item'span
+                            "invalid-import-rename"
+                            $ "invalid rename of import: " <> T.pack (show badRename)
                   RecvRestPosArgs (AttrAddrSrc _ bad'span) ->
                     el'LogDiag
                       diags
@@ -3303,6 +3364,7 @@ el'AnalyzeExpr
                ( ProcDecl
                    cls'name@(AttrAddrSrc _cls'name'addr !cls'name'span)
                    !argsRcvr
+                   _anno
                    cls'body@(StmtSrc _body'stmt !body'span)
                    _cls'proc'loc
                  )
@@ -3380,26 +3442,32 @@ el'AnalyzeExpr
             go !dfs (ar : rest) exit' = case ar of
               RecvArg
                 dfAddr@(AttrAddrSrc _ df'span)
+                !anno
                 !maybeRename
-                _maybeDef ->
-                  case maybeRename of
-                    Nothing -> defDataField dfAddr exit'
-                    Just (DirectRef !dfAddr') -> defDataField dfAddr' exit'
-                    Just _badRename -> do
-                      el'LogDiag
-                        diags
-                        el'Error
-                        df'span
-                        "bad-data-field-rename"
-                        "bad data field rename"
-                      go dfs rest exit'
-              RecvRestPkArgs !dfAddr -> defDataField dfAddr exit'
-              RecvRestKwArgs !dfAddr -> defDataField dfAddr exit'
-              RecvRestPosArgs !dfAddr -> defDataField dfAddr exit'
+                _maybeDef -> el'RunTx eas $
+                  el'AnalyzeAnno anno $ \ !anno'prot _eas ->
+                    case maybeRename of
+                      Nothing -> defDataField dfAddr anno'prot exit'
+                      Just (DirectRef !dfAddr') ->
+                        defDataField dfAddr' anno'prot exit'
+                      Just _badRename -> do
+                        el'LogDiag
+                          diags
+                          el'Error
+                          df'span
+                          "bad-data-field-rename"
+                          "bad data field rename"
+                        go dfs rest exit'
+              RecvRestPkArgs !dfAddr ->
+                defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty True True) exit'
+              RecvRestKwArgs !dfAddr ->
+                defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty False True) exit'
+              RecvRestPosArgs !dfAddr ->
+                defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty True False) exit'
               where
-                defDataField (AttrAddrSrc (NamedAttr "_") _) !exit'' =
+                defDataField (AttrAddrSrc (NamedAttr "_") _) _fv !exit'' =
                   go dfs rest exit''
-                defDataField dfAddr@(AttrAddrSrc _ df'name'span) !exit'' =
+                defDataField dfAddr@(AttrAddrSrc _ df'name'span) fv !exit'' =
                   el'ResolveAttrAddr eas dfAddr $ \case
                     Nothing -> go dfs rest exit''
                     Just !dfKey -> do
@@ -3413,12 +3481,7 @@ el'AnalyzeExpr
                               "<data-class-field>"
                               df'name'span
                               xsrc
-                              ( EL'Expr
-                                  ( ExprSrc
-                                      (AttrExpr (DirectRef dfAddr))
-                                      df'name'span
-                                  )
-                              )
+                              fv
                               dfAnno
                               Nothing
                           ) :
@@ -3450,6 +3513,7 @@ el'AnalyzeExpr
                     ( EL'Proc
                         (AttrByName mthName)
                         NullaryReceiver -- todo elaborate actual args
+                        EL'Unknown
                     )
                 )
                 anno
@@ -3580,6 +3644,7 @@ el'AnalyzeExpr
            ( NamespaceExpr
                ( ProcDecl
                    ns'name@(AttrAddrSrc _ns'name'addr !ns'name'span)
+                   _
                    _
                    ns'body@(StmtSrc _body'stmt !body'span)
                    _ns'proc'loc
@@ -3959,19 +4024,27 @@ el'AnalyzeExpr
               STM ()
             go !args [] !exit' = exit' $ reverse args
             go !args (ar : rest) !exit' = case ar of
-              RecvArg !argAddr !maybeRename !maybeDef -> case maybeRename of
-                Nothing -> defLoopArt argAddr maybeDef exit'
-                Just (DirectRef !argAddr') -> defLoopArt argAddr' Nothing exit'
-                Just _otherRename -> go args rest exit' -- TODO elaborate?
-              RecvRestPkArgs !argAddr -> defLoopArt argAddr Nothing exit'
-              RecvRestKwArgs !argAddr -> defLoopArt argAddr Nothing exit'
-              RecvRestPosArgs !argAddr -> defLoopArt argAddr Nothing exit'
+              RecvArg !argAddr !anno !maybeRename _maybeDef ->
+                -- TODO honor default value to receive
+                el'RunTx eas $
+                  el'AnalyzeAnno anno $ \ !anno'prot _eas ->
+                    case maybeRename of
+                      Nothing -> defLoopArt anno'prot argAddr exit'
+                      Just (DirectRef !argAddr') ->
+                        defLoopArt EL'Unknown argAddr' exit'
+                      Just _otherRename -> go args rest exit' -- TODO elaborate?
+              RecvRestPkArgs !argAddr ->
+                defLoopArt (EL'Apk $ EL'ArgsPack [] odEmpty True True) argAddr exit'
+              RecvRestKwArgs !argAddr ->
+                defLoopArt (EL'Apk $ EL'ArgsPack [] odEmpty False True) argAddr exit'
+              RecvRestPosArgs !argAddr ->
+                defLoopArt (EL'Apk $ EL'ArgsPack [] odEmpty True False) argAddr exit'
               where
-                defLoopArt (AttrAddrSrc (NamedAttr "_") _) _ !exit'' =
+                defLoopArt _av (AttrAddrSrc (NamedAttr "_") _) !exit'' =
                   go args rest exit''
                 defLoopArt
+                  !av
                   argAddr@(AttrAddrSrc _ arg'name'span)
-                  !knownExpr
                   !exit'' =
                     el'ResolveAttrAddr easLoop argAddr $ \case
                       Nothing -> go args rest exit''
@@ -3985,14 +4058,7 @@ el'AnalyzeExpr
                                   "<loop-receiver>"
                                   arg'name'span
                                   x
-                                  ( EL'Expr $
-                                      fromMaybe
-                                        ( ExprSrc
-                                            (AttrExpr (DirectRef argAddr))
-                                            arg'name'span
-                                        )
-                                        knownExpr
-                                  )
+                                  av
                                   anno
                                   Nothing
                               ) :
@@ -4168,6 +4234,7 @@ el'DefineMethod
   ( ProcDecl
       mth'name@(AttrAddrSrc _mth'name'addr !mth'name'span)
       !argsRcvr
+      !anno
       mth'body@(StmtSrc _body'stmt !body'span)
       _mth'proc'loc
     )
@@ -4184,43 +4251,44 @@ el'DefineMethod
     case maybeMthName of
       Nothing -> el'Exit eas exit $ EL'Const nil
       Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
-      Just !mthName -> do
-        !mthAnno <- newTVar =<< el'ResolveAnnotation outerScope mthName
-        let !mth = EL'Proc mthName argsRcvr
-            !mthVal = EL'ProcVal mwip mth
-            !mthDef =
-              EL'AttrDef
-                mthName
-                docCmt
-                "<proc-def>"
-                mth'name'span
-                xsrc
-                mthVal
-                mthAnno
-                Nothing
-        -- record as definition symbol of outer scope
-        recordAttrDef eac mthDef
-        --
+      Just !mthName -> el'RunTx eas $
+        el'AnalyzeAnno anno $ \anno'prot _eas -> do
+          !mthAnno <- newTVar =<< el'ResolveAnnotation outerScope mthName
+          let !mth = EL'Proc mthName argsRcvr anno'prot
+              !mthVal = EL'ProcVal mwip mth
+              !mthDef =
+                EL'AttrDef
+                  mthName
+                  docCmt
+                  "<proc-def>"
+                  mth'name'span
+                  xsrc
+                  mthVal
+                  mthAnno
+                  Nothing
+          -- record as definition symbol of outer scope
+          recordAttrDef eac mthDef
+          --
 
-        -- record as artifact of outer scope
-        unless (el'ctx'pure eac) $ do
-          if el'ctx'eff'defining eac
-            then iopdInsert mthName mthDef $ el'branch'effs'wip outerBranch
-            else do
-              let !attrs = el'branch'attrs'wip outerBranch
-              iopdInsert mthName mthDef $ el'scope'attrs'wip outerProc
-              iopdInsert mthName mthDef attrs
-              -- record a region after this definition for current scope
-              iopdSnapshot attrs
-                >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
-                  . EL'Region (src'end body'span)
+          -- record as artifact of outer scope
+          unless (el'ctx'pure eac) $ do
+            if el'ctx'eff'defining eac
+              then iopdInsert mthName mthDef $ el'branch'effs'wip outerBranch
+              else do
+                let !attrs = el'branch'attrs'wip outerBranch
+                iopdInsert mthName mthDef $ el'scope'attrs'wip outerProc
+                iopdInsert mthName mthDef attrs
+                -- record a region after this definition for current scope
+                iopdSnapshot attrs
+                  >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
+                    . EL'Region (src'end body'span)
 
-          when (el'ctx'exporting eac) $
-            iopdInsert mthName mthDef $
-              el'obj'exps $ el'scope'this'obj outerProc
+            when (el'ctx'exporting eac) $
+              iopdInsert mthName mthDef $
+                el'obj'exps $ el'scope'this'obj outerProc
 
-        -- return the procedure value
-        el'Exit eas exit mthVal
+          -- return the procedure value
+          el'Exit eas exit mthVal
     where
       !eac = el'context eas
       !mwip = el'ContextModule eac
@@ -4292,11 +4360,12 @@ el'DefineMethod
                   (regions'wip ++)
                     <$> readTVar (el'scope'regions'wip pwipDone)
 
-                -- update annotations for arguments from body
+                -- update separate annotations for arguments from body
                 forM_ argArts $ \(!argName, !argDef) ->
                   iopdLookup argName mthAnnos >>= \case
                     Nothing -> pure ()
-                    Just !anno -> writeTVar (el'attr'def'anno argDef) $ Just anno
+                    Just !anno' ->
+                      writeTVar (el'attr'def'anno argDef) $ Just anno'
                 --
 
                 let !mth'scope =
@@ -4342,10 +4411,14 @@ el'DefineArrowProc
 
       withArgsRcvr :: ArgsReceiver -> STM ()
       withArgsRcvr !argsRcvr = do
-        el'ScheduleAnalysis (el'ana'queue eas) CallInPhase (analyzeMthCall argsRcvr)
+        el'ScheduleAnalysis
+          (el'ana'queue eas)
+          CallInPhase
+          (analyzeMthCall argsRcvr)
 
         -- return the procedure value
-        el'Exit eas exit $ EL'ProcVal mwip $ EL'Proc mthName argsRcvr
+        el'Exit eas exit $
+          EL'ProcVal mwip $ EL'Proc mthName argsRcvr EL'Unknown
 
       analyzeMthCall :: ArgsReceiver -> STM () -> STM ()
       analyzeMthCall !argsRcvr !doneMthCall = do
@@ -4455,84 +4528,84 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
       STM ()
     go !args [] !exit = exit $ reverse args
     go !args (ar : rest) !exit = case ar of
-      RecvArg argAddr@(AttrAddrSrc _ arg'name'span) !maybeRename !maybeDef ->
-        case maybeRename of
-          Nothing -> defArgArt argAddr maybeDef
-          Just (DirectRef !tgtAttr) -> defArgArt tgtAttr maybeDef
-          Just
-            ref@( IndirectRef
-                    tgtExpr@(ExprSrc _ tgt'span)
-                    addr@(AttrAddrSrc _ !addr'span)
-                  ) -> do
-              el'RunTx eas $
-                el'AnalyzeExpr tgtExpr $ \ !tgtVal !easDone' -> do
-                  -- record as reference symbol, for completion
-                  recordAttrRef eac $
-                    EL'UnsolvedRef (Just tgtVal) addr'span
-                  el'ResolveAttrAddr easDone' addr $ \case
-                    Nothing ->
-                      -- record as reference symbol, for completion
-                      recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
-                    Just !attrKey ->
-                      case tgtVal of
-                        EL'ObjVal _ms !obj -> do
-                          let !cls = el'obj'class obj
-                              !objAttrs = el'obj'attrs obj
-                          !maybePrevDef <- el'ResolveObjAttr obj attrKey
-                          case maybePrevDef of
-                            Just !prevDef ->
-                              -- record as reference symbol
-                              recordAttrRef eac $
-                                EL'AttrRef Nothing addr mwip prevDef
-                            Nothing -> pure ()
-                          !attrAnno <-
-                            (newTVar =<<) $
-                              tryReadTMVar (el'class'defi cls) >>= \case
-                                Nothing -> return Nothing
-                                Just !defi ->
-                                  return $
-                                    odLookup attrKey $ el'class'annos defi
-                          let !attrDef =
-                                EL'AttrDef
-                                  attrKey
-                                  NoDocCmt
-                                  opSym
-                                  addr'span
-                                  ( ExprSrc
-                                      (AttrExpr ref)
-                                      ( SrcRange
-                                          (src'start tgt'span)
-                                          (src'end addr'span)
-                                      )
-                                  )
-                                  ( EL'Expr $
-                                      fromMaybe
-                                        ( ExprSrc
-                                            (AttrExpr (DirectRef argAddr))
-                                            arg'name'span
+      RecvArg
+        argAddr
+        !anno
+        !maybeRename
+        -- TODO honor default value spec
+        _maybeDef -> el'RunTx eas $
+          el'AnalyzeAnno anno $ \ !anno'prot _eas -> case maybeRename of
+            Nothing -> defArgArt argAddr anno'prot
+            Just (DirectRef !tgtAttr) -> defArgArt tgtAttr anno'prot
+            Just
+              ref@( IndirectRef
+                      tgtExpr@(ExprSrc _ tgt'span)
+                      addr@(AttrAddrSrc _ !addr'span)
+                    ) -> do
+                el'RunTx eas $
+                  el'AnalyzeExpr tgtExpr $ \ !tgtVal !easDone' -> do
+                    -- record as reference symbol, for completion
+                    recordAttrRef eac $ EL'UnsolvedRef (Just tgtVal) addr'span
+                    el'ResolveAttrAddr easDone' addr $ \case
+                      Nothing ->
+                        -- record as reference symbol, for completion
+                        recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
+                      Just !attrKey ->
+                        case tgtVal of
+                          EL'ObjVal _ms !obj -> do
+                            let !cls = el'obj'class obj
+                                !objAttrs = el'obj'attrs obj
+                            !maybePrevDef <- el'ResolveObjAttr obj attrKey
+                            case maybePrevDef of
+                              Just !prevDef ->
+                                -- record as reference symbol
+                                recordAttrRef eac $
+                                  EL'AttrRef Nothing addr mwip prevDef
+                              Nothing -> pure ()
+                            !attrAnno <-
+                              (newTVar =<<) $
+                                tryReadTMVar (el'class'defi cls) >>= \case
+                                  Nothing -> return Nothing
+                                  Just !defi ->
+                                    return $
+                                      odLookup attrKey $ el'class'annos defi
+                            let !attrDef =
+                                  EL'AttrDef
+                                    attrKey
+                                    NoDocCmt
+                                    opSym
+                                    addr'span
+                                    ( ExprSrc
+                                        (AttrExpr ref)
+                                        ( SrcRange
+                                            (src'start tgt'span)
+                                            (src'end addr'span)
                                         )
-                                        maybeDef
-                                  )
-                                  attrAnno
-                                  Nothing
-                          iopdInsert attrKey attrDef objAttrs
-                        -- TODO more to do?
-                        _ -> pure ()
-                  go args rest exit
-          Just !badRename -> do
-            el'LogDiag
-              diags
-              el'Error
-              (attrRefSpan badRename)
-              "bad-re-target"
-              "bad argument re-targeting"
-            go args rest exit
-      RecvRestPkArgs !argAddr -> defArgArt argAddr Nothing
-      RecvRestKwArgs !argAddr -> defArgArt argAddr Nothing
-      RecvRestPosArgs !argAddr -> defArgArt argAddr Nothing
+                                    )
+                                    anno'prot
+                                    attrAnno
+                                    Nothing
+                            iopdInsert attrKey attrDef objAttrs
+                          -- TODO more to do?
+                          _ -> pure ()
+                    go args rest exit
+            Just !badRename -> do
+              el'LogDiag
+                diags
+                el'Error
+                (attrRefSpan badRename)
+                "bad-re-target"
+                "bad argument re-targeting"
+              go args rest exit
+      RecvRestPkArgs !argAddr ->
+        defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty True True
+      RecvRestKwArgs !argAddr ->
+        defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty False True
+      RecvRestPosArgs !argAddr ->
+        defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty True False
       where
-        defArgArt (AttrAddrSrc (NamedAttr "_") _) _ = go args rest exit
-        defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !knownExpr =
+        defArgArt (AttrAddrSrc (NamedAttr "_") _) _av = go args rest exit
+        defArgArt argAddr@(AttrAddrSrc _ arg'name'span) !av =
           el'ResolveAttrAddr eas argAddr $ \case
             Nothing -> go args rest exit
             Just !argKey -> do
@@ -4567,14 +4640,7 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                         opSym
                         arg'name'span
                         srcExpr
-                        ( EL'Expr $
-                            fromMaybe
-                              ( ExprSrc
-                                  (AttrExpr (DirectRef argAddr))
-                                  arg'name'span
-                              )
-                              knownExpr
-                        )
+                        av
                         anno
                         Nothing
                     ) :
