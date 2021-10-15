@@ -1366,40 +1366,86 @@ el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrSymbol !addr'span) !exit = do
     "missing symbolic attribute name"
   exit Nothing
 
-el'AnalyzeAnno :: Maybe AnnoExpr -> EL'Analysis EL'Value
-el'AnalyzeAnno Nothing !exit = el'ExitTx exit EL'Unknown
-el'AnalyzeAnno
-  ( Just
-      ( AnnoExpr
-          ctorSrc@(ExprSrc ctor ctorRng)
-          apkr@(ArgsPacker _ apkrRng)
-        )
-    )
-  !exit =
-    case ctor of
-      AttrExpr {} ->
-        -- formal type annotation referencing a class or a procedure, that
-        -- being a callable constructor
-        ctorPrototypeValue
-      BlockExpr {} ->
-        -- informal annotation, freeform but still structured as some valid
-        -- expressions. code navigation is possible, and missing references
-        -- are diagnosed.
-        -- todo support sum-type annotation in this form?
-        el'ExitTx exit EL'Unknown
-      _ ->
-        -- quaint spec by literal string, etc.
-        -- todo more sophisticated analysis
-        el'ExitTx exit EL'Unknown
-    where
-      protSpan = SrcRange (src'start ctorRng) (src'end apkrRng)
-      ctorPrototypeValue = \ !eas -> do
-        let !eac = el'context eas
-            !easPure = eas {el'context = eac {el'ctx'pure = True}}
-        el'RunTx easPure $
-          el'AnalyzeExpr (ExprSrc (CallExpr ctorSrc apkr) protSpan) $
-            \ !result _eas -> -- restore original eas
-              el'Exit eas exit result
+el'AnalyzeAnno :: Maybe InpAnno -> EL'Analysis EL'Value
+el'AnalyzeAnno Nothing !exit !eas = el'Exit eas exit EL'Unknown
+el'AnalyzeAnno (Just anno) !exit !eas = el'RunTx easPure $ case anno of
+  CtorProtoAnno ctorExpr ->
+    el'AnalyzeExpr ctorExpr $ \ !result _eas ->
+      -- restore original eas
+      el'Exit eas exit result
+  ApkProtoAnno argsRcvr ->
+    el'AnalyzeAnnoApk argsRcvr $ \ !result _eas ->
+      -- restore original eas
+      el'Exit eas exit $ EL'Apk result
+  ProcSigAnno argsRcvr rtnAnno ->
+    el'AnalyzeAnnoApk argsRcvr $
+      const $
+        el'AnalyzeAnno (Just rtnAnno) $ \anno'prot _eas ->
+          -- restore original eas
+          el'Exit eas exit $
+            EL'ProcVal mwip $
+              EL'Proc (AttrByName "<lambda>") argsRcvr anno'prot
+  FreeformAnno x ->
+    el'AnalyzeExpr x $ \_result _eas ->
+      -- restore original eas
+      el'Exit eas exit EL'Unknown
+  QuaintAnno _spec -> \_eas ->
+    -- restore original eas
+    el'Exit eas exit EL'Unknown
+  EffsExpAnno effArgs maybeRtnAnno -> el'AnalyzeAnnoEffs effArgs $
+    -- restore original eas
+    \() _eas -> el'RunTx eas $ el'AnalyzeAnno maybeRtnAnno exit
+  where
+    !eac = el'context eas
+    !mwip = el'ContextModule eac
+    !easPure = eas {el'context = eac {el'ctx'pure = True}}
+
+el'AnalyzeAnnoEffs :: [EffArgAnno] -> EL'Analysis ()
+el'AnalyzeAnnoEffs !es !exit !eas = go es
+  where
+    go :: [EffArgAnno] -> STM ()
+    go [] = el'Exit eas exit ()
+    go (EffArgAnno _argAddr anno _maybeDef : rest) = el'RunTx eas $
+      el'AnalyzeAnno anno $ \_anno'prot _eas ->
+        -- TODO save declared effectful args to scope context, then diagnose
+        --      effect resolutions with this information
+        go rest
+
+el'AnalyzeAnnoApk :: ArgsReceiver -> EL'Analysis EL'ArgsPack
+el'AnalyzeAnnoApk !argsRcvr !exit !eas = case argsRcvr of
+  PackReceiver !ars _ -> go [] [] ars
+  SingleReceiver !ar -> go [] [] [ar]
+  WildReceiver _ ->
+    el'Exit eas exit $ EL'ArgsPack [] odEmpty False True
+  NullaryReceiver ->
+    el'Exit eas exit $ EL'ArgsPack [] odEmpty False False
+  where
+    go :: [EL'Value] -> [(AttrKey, EL'Value)] -> [ArgReceiver] -> STM ()
+    go args kwargs [] =
+      el'Exit eas exit $
+        EL'ArgsPack (reverse $! args) (odFromList $ reverse kwargs) False False
+    go args kwargs (ar : rest) = case ar of
+      RecvArg
+        argAddr
+        !anno
+        _maybeRename -- TODO warn if renaming here?
+        -- TODO honor default value spec
+        _maybeDef -> el'RunTx eas $
+          el'AnalyzeAnno anno $ \ !anno'prot _eas ->
+            defArgArt argAddr anno'prot
+      RecvRestPkArgs !argAddr ->
+        defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty True True
+      RecvRestKwArgs !argAddr ->
+        defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty False True
+      RecvRestPosArgs !argAddr ->
+        defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty True False
+      where
+        defArgArt (AttrAddrSrc (NamedAttr "_") _) av =
+          go (av : args) kwargs rest
+        defArgArt !argAddr !av =
+          el'ResolveAttrAddr eas argAddr $ \case
+            Nothing -> go args ((AttrByName "<?>", av) : kwargs) rest
+            Just !argKey -> go args ((argKey, av) : kwargs) rest
 
 -- | analyze an expression in context
 el'AnalyzeExpr :: ExprSrc -> EL'Analysis EL'Value
@@ -3364,7 +3410,7 @@ el'AnalyzeExpr
                ( ProcDecl
                    cls'name@(AttrAddrSrc _cls'name'addr !cls'name'span)
                    !argsRcvr
-                   _anno
+                   !cls'anno
                    cls'body@(StmtSrc _body'stmt !body'span)
                    _cls'proc'loc
                  )
@@ -3372,233 +3418,235 @@ el'AnalyzeExpr
            !expr'span
          )
   !exit
-  !eas = el'ResolveAttrAddr eas cls'name $ \ !maybeClsKey -> do
-    !docCmt <- takeDocComment eas
-    !clsDefi <- newEmptyTMVar
-    !clsAttrs <- iopdEmpty
-    !clsExts <- newTVar []
-    !clsExps <- iopdEmpty
-    !instAttrs <- iopdEmpty
-    !instExts <- newTVar []
-    !instExps <- iopdEmpty
-    let !clsObj = EL'Object el'MetaClass clsAttrs clsExts clsExps
-        !cls =
-          EL'Class
-            (fromMaybe (AttrByName "<bad-class-name>") maybeClsKey)
-            el'MetaClass
-            clsDefi
-            clsAttrs
-            clsExts
-            clsExps
-            instAttrs
-            instExts
-            instExps
-        !clsStub = EL'Object cls instAttrs instExts instExps
+  !eas = el'RunTx eas $
+    el'AnalyzeAnno cls'anno $ \_anno'prot _eas ->
+      el'ResolveAttrAddr eas cls'name $ \ !maybeClsKey -> do
+        !docCmt <- takeDocComment eas
+        !clsDefi <- newEmptyTMVar
+        !clsAttrs <- iopdEmpty
+        !clsExts <- newTVar []
+        !clsExps <- iopdEmpty
+        !instAttrs <- iopdEmpty
+        !instExts <- newTVar []
+        !instExps <- iopdEmpty
+        let !clsObj = EL'Object el'MetaClass clsAttrs clsExts clsExps
+            !cls =
+              EL'Class
+                (fromMaybe (AttrByName "<bad-class-name>") maybeClsKey)
+                el'MetaClass
+                clsDefi
+                clsAttrs
+                clsExts
+                clsExps
+                instAttrs
+                instExts
+                instExps
+            !clsStub = EL'Object cls instAttrs instExts instExps
 
-    !branchAttrs <- iopdEmpty
-    !clsEffs <- iopdEmpty
-    !clsAnnos <- iopdEmpty
-    !branchRegions <- newTVar []
-    !clsScopes <- newTVar []
-    !clsRegions <- newTVar []
-    let !bwip =
-          EL'BranchWIP
-            branchAttrs
-            clsEffs
-            clsAnnos
-            branchRegions
-        !pwip =
-          EL'ProcWIP
-            bwip
-            clsAttrs
-            clsObj
-            clsScopes
-            clsRegions
-        !eacCls =
-          EL'Context
-            { el'ctx'scope =
-                EL'DefineClass (EL'ClassWIP clsObj clsStub) pwip,
-              el'ctx'outers = outerScope : el'ctx'outers eac,
-              el'ctx'pure = False,
-              el'ctx'exporting = False,
-              el'ctx'eff'defining = False,
-              el'ctx'attr'defs = el'ctx'attr'defs eac,
-              el'ctx'attr'refs = el'ctx'attr'refs eac,
-              el'ctx'diags = el'ctx'diags eac
-            }
-        !easCls = eas {el'context = eacCls}
-
-        -- define artifacts from arguments (i.e. data fields) for a data
-        -- class
-        defDataArts :: [ArgReceiver] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
-        defDataArts !ars = go [] ars
-          where
-            go ::
-              [(AttrKey, EL'AttrDef)] ->
-              [ArgReceiver] ->
-              ([(AttrKey, EL'AttrDef)] -> STM ()) ->
-              STM ()
-            go !dfs [] !exit' = exit' $ reverse dfs
-            go !dfs (ar : rest) exit' = case ar of
-              RecvArg
-                dfAddr@(AttrAddrSrc _ df'span)
-                !anno
-                !maybeRename
-                _maybeDef -> el'RunTx eas $
-                  el'AnalyzeAnno anno $ \ !anno'prot _eas ->
-                    case maybeRename of
-                      Nothing -> defDataField dfAddr anno'prot exit'
-                      Just (DirectRef !dfAddr') ->
-                        defDataField dfAddr' anno'prot exit'
-                      Just _badRename -> do
-                        el'LogDiag
-                          diags
-                          el'Error
-                          df'span
-                          "bad-data-field-rename"
-                          "bad data field rename"
-                        go dfs rest exit'
-              RecvRestPkArgs !dfAddr ->
-                defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty True True) exit'
-              RecvRestKwArgs !dfAddr ->
-                defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty False True) exit'
-              RecvRestPosArgs !dfAddr ->
-                defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty True False) exit'
-              where
-                defDataField (AttrAddrSrc (NamedAttr "_") _) _fv !exit'' =
-                  go dfs rest exit''
-                defDataField dfAddr@(AttrAddrSrc _ df'name'span) fv !exit'' =
-                  el'ResolveAttrAddr eas dfAddr $ \case
-                    Nothing -> go dfs rest exit''
-                    Just !dfKey -> do
-                      -- TODO clsAnnos is empty now, fill the var later
-                      !dfAnno <- newTVar =<< iopdLookup dfKey clsAnnos
-                      go
-                        ( ( dfKey,
-                            EL'AttrDef
-                              dfKey
-                              NoDocCmt
-                              "<data-class-field>"
-                              df'name'span
-                              xsrc
-                              fv
-                              dfAnno
-                              Nothing
-                          ) :
-                          dfs
-                        )
-                        rest
-                        exit''
-
-    -- define intrinsic methods of the data class
-    (flip iopdUpdate clsAttrs =<<) $
-      forM
-        [ ("__repr__", "data class repr"),
-          ("__str__", "data class str"),
-          ("__eq__", "data class eq test"),
-          ("__compare__", "data class comparision")
-        ]
-        $ \(!mthName, !mthDoc) -> do
-          !anno <- newTVar Nothing
-          return -- todo synthesize their respective anno ?
-            ( AttrByName mthName,
-              EL'AttrDef
-                (AttrByName mthName)
-                (DocCmt [mthDoc])
-                "<data-class-def>"
-                cls'name'span
-                xsrc
-                ( EL'ProcVal
-                    mwip
-                    ( EL'Proc
-                        (AttrByName mthName)
-                        NullaryReceiver -- todo elaborate actual args
-                        EL'Unknown
-                    )
-                )
-                anno
-                Nothing
-            )
-
-    -- define data fields as instance attributes
-    case argsRcvr of
-      -- a data class (ADT)
-      SingleReceiver !ar -> defDataArts [ar] $ flip iopdUpdate instAttrs
-      PackReceiver !ars _ -> defDataArts ars $ flip iopdUpdate instAttrs
-      WildReceiver !rcvr'span ->
-        el'LogDiag
-          diags
-          el'Error
-          rcvr'span
-          "wild-data-fields"
-          "wild data fields (reciver) for data class not supported"
-      -- a normal class
-      NullaryReceiver -> pure ()
-
-    el'RunTx easCls $
-      el'AnalyzeStmts [cls'body] $ \_ !easDone -> do
-        let !eacDone = el'context easDone
-            !swipDone = el'ctx'scope eacDone
-            !pwipDone = el'ProcWIP swipDone
-            !bwipDone = el'scope'branch'wip pwipDone
-        !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
-        !innerScopes <- readTVar clsScopes
-        !regions <-
-          (regions'wip ++)
-            <$> readTVar (el'scope'regions'wip pwipDone)
-
-        let !cls'scope =
-              EL'Scope
-                { el'scope'span = body'span,
-                  el'scope'inner'scopes = V.fromList $! reverse innerScopes,
-                  el'scope'regions = V.fromList $! reverse regions
+        !branchAttrs <- iopdEmpty
+        !clsEffs <- iopdEmpty
+        !clsAnnos <- iopdEmpty
+        !branchRegions <- newTVar []
+        !clsScopes <- newTVar []
+        !clsRegions <- newTVar []
+        let !bwip =
+              EL'BranchWIP
+                branchAttrs
+                clsEffs
+                clsAnnos
+                branchRegions
+            !pwip =
+              EL'ProcWIP
+                bwip
+                clsAttrs
+                clsObj
+                clsScopes
+                clsRegions
+            !eacCls =
+              EL'Context
+                { el'ctx'scope =
+                    EL'DefineClass (EL'ClassWIP clsObj clsStub) pwip,
+                  el'ctx'outers = outerScope : el'ctx'outers eac,
+                  el'ctx'pure = False,
+                  el'ctx'exporting = False,
+                  el'ctx'eff'defining = False,
+                  el'ctx'attr'defs = el'ctx'attr'defs eac,
+                  el'ctx'attr'refs = el'ctx'attr'refs eac,
+                  el'ctx'diags = el'ctx'diags eac
                 }
-        -- record as an inner scope of outer scope
-        modifyTVar' (el'scope'inner'scopes'wip outerProc) (cls'scope :)
+            !easCls = eas {el'context = eacCls}
 
-        case maybeClsKey of
-          Nothing -> el'Exit eas exit $ EL'Const nil
-          Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
-          Just !clsName -> do
-            !cls'annos <- iopdSnapshot clsAnnos
-            !clsAnno <- newTVar =<< el'ResolveAnnotation outerScope clsName
-            let !mro = [] -- TODO C3 linearize cls'exts to get this
-                !defi = EL'ClassDefi mro cls'scope cls'annos
-                !clsVal = EL'ClsVal mwip cls
-                !clsDef =
+            -- define artifacts from arguments (i.e. data fields) for a data
+            -- class
+            defDataArts :: [ArgReceiver] -> ([(AttrKey, EL'AttrDef)] -> STM ()) -> STM ()
+            defDataArts !ars = go [] ars
+              where
+                go ::
+                  [(AttrKey, EL'AttrDef)] ->
+                  [ArgReceiver] ->
+                  ([(AttrKey, EL'AttrDef)] -> STM ()) ->
+                  STM ()
+                go !dfs [] !exit' = exit' $ reverse dfs
+                go !dfs (ar : rest) exit' = case ar of
+                  RecvArg
+                    dfAddr@(AttrAddrSrc _ df'span)
+                    !arg'anno
+                    !maybeRename
+                    _maybeDef -> el'RunTx eas $
+                      el'AnalyzeAnno arg'anno $ \ !anno'prot _eas ->
+                        case maybeRename of
+                          Nothing -> defDataField dfAddr anno'prot exit'
+                          Just (DirectRef !dfAddr') ->
+                            defDataField dfAddr' anno'prot exit'
+                          Just _badRename -> do
+                            el'LogDiag
+                              diags
+                              el'Error
+                              df'span
+                              "bad-data-field-rename"
+                              "bad data field rename"
+                            go dfs rest exit'
+                  RecvRestPkArgs !dfAddr ->
+                    defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty True True) exit'
+                  RecvRestKwArgs !dfAddr ->
+                    defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty False True) exit'
+                  RecvRestPosArgs !dfAddr ->
+                    defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty True False) exit'
+                  where
+                    defDataField (AttrAddrSrc (NamedAttr "_") _) _fv !exit'' =
+                      go dfs rest exit''
+                    defDataField dfAddr@(AttrAddrSrc _ df'name'span) fv !exit'' =
+                      el'ResolveAttrAddr eas dfAddr $ \case
+                        Nothing -> go dfs rest exit''
+                        Just !dfKey -> do
+                          -- TODO clsAnnos is empty now, fill the var later
+                          !dfAnno <- newTVar =<< iopdLookup dfKey clsAnnos
+                          go
+                            ( ( dfKey,
+                                EL'AttrDef
+                                  dfKey
+                                  NoDocCmt
+                                  "<data-class-field>"
+                                  df'name'span
+                                  xsrc
+                                  fv
+                                  dfAnno
+                                  Nothing
+                              ) :
+                              dfs
+                            )
+                            rest
+                            exit''
+
+        -- define intrinsic methods of the data class
+        (flip iopdUpdate clsAttrs =<<) $
+          forM
+            [ ("__repr__", "data class repr"),
+              ("__str__", "data class str"),
+              ("__eq__", "data class eq test"),
+              ("__compare__", "data class comparision")
+            ]
+            $ \(!mthName, !mthDoc) -> do
+              !anno <- newTVar Nothing
+              return -- todo synthesize their respective anno ?
+                ( AttrByName mthName,
                   EL'AttrDef
-                    clsName
-                    docCmt
-                    "<class-def>"
+                    (AttrByName mthName)
+                    (DocCmt [mthDoc])
+                    "<data-class-def>"
                     cls'name'span
                     xsrc
-                    clsVal
-                    clsAnno
+                    ( EL'ProcVal
+                        mwip
+                        ( EL'Proc
+                            (AttrByName mthName)
+                            NullaryReceiver -- todo elaborate actual args
+                            EL'Unknown
+                        )
+                    )
+                    anno
                     Nothing
-            putTMVar clsDefi defi
-            -- record as definition symbol of outer scope
-            recordAttrDef eac clsDef
-            --
+                )
 
-            -- record as artifact of outer scope
-            unless (el'ctx'pure eac) $ do
-              if el'ctx'eff'defining eac
-                then iopdInsert clsName clsDef $ el'branch'effs'wip outerBranch
-                else do
-                  let !attrs = el'branch'attrs'wip outerBranch
-                  iopdInsert clsName clsDef $ el'scope'attrs'wip outerProc
-                  iopdInsert clsName clsDef attrs
-                  -- record a region after this definition for current scope
-                  iopdSnapshot attrs
-                    >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
-                      . EL'Region (src'end expr'span)
+        -- define data fields as instance attributes
+        case argsRcvr of
+          -- a data class (ADT)
+          SingleReceiver !ar -> defDataArts [ar] $ flip iopdUpdate instAttrs
+          PackReceiver !ars _ -> defDataArts ars $ flip iopdUpdate instAttrs
+          WildReceiver !rcvr'span ->
+            el'LogDiag
+              diags
+              el'Error
+              rcvr'span
+              "wild-data-fields"
+              "wild data fields (reciver) for data class not supported"
+          -- a normal class
+          NullaryReceiver -> pure ()
 
-              when (el'ctx'exporting eac) $
-                iopdInsert clsName clsDef $
-                  el'obj'exps $ el'scope'this'obj outerProc
+        el'RunTx easCls $
+          el'AnalyzeStmts [cls'body] $ \_ !easDone -> do
+            let !eacDone = el'context easDone
+                !swipDone = el'ctx'scope eacDone
+                !pwipDone = el'ProcWIP swipDone
+                !bwipDone = el'scope'branch'wip pwipDone
+            !regions'wip <- readTVar (el'branch'regions'wip bwipDone)
+            !innerScopes <- readTVar clsScopes
+            !regions <-
+              (regions'wip ++)
+                <$> readTVar (el'scope'regions'wip pwipDone)
 
-            -- return the class object value
-            el'Exit eas exit clsVal
+            let !cls'scope =
+                  EL'Scope
+                    { el'scope'span = body'span,
+                      el'scope'inner'scopes = V.fromList $! reverse innerScopes,
+                      el'scope'regions = V.fromList $! reverse regions
+                    }
+            -- record as an inner scope of outer scope
+            modifyTVar' (el'scope'inner'scopes'wip outerProc) (cls'scope :)
+
+            case maybeClsKey of
+              Nothing -> el'Exit eas exit $ EL'Const nil
+              Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+              Just !clsName -> do
+                !cls'annos <- iopdSnapshot clsAnnos
+                !clsAnno <- newTVar =<< el'ResolveAnnotation outerScope clsName
+                let !mro = [] -- TODO C3 linearize cls'exts to get this
+                    !defi = EL'ClassDefi mro cls'scope cls'annos
+                    !clsVal = EL'ClsVal mwip cls
+                    !clsDef =
+                      EL'AttrDef
+                        clsName
+                        docCmt
+                        "<class-def>"
+                        cls'name'span
+                        xsrc
+                        clsVal
+                        clsAnno
+                        Nothing
+                putTMVar clsDefi defi
+                -- record as definition symbol of outer scope
+                recordAttrDef eac clsDef
+                --
+
+                -- record as artifact of outer scope
+                unless (el'ctx'pure eac) $ do
+                  if el'ctx'eff'defining eac
+                    then iopdInsert clsName clsDef $ el'branch'effs'wip outerBranch
+                    else do
+                      let !attrs = el'branch'attrs'wip outerBranch
+                      iopdInsert clsName clsDef $ el'scope'attrs'wip outerProc
+                      iopdInsert clsName clsDef attrs
+                      -- record a region after this definition for current scope
+                      iopdSnapshot attrs
+                        >>= modifyTVar' (el'branch'regions'wip outerBranch) . (:)
+                          . EL'Region (src'end expr'span)
+
+                  when (el'ctx'exporting eac) $
+                    iopdInsert clsName clsDef $
+                      el'obj'exps $ el'scope'this'obj outerProc
+
+                -- return the class object value
+                el'Exit eas exit clsVal
     where
       !eac = el'context eas
       !mwip = el'ContextModule eac
