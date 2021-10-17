@@ -302,6 +302,9 @@ data EL'AttrDef = EL'AttrDef
     el'attr'prev'def :: !(Maybe EL'AttrDef)
   }
 
+instance Deletable EL'AttrDef where
+  impliesDeletionAtRHS _ = False
+
 instance Show EL'AttrDef where
   show !adef =
     "<attr-def: " <> T.unpack (attrKeyStr $ el'attr'def'key adef) <> ">"
@@ -334,6 +337,9 @@ data EL'AttrAnno = EL'AttrAnno
     -- sophisticated descriptions for that
     el'anno'doc :: !OptDocCmt
   }
+
+instance Deletable EL'AttrAnno where
+  impliesDeletionAtRHS _ = False
 
 -- | 冇 annotation
 maoAnnotation :: TVar (Maybe a)
@@ -481,6 +487,11 @@ data EL'Value
   | -- | an arbitrary expression not resolved at analysis time
     EL'Expr !ExprSrc
 
+instance Deletable EL'Value where
+  -- `nil` carries deletion semantics
+  impliesDeletionAtRHS (EL'Const EdhNil) = True
+  impliesDeletionAtRHS _ = False
+
 instance Show EL'Value where
   show EL'Unknown = "<unknown>"
   show (EL'Const !x) = show x
@@ -526,6 +537,9 @@ data EL'Object = EL'Object
     el'obj'exps :: !EL'ArtsWIP
   }
 
+instance Deletable EL'Object where
+  impliesDeletionAtRHS _ = False
+
 el'ObjNew :: EL'Class -> STM EL'Object
 el'ObjNew !cls = do
   !objAttrs <- iopdClone $ el'inst'attrs cls
@@ -565,6 +579,9 @@ data EL'Class = EL'Class
     -- | attributes ever exported from methods (esp. @__init__()@)
     el'inst'exps :: !EL'ArtsWIP
   }
+
+instance Deletable EL'Class where
+  impliesDeletionAtRHS _ = False
 
 instance Show EL'Class where
   show !cls = show $ el'class'name cls
