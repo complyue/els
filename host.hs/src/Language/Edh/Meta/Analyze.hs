@@ -3538,36 +3538,6 @@ el'AnalyzeExpr
                             rest
                             exit''
 
-        -- define intrinsic methods of the data class
-        (flip iopdUpdate clsAttrs =<<) $
-          forM
-            [ ("__repr__", "data class repr"),
-              ("__str__", "data class str"),
-              ("__eq__", "data class eq test"),
-              ("__compare__", "data class comparision")
-            ]
-            $ \(!mthName, !mthDoc) -> do
-              !anno <- newTVar Nothing
-              return -- todo synthesize their respective anno ?
-                ( AttrByName mthName,
-                  EL'AttrDef
-                    (AttrByName mthName)
-                    (DocCmt [mthDoc])
-                    "<data-class-def>"
-                    cls'name'span
-                    xsrc
-                    ( EL'ProcVal
-                        mwip
-                        ( EL'Proc
-                            (AttrByName mthName)
-                            NullaryReceiver -- todo elaborate actual args
-                            EL'Unknown
-                        )
-                    )
-                    anno
-                    Nothing
-                )
-
         -- define data fields as instance attributes
         case argsRcvr of
           -- a data class (ADT)
