@@ -812,15 +812,24 @@ locateAttrRefInModule !line !char !modu =
             LT -> Nothing
             GT -> locateRef rest
 
-data TextEdit = TextEdit
-  { el'te'range :: !SrcRange,
-    el'te'newText :: !Text
+-- | From LSP 3.16 and on, instead of `TextEdit`, use this can opt-in to
+-- support the insert vs replace choice by user
+--
+-- See: https://github.com/microsoft/vscode/issues/89344
+data InsertReplaceEdit = InsertReplaceEdit
+  { el'ire'insert :: !SrcRange,
+    el'ire'replace :: !SrcRange,
+    el'ire'newText :: !Text
   }
 
-instance ToLSP TextEdit where
-  toLSP (TextEdit !range !newText) =
+instance ToLSP InsertReplaceEdit where
+  toLSP (InsertReplaceEdit !i'rng !r'rng !newText) =
     jsonObject
-      [ ("range", toLSP range),
+      [ -- range for compatibility with pre-3.16 LSP
+        ("range", toLSP i'rng),
+        -- insert/replace is since LSP 3.16
+        ("insert", toLSP i'rng),
+        ("replace", toLSP r'rng),
         ("newText", EdhString newText)
       ]
 
@@ -1231,9 +1240,8 @@ data CompletionItem = CompletionItem
     el'cmpl'preselect :: !Bool,
     el'cmpl'sortText :: !Text,
     el'cmpl'filterText :: !Text,
-    el'cmpl'insertText :: !Text,
-    el'cmpl'insertTextFormat :: !InsertTextFormat,
-    el'cmpl'textEdit :: !TextEdit
+    el'cmpl'insertText'or'textEdit ::
+      Either (Text, InsertTextFormat) InsertReplaceEdit
   }
 
 instance ToLSP CompletionItem where
@@ -1245,24 +1253,26 @@ instance ToLSP CompletionItem where
         !presel
         !st
         !fl
-        !ins
-        !fmt
-        te@(TextEdit (SrcRange (SrcPos !start'line _start'col) _end'pos) _)
+        !txt'mod
       ) =
-      jsonObject
+      jsonObject $
         [ ("label", EdhString label),
           ("detail", EdhString detail),
           ("documentation", EdhString doc),
           ("preselect", EdhBool presel),
           ("sortText", if T.null st then EdhNil else EdhString st),
-          ("filterText", if T.null fl then EdhNil else EdhString fl),
-          ("insertText", if T.null ins then EdhNil else EdhString ins),
-          ("insertTextFormat", toLSP fmt),
-          ("textEdit", if start'line < 0 then EdhNil else toLSP te)
+          ("filterText", if T.null fl then EdhNil else EdhString fl)
         ]
+          ++ case txt'mod of
+            Left (!ins, !fmt) ->
+              [ ("insertText", if T.null ins then EdhNil else EdhString ins),
+                ("insertTextFormat", toLSP fmt)
+              ]
+            Right !te ->
+              [("textEdit", toLSP te)]
 
 completionText :: Text -> Text -> Text -> Text -> SrcRange -> CompletionItem
-completionText !label !detail !doc !cate !replace'span =
+completionText !label !detail !doc !cate replace'span@(SrcRange spos _epos) =
   CompletionItem
     label
     detail
@@ -1270,9 +1280,7 @@ completionText !label !detail !doc !cate !replace'span =
     False
     (cate <> ":" <> label)
     ""
-    ""
-    InsertTextFormat.PlainText
-    (TextEdit replace'span label)
+    (Right $ InsertReplaceEdit (SrcRange spos spos) replace'span label)
 
 completionToken ::
   Text ->
@@ -1288,9 +1296,7 @@ completionToken !label !detail !doc !cate =
     False
     (cate <> ":" <> label)
     ""
-    ""
-    InsertTextFormat.PlainText
-    (TextEdit noSrcRange "")
+    (Left ("", InsertTextFormat.PlainText))
 
 completionSnippet ::
   Text ->
@@ -1307,6 +1313,4 @@ completionSnippet !label !detail !doc !cate !snippet =
     False
     (cate <> ":" <> label)
     label
-    snippet
-    InsertTextFormat.Snippet
-    (TextEdit noSrcRange "")
+    (Left (snippet, InsertTextFormat.Snippet))
