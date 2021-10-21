@@ -1388,13 +1388,18 @@ el'AnalyzeAnno (Just anno) !exit !eas = el'RunTx easPure $ case anno of
           el'Exit eas exit $
             EL'ProcVal mwip $
               EL'Proc (AttrByName "<lambda>") argsRcvr anno'prot
-  FreeformAnno x ->
-    el'AnalyzeExpr x $ \_result _eas ->
-      -- restore original eas
-      el'Exit eas exit EL'Unknown
+  TypeStrAnno typeName -> \_eas ->
+    -- restore original eas
+    el'Exit eas exit $ EL'OfType typeName
   QuaintAnno _spec -> \_eas ->
     -- restore original eas
     el'Exit eas exit EL'Unknown
+  AltAnno oneAnno moreAnno ->
+    el'AnalyzeAnno (Just oneAnno) $
+      \oneResult -> el'AnalyzeAnno (Just moreAnno) $ \_moreResult _eas ->
+        -- TODO analyze sum types
+        -- restore original eas
+        el'Exit eas exit oneResult
   EffsExpAnno effArgs maybeRtnAnno -> el'AnalyzeAnnoEffs effArgs $
     -- restore original eas
     \() _eas -> el'RunTx eas $ el'AnalyzeAnno maybeRtnAnno exit

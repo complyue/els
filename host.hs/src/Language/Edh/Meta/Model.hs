@@ -452,6 +452,8 @@ instance Show EL'ArgsPack where
 data EL'Value
   = -- | unable to know for various reasons
     EL'Unknown
+  | -- | type known at analysis time
+    EL'OfType !Text
   | -- | runtime constant i.e. decidable at analysis time
     EL'Const !EdhValue
   | -- | externally defined value, most probably imported
@@ -488,6 +490,7 @@ instance Deletable EL'Value where
 
 instance Show EL'Value where
   show EL'Unknown = "<unknown>"
+  show (EL'OfType !typeName) = T.unpack $ "<" <> typeName <> ">"
   show (EL'Const !x) = show x
   show (EL'External !ms !adef) =
     let !k = el'attr'def'key adef
