@@ -7,9 +7,9 @@ where
 -- import           Debug.Trace
 
 import Control.Monad
-import Language.Edh.CHI
 import Language.Edh.LS.LangServer
 import Language.Edh.LS.RT
+import Language.Edh.MHI
 import Language.Edh.Meta.World
 import Language.Edh.Net
 import Prelude
@@ -17,34 +17,34 @@ import Prelude
 installLanguageServerBatteries :: EdhWorld -> IO ()
 installLanguageServerBatteries !world =
   void $
-    installEdhModule world "els/RT" $ \ !ets !exit -> runEdhTx ets $
+    installEdhModuleM world "els/RT" $ do
+      !moduScope <- contextScope . edh'context <$> edhThreadState
+
       -- loosely depend on the @net@ runtime from nedh package
-      withAddrClass $ \ !clsAddr _ets -> do
-        let !moduScope = contextScope $ edh'context ets
+      !clsAddr <- getAddrClass
 
-        !msClass <- createMetaModuleClass moduScope
-        !mwClass <- createMetaWorldClass msClass moduScope
-        !lsClass <- createLangServerClass clsAddr moduScope
+      !msClass <- createMetaModuleClass
+      !mwClass <- createMetaWorldClass msClass
+      !lsClass <- createLangServerClass clsAddr
 
-        !moduMths <-
-          sequence $
-            [ (AttrByName nm,) <$> mkHostProc moduScope mc nm hp
-              | (nm, mc, hp) <-
-                  [ ( "sendTextToFd",
-                      EdhMethod,
-                      wrapHostProc sendTextToFd
-                    )
-                  ]
-            ]
+      !moduMths <-
+        sequence $
+          [ (AttrByName nm,) <$> mkEdhProc mc nm hp
+            | (nm, mc, hp) <-
+                [ ( "sendTextToFd",
+                    EdhMethod,
+                    wrapEdhProc sendTextToFd
+                  )
+                ]
+          ]
 
-        let !moduArts =
-              moduMths
-                ++ [ (AttrByName "MetaModule", EdhObject msClass),
-                     (AttrByName "MetaWorld", EdhObject mwClass),
-                     (AttrByName "LangServer", EdhObject lsClass)
-                   ]
-        iopdUpdate moduArts $ edh'scope'entity moduScope
-        prepareExpStore ets (edh'scope'this moduScope) $ \ !esExps ->
-          iopdUpdate moduArts esExps
+      let !moduArts =
+            moduMths
+              ++ [ (AttrByName "MetaModule", EdhObject msClass),
+                   (AttrByName "MetaWorld", EdhObject mwClass),
+                   (AttrByName "LangServer", EdhObject lsClass)
+                 ]
 
-        exit
+      iopdUpdateEdh moduArts $ edh'scope'entity moduScope
+      !esExps <- prepareExpStoreM (edh'scope'this moduScope)
+      iopdUpdateEdh moduArts esExps

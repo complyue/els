@@ -11,8 +11,8 @@ import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding
-import Language.Edh.CHI
 import Language.Edh.LS.BaseLSP
+import Language.Edh.MHI
 import Language.Edh.Net
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
@@ -35,63 +35,62 @@ data LangServer = LangServer
     edh'lang'server'eol :: !(TMVar (Either SomeException ()))
   }
 
-createLangServerClass :: Object -> Scope -> STM Object
-createLangServerClass !addrClass !clsOuterScope =
-  mkHostClass clsOuterScope "LangServer" (allocEdhObj serverAllocator) [] $
-    \ !clsScope -> do
-      !mths <-
-        sequence $
-          [ (AttrByName nm,) <$> mkHostProc clsScope vc nm hp
-            | (nm, vc, hp) <-
-                [ ("addrs", EdhMethod, wrapHostProc addrsProc),
-                  ("eol", EdhMethod, wrapHostProc eolProc),
-                  ("join", EdhMethod, wrapHostProc joinProc),
-                  ("stop", EdhMethod, wrapHostProc stopProc),
-                  ("__repr__", EdhMethod, wrapHostProc reprProc)
-                ]
-          ]
-      iopdUpdate mths $ edh'scope'entity clsScope
+createLangServerClass :: Object -> Edh Object
+createLangServerClass !addrClass =
+  mkEdhClass "LangServer" (allocObjM serverAllocator) [] $ do
+    !mths <-
+      sequence $
+        [ (AttrByName nm,) <$> mkEdhProc vc nm hp
+          | (nm, vc, hp) <-
+              [ ("addrs", EdhMethod, wrapEdhProc addrsProc),
+                ("eol", EdhMethod, wrapEdhProc eolProc),
+                ("join", EdhMethod, wrapEdhProc joinProc),
+                ("stop", EdhMethod, wrapEdhProc stopProc),
+                ("__repr__", EdhMethod, wrapEdhProc reprProc)
+              ]
+        ]
+
+    !clsScope <- contextScope . edh'context <$> edhThreadState
+    iopdUpdateEdh mths $ edh'scope'entity clsScope
   where
     serverAllocator ::
       "service" !: EdhValue ->
       "port" ?: Int ->
       "port'max" ?: Int ->
       "addr" ?: Text ->
-      EdhObjectAllocator
+      Edh (Maybe Unique, ObjectStore)
     serverAllocator
       (mandatoryArg -> !service)
       (defaultArg 1707 -> !ctorPort)
       (defaultArg ctorPort -> port'max)
-      (defaultArg "127.0.0.1" -> !ctorAddr)
-      !ctorExit
-      !etsCtor = do
-            !servAddrs <- newEmptyTMVar
-            !servEoL <- newEmptyTMVar
-            let !server =
-                  LangServer
-                    { edh'lang'service = service,
-                      edh'lang'service'world =
-                        edh'prog'world $ edh'thread'prog etsCtor,
-                      edh'lang'server'port = fromIntegral ctorPort,
-                      edh'lang'server'port'max = fromIntegral port'max,
-                      edh'lang'server'addr = ctorAddr,
-                      edh'lang'serving'addrs = servAddrs,
-                      edh'lang'server'eol = servEoL
-                    }
-            runEdhTx etsCtor $
-              edhContIO $ do
-                void $
-                  forkFinally
-                    (serverThread server)
-                    ( atomically
-                        . void
-                        -- fill empty addrs if the connection has ever failed
-                        . (tryPutTMVar servAddrs [] <*)
-                        -- mark server end-of-life anyway finally
-                        . void
-                        . tryPutTMVar servEoL
-                    )
-                atomically $ ctorExit Nothing $ HostStore (toDyn server)
+      (defaultArg "127.0.0.1" -> !ctorAddr) = do
+        !world <- edh'prog'world <$> edhProgramState
+        !server <- inlineSTM $ do
+          !servAddrs <- newEmptyTMVar
+          !servEoL <- newEmptyTMVar
+          return
+            LangServer
+              { edh'lang'service = service,
+                edh'lang'service'world = world,
+                edh'lang'server'port = fromIntegral ctorPort,
+                edh'lang'server'port'max = fromIntegral port'max,
+                edh'lang'server'addr = ctorAddr,
+                edh'lang'serving'addrs = servAddrs,
+                edh'lang'server'eol = servEoL
+              }
+        afterTxIO $ do
+          void $
+            forkFinally
+              (serverThread server)
+              ( atomically
+                  . void
+                  -- fill empty addrs if the connection has ever failed
+                  . (tryPutTMVar (edh'lang'serving'addrs server) [] <*)
+                  -- mark server end-of-life anyway finally
+                  . void
+                  . tryPutTMVar (edh'lang'server'eol server)
+              )
+        return (Nothing, HostStore (toDyn server))
         where
           serverThread :: LangServer -> IO ()
           serverThread
@@ -114,8 +113,6 @@ createLangServerClass !addrClass !clsOuterScope =
                 addr <- resolveServAddr
                 bracket (open addr) close acceptClients
               where
-                world = edh'prog'world $ edh'thread'prog etsCtor
-
                 resolveServAddr = do
                   let hints =
                         defaultHints
@@ -176,84 +173,74 @@ createLangServerClass !addrClass !clsOuterScope =
                   pktSink <- newEmptyTMVarIO
                   poq <- newEmptyTMVarIO
 
-                  let ccEoLProc :: EdhHostProc
-                      ccEoLProc !exit !ets =
-                        tryReadTMVar clientEoL >>= \case
-                          Nothing -> exitEdh ets exit $ EdhBool False
-                          Just (Left !e) ->
-                            edh'exception'wrapper world (Just ets) e
-                              >>= \ !exo -> exitEdh ets exit $ EdhObject exo
-                          Just (Right ()) -> exitEdh ets exit $ EdhBool True
+                  let ccEoLProc :: Edh EdhValue
+                      ccEoLProc =
+                        inlineSTM (tryReadTMVar clientEoL) >>= \case
+                          Nothing -> return $ EdhBool False
+                          Just (Left !e) -> throwHostM e
+                          Just (Right ()) -> return $ EdhBool True
 
-                      recvOnePktProc :: Scope -> EdhHostProc
-                      recvOnePktProc !sandbox !exit !ets =
-                        (Right <$> takeTMVar pktSink)
-                          `orElse` (Left <$> readTMVar clientEoL)
+                      recvOnePktProc :: Scope -> Edh EdhValue
+                      recvOnePktProc !sandbox =
+                        inlineSTM
+                          ( (Right <$> takeTMVar pktSink)
+                              `orElse` (Left <$> readTMVar clientEoL)
+                          )
                           >>= \case
                             -- reached normal end-of-stream
-                            Left Right {} -> exitEdh ets exit nil
+                            Left Right {} -> return nil
                             -- previously eol due to error
-                            Left (Left !ex) ->
-                              edh'exception'wrapper
-                                (edh'prog'world $ edh'thread'prog ets)
-                                (Just ets)
-                                ex
-                                >>= \ !exo -> edhThrow ets $ EdhObject exo
+                            Left (Left !ex) -> throwHostM ex
                             Right (Rpc _headers !content) -> do
                               -- interpret the content as command, return as is
                               let !src = decodeUtf8 content
-                              runEdhInSandbox
-                                ets
+                              runInSandboxM
                                 sandbox
-                                (evalEdh ("lsc:" <> clientId) src)
-                                $ \ !r _ets -> exitEdh ets exit r
+                                (evalSrcM ("lsc:" <> clientId) src)
 
                       postOnePktProc ::
                         "rpcOut" !: Text ->
                         RestKwArgs ->
-                        EdhHostProc
+                        Edh EdhValue
                       postOnePktProc
                         (mandatoryArg -> !content)
-                        !headers
-                        !exit
-                        !ets =
-                          go
-                            (odToList headers)
-                            []
+                        !headers = go (odToList headers) []
                           where
                             go ::
                               [(AttrKey, EdhValue)] ->
                               [(HeaderName, HeaderContent)] ->
-                              STM ()
+                              Edh EdhValue
                             go [] !hdrs = do
-                              void $ tryPutTMVar poq $ textRpc hdrs content
-                              exitEdh ets exit nil
+                              void $ tryPutTMVarEdh poq $ textRpc hdrs content
+                              return nil
                             go ((k, v) : rest) !hdrs =
-                              edhValueStr ets v $ \ !sv ->
+                              edhValueStrM v >>= \ !sv ->
                                 go rest ((attrKeyStr k, sv) : hdrs)
 
-                      edhHandler = pushEdhStack $ \ !etsEffs ->
-                        -- prepare a dedicated scope atop world root scope, with els effects
-                        -- implanted, then call the configured service procedure from there
-                        let effsScope = contextScope $ edh'context etsEffs
-                         in mkScopeSandbox etsEffs effsScope $ \ !sandboxScope -> do
-                              !effMths <-
-                                sequence
-                                  [ (AttrByName nm,) <$> mkHostProc effsScope vc nm hp
-                                    | (nm, vc, hp) <-
-                                        [ ("eol", EdhMethod, wrapHostProc ccEoLProc),
-                                          ( "recvOnePkt",
-                                            EdhMethod,
-                                            wrapHostProc $ recvOnePktProc sandboxScope
-                                          ),
-                                          ("postOnePkt", EdhMethod, wrapHostProc postOnePktProc)
-                                        ]
-                                  ]
-                              let !effArts = (AttrByName "clientId", EdhString clientId) : effMths
-                              prepareEffStore etsEffs (edh'scope'entity effsScope)
-                                >>= iopdUpdate effArts
+                      edhHandler = pushStackM $ do
+                        -- prepare a dedicated scope atop world root scope,
+                        -- with provisioned effects implanted, then call the
+                        -- configured service procedure from there
+                        !effsScope <-
+                          contextScope . edh'context <$> edhThreadState
+                        !sandbox <- mkSandboxM effsScope
 
-                              runEdhTx etsEffs $ edhMakeCall servProc [] haltEdhProgram
+                        !effMths <-
+                          sequence
+                            [ (AttrByName nm,) <$> mkEdhProc vc nm hp
+                              | (nm, vc, hp) <-
+                                  [ ("eol", EdhMethod, wrapEdhProc ccEoLProc),
+                                    ( "recvOnePkt",
+                                      EdhMethod,
+                                      wrapEdhProc $ recvOnePktProc sandbox
+                                    ),
+                                    ("postOnePkt", EdhMethod, wrapEdhProc postOnePktProc)
+                                  ]
+                            ]
+                        let !effArts = (AttrByName "clientId", EdhString clientId) : effMths
+
+                        prepareEffStoreM >>= iopdUpdateEdh effArts
+                        callM servProc []
 
                   -- run the service procedure on a separate thread as another Edh program
                   --
@@ -263,7 +250,7 @@ createLangServerClass !addrClass !clsOuterScope =
                   -- mechanism, or exception handling, that expecting `ThreadTerminate` to be
                   -- thrown, the cleanup action is usually in a finally block in this way
                   void $
-                    forkFinally (runEdhProgram' servWorld edhHandler) $
+                    forkFinally (runProgramM' servWorld edhHandler) $
                       -- mark client end-of-life with the result anyway
                       void . atomically . tryPutTMVar clientEoL . void
 
@@ -292,10 +279,17 @@ createLangServerClass !addrClass !clsOuterScope =
                     -- mark eol on error
                     atomically $ void $ tryPutTMVar clientEoL $ Left e
 
-    reprProc :: EdhHostProc
-    reprProc !exit !ets =
-      withThisHostObj ets $ \(LangServer _ _ !port !port'max !addr _ _) ->
-        exitEdh ets exit $
+    withThisServer :: forall r. (Object -> LangServer -> Edh r) -> Edh r
+    withThisServer withServer = do
+      !this <- edh'scope'this . contextScope . edh'context <$> edhThreadState
+      case fromDynamic =<< dynamicHostData this of
+        Nothing -> throwEdhM EvalError "bug: this is not an Server"
+        Just !col -> withServer this col
+
+    reprProc :: Edh EdhValue
+    reprProc = withThisServer $
+      \_this (LangServer _ _ !port !port'max !addr _ _) ->
+        return $
           EdhString $
             "LangServer<port= "
               <> T.pack (show port)
@@ -305,39 +299,32 @@ createLangServerClass !addrClass !clsOuterScope =
               <> T.pack (show addr)
               <> ">"
 
-    addrsProc :: EdhHostProc
-    addrsProc !exit !ets = withThisHostObj ets $
-      \ !server -> readTMVar (edh'lang'serving'addrs server) >>= wrapAddrs []
+    addrsProc :: Edh EdhValue
+    addrsProc = withThisServer $ \_this !server ->
+      inlineSTM (readTMVar $ edh'lang'serving'addrs server) >>= wrapAddrs []
       where
-        wrapAddrs :: [EdhValue] -> [AddrInfo] -> STM ()
+        wrapAddrs :: [EdhValue] -> [AddrInfo] -> Edh EdhValue
         wrapAddrs addrs [] =
-          exitEdh ets exit $ EdhArgsPack $ ArgsPack addrs odEmpty
+          return $ EdhArgsPack $ ArgsPack addrs odEmpty
         wrapAddrs !addrs (addr : rest) =
-          edhCreateHostObj addrClass addr
+          createHostObjectM addrClass addr
             >>= \ !addrObj -> wrapAddrs (EdhObject addrObj : addrs) rest
 
-    eolProc :: EdhHostProc
-    eolProc !exit !ets = withThisHostObj ets $ \ !server ->
-      tryReadTMVar (edh'lang'server'eol server) >>= \case
-        Nothing -> exitEdh ets exit $ EdhBool False
-        Just (Left !e) ->
-          edh'exception'wrapper world (Just ets) e
-            >>= \ !exo -> exitEdh ets exit $ EdhObject exo
-        Just (Right ()) -> exitEdh ets exit $ EdhBool True
-      where
-        world = edh'prog'world $ edh'thread'prog ets
+    eolProc :: Edh EdhValue
+    eolProc = withThisServer $ \_this !server ->
+      inlineSTM (tryReadTMVar $ edh'lang'server'eol server) >>= \case
+        Nothing -> return $ EdhBool False
+        Just (Left !e) -> throwHostM e
+        Just (Right ()) -> return $ EdhBool True
 
-    joinProc :: EdhHostProc
-    joinProc !exit !ets = withThisHostObj ets $ \ !server ->
-      readTMVar (edh'lang'server'eol server) >>= \case
-        Left !e ->
-          edh'exception'wrapper world (Just ets) e
-            >>= \ !exo -> edhThrow ets $ EdhObject exo
-        Right () -> exitEdh ets exit nil
-      where
-        world = edh'prog'world $ edh'thread'prog ets
+    joinProc :: Edh EdhValue
+    joinProc = withThisServer $ \_this !server ->
+      inlineSTM (readTMVar $ edh'lang'server'eol server) >>= \case
+        Left !e -> throwHostM e
+        Right () -> return nil
 
-    stopProc :: EdhHostProc
-    stopProc !exit !ets = withThisHostObj ets $ \ !server -> do
-      stopped <- tryPutTMVar (edh'lang'server'eol server) $ Right ()
-      exitEdh ets exit $ EdhBool stopped
+    stopProc :: Edh EdhValue
+    stopProc = withThisServer $ \_this !server ->
+      inlineSTM $
+        fmap EdhBool $
+          tryPutTMVar (edh'lang'server'eol server) $ Right ()

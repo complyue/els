@@ -1,19 +1,18 @@
 module Language.Edh.LS.RT where
 
-import Control.Concurrent.STM
+import Control.Monad.IO.Class
 import Data.Text (Text)
 import qualified Data.Text as T
-import Language.Edh.CHI
+import Language.Edh.MHI
 import System.Posix.IO
 import System.Posix.Types
 import Prelude
 
-sendTextToFd :: "fd" !: Int -> "txt" !: Text -> EdhHostProc
-sendTextToFd (mandatoryArg -> !fd) (mandatoryArg -> !txt) !exit !ets =
-  edhContIO writeIt ets
+sendTextToFd :: "fd" !: Int -> "txt" !: Text -> Edh EdhValue
+sendTextToFd (mandatoryArg -> !fd) (mandatoryArg -> !txt) = liftIO writeIt
   where
     fd' = Fd $ fromIntegral fd
     writeIt = do
       !bytesWritten <- fdWrite fd' (T.unpack txt)
       closeFd fd'
-      atomically $ exitEdh ets exit $ EdhDecimal $ fromIntegral bytesWritten
+      return $ EdhDecimal $ fromIntegral bytesWritten
