@@ -9,7 +9,7 @@ where
 import Control.Monad
 import Language.Edh.LS.LangServer
 import Language.Edh.LS.RT
-import Language.Edh.MHI
+import Language.Edh.EHI
 import Language.Edh.Meta.World
 import Language.Edh.Net
 import Prelude

@@ -3,7 +3,7 @@ module Language.Edh.LS.RT where
 import Control.Monad.IO.Class
 import Data.Text (Text)
 import qualified Data.Text as T
-import Language.Edh.MHI
+import Language.Edh.EHI
 import System.Posix.IO
 import System.Posix.Types
 import Prelude

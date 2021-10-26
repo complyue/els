@@ -17,7 +17,7 @@ import qualified Language.Edh.LS.InsertTextFormat as InsertTextFormat
 import Language.Edh.LS.Json
 import Language.Edh.LS.SymbolKind (SymbolKind)
 import qualified Language.Edh.LS.SymbolKind as SymbolKind
-import Language.Edh.MHI
+import Language.Edh.EHI
 import Prelude
 
 type DocComment = [Text]

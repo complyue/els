@@ -11,7 +11,7 @@ import qualified Data.Vector as V
 
 import Language.Edh.Evaluate
 import Language.Edh.LS.Json
-import Language.Edh.MHI
+import Language.Edh.EHI
 import Language.Edh.Meta.Analyze
 import Language.Edh.Meta.AtTypes
 import Language.Edh.Meta.Model

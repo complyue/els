@@ -12,7 +12,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding
 import Language.Edh.LS.BaseLSP
-import Language.Edh.MHI
+import Language.Edh.EHI
 import Language.Edh.Net
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
