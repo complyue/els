@@ -21,11 +21,16 @@ import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Vector as V
 import GHC.Clock
 import GHC.Conc (unsafeIOToSTM)
-import Language.Edh.CHI
+import Language.Edh.Control
+import Language.Edh.CoreLang
+import Language.Edh.Evaluate
+import Language.Edh.IOPD
 import Language.Edh.Meta.AQ
 import Language.Edh.Meta.AtTypes
 import Language.Edh.Meta.Model
+import Language.Edh.PkgMan
 import Language.Edh.RtTypes
+import Language.Edh.Sink
 import Numeric.Search.Range
 import System.Directory
 import System.FilePath
@@ -552,7 +557,7 @@ parseModuleSource !srcVersion !moduSource (SrcDoc !moduFile) !exit !ets =
       parseEdh world moduFile moduSource
         >>= \case
           Left !err -> atomically $ do
-            let !msg = T.pack $ errorBundlePretty err
+            let !msg = prettyParserError err
                 !edhWrapException = edh'exception'wrapper world
                 !edhErr =
                   EdhError ParseError msg (toDyn nil) $ getEdhErrCtx 0 ets

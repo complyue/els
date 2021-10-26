@@ -12,12 +12,12 @@ import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Data.Word
 import GHC.IO (unsafePerformIO)
-import Language.Edh.CHI
 import Language.Edh.LS.InsertTextFormat (InsertTextFormat)
 import qualified Language.Edh.LS.InsertTextFormat as InsertTextFormat
 import Language.Edh.LS.Json
 import Language.Edh.LS.SymbolKind (SymbolKind)
 import qualified Language.Edh.LS.SymbolKind as SymbolKind
+import Language.Edh.MHI
 import Prelude
 
 type DocComment = [Text]
@@ -158,8 +158,6 @@ data EL'Home = EL'Home
     el'home'scripts :: !(TMVar (HashMap ScriptName EL'ModuSlot))
     -- todo cache configurations per Edh home with more fields
   }
-
-type ModuleName = Text
 
 type ScriptName = Text
 

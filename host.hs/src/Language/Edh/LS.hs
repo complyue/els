@@ -17,7 +17,7 @@ import Prelude
 installLanguageServerBatteries :: EdhWorld -> IO ()
 installLanguageServerBatteries !world =
   void $
-    installEdhModuleM world "els/RT" $ do
+    installModuleM world "els/RT" $ do
       !moduScope <- contextScope . edh'context <$> edhThreadState
 
       -- loosely depend on the @net@ runtime from nedh package
