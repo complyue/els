@@ -1701,98 +1701,20 @@ el'AnalyzeExpr
           -- EL'ModuVal !ms -> undefined -- TODO handle this
           -- EL'ProcVal !p -> undefined -- TODO handle this
 
-          -- virtual properties of values with known type
-          (_, EL'OfType !typeName) -> case refKey of
-            AttrByName !attrName -> do
-              let virtArtName = "__" <> typeName <> "_" <> attrName <> "__"
-              el'ResolveContextAttr eas (AttrByName virtArtName) >>= \case
-                Nothing -> do
-                  el'LogDiag
-                    diags
-                    el'Warning
-                    addr'span
-                    "unknown-virt-ref"
-                    ( "possible misspelled virtual property of "
-                        <> typeName
-                        <> " value"
-                    )
-                  recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
-                  returnAsExpr
-                Just !attrDef -> do
-                  -- record as referencing symbol
-                  let !attrRef = EL'AttrRef Nothing addr mwip attrDef
-                  recordAttrRef eac attrRef
-
-                  case el'UltimateValue $ el'attr'def'value attrDef of
-                    EL'ProcVal _ (EL'Proc _name _args !prot) ->
-                      -- virtual property is usually a method procedure,
-                      -- to be called with the target value. just take its
-                      -- return prototype here.
-                      el'Exit eas exit prot
-                    _ ->
-                      -- todo any special treatment here?
-                      el'Exit eas exit EL'Unknown
-            _ ->
-              -- TODO handle symbolic virtual properties
-              el'LogDiag
-                diags
-                el'Warning
-                addr'span
-                "sym-virt-prop"
-                "symbolic virtual property?!"
+          -- virtual attr of list
+          (_, EL'List _) -> resolveVirtAttr "List" refKey
+          -- virtual attr of dict
+          (_, EL'Dict _) -> resolveVirtAttr "Dict" refKey
+          -- virtual attr of values with known type
+          (_, EL'OfType !typeName) -> resolveVirtAttr typeName refKey
           --
 
-          -- virtual properties of literal values
-          (_, EL'Const !litVal) -> case refKey of
-            AttrByName !attrName -> case edhTypeNameOf litVal of
-              "Object" ->
-                -- literal object?!
-                el'LogDiag
-                  diags
-                  el'Warning
-                  addr'span
-                  "literal-object"
-                  "how did you make it?!"
-              !typeName -> do
-                let virtArtName = "__" <> typeName <> "_" <> attrName <> "__"
-                el'ResolveContextAttr eas (AttrByName virtArtName) >>= \case
-                  Nothing -> do
-                    el'LogDiag
-                      diags
-                      el'Warning
-                      addr'span
-                      "unknown-virt-ref"
-                      ( "possible misspelled virtual property of "
-                          <> typeName
-                          <> " value"
-                      )
-                    recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
-                    returnAsExpr
-                  Just !attrDef -> do
-                    -- record as referencing symbol
-                    let !attrRef = EL'AttrRef Nothing addr mwip attrDef
-                    recordAttrRef eac attrRef
-
-                    case el'UltimateValue $ el'attr'def'value attrDef of
-                      EL'ProcVal _ (EL'Proc _name _args !prot) ->
-                        -- virtual property is usually a method procedure,
-                        -- to be called with the target value. just take its
-                        -- return prototype here.
-                        el'Exit eas exit prot
-                      _ ->
-                        -- todo any special treatment here?
-                        el'Exit eas exit EL'Unknown
-            _ ->
-              -- TODO handle symbolic virtual properties
-              el'LogDiag
-                diags
-                el'Warning
-                addr'span
-                "sym-virt-prop"
-                "symbolic virtual property?!"
+          -- virtual attr of literal values
+          (_, EL'Const !litVal) ->
+            resolveVirtAttr (edhTypeNameOf litVal) refKey
           --
 
-          -- TODO virtual properties of value with dynamicly decidable type
+          -- TODO virtual attr of value with dynamicly decidable type
 
           -- TODO handle tgt with out-of-place annotated type
 
@@ -1819,6 +1741,54 @@ el'AnalyzeExpr
       diags = el'ctx'diags eac
 
       returnAsExpr = el'Exit eas exit $ EL'Expr xsrc
+
+      resolveVirtAttr !typeName !refKey = do
+        when (typeName == "Object") $ -- literal object?!
+          el'LogDiag
+            diags
+            el'Warning
+            addr'span
+            "literal-object"
+            "how did you make a literal object?!"
+        case refKey of
+          AttrByName !attrName -> do
+            let virtArtName = "__" <> typeName <> "_" <> attrName <> "__"
+            el'ResolveContextAttr eas (AttrByName virtArtName) >>= \case
+              Nothing -> do
+                el'LogDiag
+                  diags
+                  el'Warning
+                  addr'span
+                  "unknown-virt-ref"
+                  ( "possible misspelled virtual attr of "
+                      <> typeName
+                      <> " value"
+                  )
+                recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
+                returnAsExpr
+              Just !attrDef -> do
+                -- record as referencing symbol
+                let !attrRef = EL'AttrRef Nothing addr mwip attrDef
+                recordAttrRef eac attrRef
+
+                case el'UltimateValue $ el'attr'def'value attrDef of
+                  EL'ProcVal _ (EL'Proc _name _args !prot) ->
+                    -- virtual attr is usually a method procedure,
+                    -- to be called with the target value. just take its
+                    -- return prototype here.
+                    el'Exit eas exit prot
+                  _ ->
+                    -- todo any special treatment here?
+                    el'Exit eas exit EL'Unknown
+          _ -> do
+            -- TODO handle symbolic virtual attr
+            el'LogDiag
+              diags
+              el'Warning
+              addr'span
+              "sym-virt-attr"
+              "symbolic virtual attr?!"
+            el'Exit eas exit EL'Unknown
 --
 
 -- infix operator application
