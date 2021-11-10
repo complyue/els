@@ -1134,6 +1134,45 @@ el'AnalyzeStmt
 
 --
 
+-- uom defining
+el'AnalyzeStmt
+  uom'stmt@(StmtSrc (UnitStmt !decls !docCmt) stmt'span)
+  !exit
+  !eas = do
+    when (el'ctx'eff'defining eac) $
+      el'LogDiag
+        diags
+        el'Error
+        stmt'span
+        "eff-uom"
+        "uom is always lexical, not effectful"
+    analyzeUnits decls
+    where
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+
+      analyzeUnits [] = el'Exit eas exit $ EL'Const nil
+      analyzeUnits (decl : rest) = do
+        analyzeUnit decl
+        analyzeUnits rest
+
+      analyzeUnit !decl = case decl of
+        PrimUnitDecl uomSym uomSpan ->
+          analyzeUnitDef eas defExpr docCmt uomSym uomSpan
+        ConversionFactor _nQty nSym nSpan _dQty dUnit -> do
+          analyzeUnitDef eas defExpr docCmt nSym nSpan
+          case dUnit of
+            NamedUnit dSym dSpan ->
+              analyzeUnitDef eas defExpr docCmt dSym dSpan
+            ArithUnit ns ds ->
+              forM_ (ns ++ ds) $
+                uncurry (analyzeUnitDef eas defExpr docCmt)
+        ConversionFormula outSym outSpan _ _ _ ->
+          analyzeUnitDef eas defExpr docCmt outSym outSpan
+
+      defExpr = ExprSrc (BlockExpr [uom'stmt]) stmt'span
+--
+
 -- effect defining
 el'AnalyzeStmt (StmtSrc (EffectStmt !effs !docCmt) _stmt'span) !exit !eas = do
   writeTVar (el'doc'cmt eas) docCmt
@@ -1268,14 +1307,86 @@ el'AnalyzeStmt _stmt !exit !eas = el'Exit eas exit $ EL'Const nil
 -- * expression analysis
 
 -- | literal to analysis time value
-el'LiteralValue :: Literal -> STM EL'Value
-el'LiteralValue = \case
-  DecLiteral !v -> return $ EL'Const (EdhDecimal v)
-  StringLiteral !v -> return $ EL'Const (EdhString v)
-  BoolLiteral !v -> return $ EL'Const (EdhBool v)
-  NilLiteral -> return $ EL'Const nil
-  SinkCtor -> EL'Const . EdhSink <$> newSink
-  ValueLiteral !v -> return $ EL'Const v
+el'LiteralValue :: Literal -> EL'TxExit EL'Value -> EL'Tx
+el'LiteralValue !lit !exit !eas = case lit of
+  DecLiteral !v -> el'Exit eas exit $ EL'Const (EdhDecimal v)
+  StringLiteral !v -> el'Exit eas exit $ EL'Const (EdhString v)
+  BoolLiteral !v -> el'Exit eas exit $ EL'Const (EdhBool v)
+  NilLiteral -> el'Exit eas exit $ EL'Const nil
+  SinkCtor -> el'Exit eas exit . EL'Const . EdhSink =<< newSink
+  ValueLiteral !v -> el'Exit eas exit $ EL'Const v
+  QtyLiteral _q !uomSpec -> do
+    unless (isDimensionlessUnitSpec uomSpec) $ case uomSpec of
+      NamedUnit uomSym uomSpan -> analyzeUnitRef eas uomSym uomSpan
+      ArithUnit ns ds -> forM_ (ns ++ ds) $ uncurry $ analyzeUnitRef eas
+    el'Exit eas exit $ EL'OfType "Qty"
+
+analyzeUnitRef :: EL'AnalysisState -> AttrName -> SrcRange -> STM ()
+analyzeUnitRef eas uomSym uomSpan = do
+  el'ResolveContextAttr eas (AttrByName uomSym) >>= \case
+    Nothing ->
+      el'LogDiag
+        diags
+        el'Error
+        uomSpan
+        "unknown-uom"
+        "possible misspelled UoM or reference"
+    Just !attrDef -> do
+      -- record as referencing symbol
+      let !attrRef =
+            EL'AttrRef
+              Nothing
+              (AttrAddrSrc (QuaintAttr uomSym) uomSpan)
+              mwip
+              attrDef
+      recordAttrRef eac attrRef
+  where
+    !eac = el'context eas
+    diags = el'ctx'diags eac
+    !mwip = el'ContextModule eac
+
+analyzeUnitDef ::
+  EL'AnalysisState -> ExprSrc -> OptDocCmt -> AttrName -> SrcRange -> STM ()
+analyzeUnitDef eas defExpr docCmt uomSym uomSpan = do
+  !attrAnno <- newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
+  !prevDef <-
+    el'ResolveContextAttr eas attrKey >>= \case
+      Nothing -> return Nothing
+      Just prevDef -> do
+        -- record a reference to previous def if any
+        let !attrRef =
+              EL'AttrRef
+                Nothing
+                (AttrAddrSrc (QuaintAttr uomSym) uomSpan)
+                mwip
+                prevDef
+        recordAttrRef eac attrRef
+        return $ Just prevDef
+
+  let !attrDef =
+        EL'AttrDef
+          attrKey
+          docCmt
+          "<uom>"
+          uomSpan
+          defExpr
+          attrVal
+          attrAnno
+          prevDef
+  -- record as definition symbol
+  recordAttrDef eac attrDef
+  iopdInsert attrKey attrDef $ el'branch'attrs'wip bwip
+  when (el'ctx'exporting eac) $
+    iopdInsert attrKey attrDef $ el'obj'exps $ el'scope'this'obj pwip
+  where
+    attrKey = AttrByName uomSym
+    attrVal = EL'OfType "UoM"
+
+    !eac = el'context eas
+    !mwip = el'ContextModule eac
+    !swip = el'ctx'scope eac
+    !pwip = el'ProcWIP swip
+    !bwip = el'scope'branch'wip pwip
 
 -- | analyze a sequence of expressions in pure context
 el'AnalyzeExprs :: [ExprSrc] -> EL'Analysis [EL'Value]
@@ -1952,9 +2063,7 @@ el'AnalyzeExpr
           el'AnalyzeExpr rhExpr $ \ !rhVal !easDone -> do
             case lhExpr of
               ExprSrc
-                ( AttrExpr
-                    (DirectRef addr@(AttrAddrSrc _ !addr'span))
-                  )
+                (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span)))
                 _ ->
                   el'ResolveAttrAddr easDone addr $ \case
                     Nothing -> returnAsExpr easDone
@@ -2881,8 +2990,9 @@ el'AnalyzeExpr (ExprSrc (DictExpr !es) _) !exit !eas =
     collectEntries !evs ((!dkx, !vx) : rest) =
       el'AnalyzeExpr vx $ \ !v -> case dkx of
         LitDictKey !lit -> \ !easDone ->
-          el'LiteralValue lit >>= \ !k ->
-            el'RunTx easDone $ collectEntries ((k, v) : evs) rest
+          el'RunTx easDone $
+            el'LiteralValue lit $ \ !k ->
+              collectEntries ((k, v) : evs) rest
         AddrDictKey !kaddr -> el'AnalyzeExpr
           (ExprSrc (AttrExpr (DirectRef kaddr)) noSrcRange)
           $ \ !k -> collectEntries ((k, v) : evs) rest
@@ -2908,7 +3018,7 @@ el'AnalyzeExpr (ExprSrc (ParenExpr !x) _) !exit !eas =
 
 -- literal value
 el'AnalyzeExpr (ExprSrc (LitExpr !lit) _expr'span) !exit !eas =
-  el'Exit eas exit =<< el'LiteralValue lit
+  el'RunTx eas $ el'LiteralValue lit exit
 --
 
 -- call making
