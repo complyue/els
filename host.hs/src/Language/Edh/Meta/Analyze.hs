@@ -1316,12 +1316,13 @@ el'LiteralValue !lit !exit !eas = case lit of
   SinkCtor -> el'Exit eas exit . EL'Const . EdhSink =<< newSink
   ValueLiteral !v -> el'Exit eas exit $ EL'Const v
   QtyLiteral _q !uomSpec -> do
-    unless (isDimensionlessUnitSpec uomSpec) $ case uomSpec of
+    case uomSpec of
       NamedUnit uomSym uomSpan -> analyzeUnitRef eas uomSym uomSpan
       ArithUnit ns ds -> forM_ (ns ++ ds) $ uncurry $ analyzeUnitRef eas
     el'Exit eas exit $ EL'OfType "Qty"
 
 analyzeUnitRef :: EL'AnalysisState -> AttrName -> SrcRange -> STM ()
+analyzeUnitRef _ "" _ = return ()
 analyzeUnitRef eas uomSym uomSpan = do
   el'ResolveContextAttr eas (AttrByName uomSym) >>= \case
     Nothing ->
@@ -1347,6 +1348,7 @@ analyzeUnitRef eas uomSym uomSpan = do
 
 analyzeUnitDef ::
   EL'AnalysisState -> ExprSrc -> OptDocCmt -> AttrName -> SrcRange -> STM ()
+analyzeUnitDef _ _ _ "" _ = return ()
 analyzeUnitDef eas defExpr docCmt uomSym uomSpan = do
   !attrAnno <- newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
   !prevDef <-
