@@ -1162,9 +1162,9 @@ el'AnalyzeStmt
         ConversionFactor _nQty nSym nSpan _dQty dUnit -> do
           analyzeUnitDef eas defExpr docCmt nSym nSpan
           case dUnit of
-            NamedUnit dSym dSpan ->
+            NamedUnitSrc dSym dSpan ->
               analyzeUnitDef eas defExpr docCmt dSym dSpan
-            ArithUnit ns ds ->
+            ArithUnitSrc ns ds ->
               forM_ (ns ++ ds) $
                 uncurry (analyzeUnitDef eas defExpr docCmt)
         ConversionFormula outSym outSpan _ _ _ ->
@@ -1317,8 +1317,8 @@ el'LiteralValue !lit !exit !eas = case lit of
   ValueLiteral !v -> el'Exit eas exit $ EL'Const v
   QtyLiteral _q !uomSpec -> do
     case uomSpec of
-      NamedUnit uomSym uomSpan -> analyzeUnitRef eas uomSym uomSpan
-      ArithUnit ns ds -> forM_ (ns ++ ds) $ uncurry $ analyzeUnitRef eas
+      NamedUnitSrc uomSym uomSpan -> analyzeUnitRef eas uomSym uomSpan
+      ArithUnitSrc ns ds -> forM_ (ns ++ ds) $ uncurry $ analyzeUnitRef eas
     el'Exit eas exit $ EL'OfType "Qty"
 
 analyzeUnitRef :: EL'AnalysisState -> AttrName -> SrcRange -> STM ()
