@@ -217,7 +217,7 @@ createLangServerClass !addrClass =
                               edhValueStrM v >>= \ !sv ->
                                 go rest ((attrKeyStr k, sv) : hdrs)
 
-                      edhHandler = pushStackM $ do
+                      edhHandler = runNested $ do
                         -- prepare a dedicated scope atop world root scope,
                         -- with provisioned effects implanted, then call the
                         -- configured service procedure from there
