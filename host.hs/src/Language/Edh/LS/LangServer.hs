@@ -11,8 +11,8 @@ import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding
-import Language.Edh.LS.BaseLSP
 import Language.Edh.EHI
+import Language.Edh.LS.BaseLSP
 import Language.Edh.Net
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
@@ -35,23 +35,14 @@ data LangServer = LangServer
     edh'lang'server'eol :: !(TMVar (Either SomeException ()))
   }
 
-createLangServerClass :: Object -> Edh Object
-createLangServerClass !addrClass =
-  mkEdhClass "LangServer" (allocObjM serverAllocator) [] $ do
-    !mths <-
-      sequence $
-        [ (AttrByName nm,) <$> mkEdhProc vc nm hp
-          | (nm, vc, hp) <-
-              [ ("addrs", EdhMethod, wrapEdhProc addrsProc),
-                ("eol", EdhMethod, wrapEdhProc eolProc),
-                ("join", EdhMethod, wrapEdhProc joinProc),
-                ("stop", EdhMethod, wrapEdhProc stopProc),
-                ("__repr__", EdhMethod, wrapEdhProc reprProc)
-              ]
-        ]
-
-    !clsScope <- contextScope . edh'context <$> edhThreadState
-    iopdUpdateEdh mths $ edh'scope'entity clsScope
+defineLangServerClass :: Object -> Edh Object
+defineLangServerClass !addrClass =
+  defEdhClass "LangServer" (allocObjM serverAllocator) [] $ do
+    defEdhProc'_ EdhMethod "addrs" addrsProc
+    defEdhProc'_ EdhMethod "eol" eolProc
+    defEdhProc'_ EdhMethod "join" joinProc
+    defEdhProc'_ EdhMethod "stop" stopProc
+    defEdhProc'_ EdhMethod "__repr__" reprProc
   where
     serverAllocator ::
       "service" !: EdhValue ->

@@ -9,38 +9,24 @@ import Data.Text (Text)
 import qualified Data.Vector as V
 -- import Debug.Trace
 
+import Language.Edh.EHI
 import Language.Edh.Evaluate
 import Language.Edh.LS.Json
-import Language.Edh.EHI
 import Language.Edh.Meta.Analyze
 import Language.Edh.Meta.AtTypes
 import Language.Edh.Meta.Model
 import Prelude
 
-createMetaModuleClass :: Edh Object
-createMetaModuleClass =
-  mkEdhClass "MetaModule" (allocObjM msAllocator) [] $ do
-    !arts <-
-      sequence $
-        [ (AttrByName nm,) <$> mkEdhProc vc nm hp
-          | (nm, vc, hp) <-
-              [ ("moduSymbols", EdhMethod, wrapEdhProc moduSymbolsProc),
-                ("foldingRanges", EdhMethod, wrapEdhProc foldingRangesProc),
-                ("invalidate", EdhMethod, wrapEdhProc invalidateProc),
-                ("fill", EdhMethod, wrapEdhProc fillProc),
-                ("stabilized", EdhMethod, wrapEdhProc stabilizedProc)
-              ]
-        ]
-          ++ [ (AttrByName nm,)
-                 <$> mkEdhProperty nm getter setter
-               | (nm, getter, setter) <-
-                   [ ("home", homeProc, Nothing),
-                     ("doc", docProc, Nothing)
-                   ]
-             ]
-
-    !clsScope <- contextScope . edh'context <$> edhThreadState
-    iopdUpdateEdh arts $ edh'scope'entity clsScope
+defineMetaModuleClass :: Edh Object
+defineMetaModuleClass =
+  defEdhClass "MetaModule" (allocObjM msAllocator) [] $ do
+    defEdhProc'_ EdhMethod "moduSymbols" moduSymbolsProc
+    defEdhProc'_ EdhMethod "foldingRanges" foldingRangesProc
+    defEdhProc'_ EdhMethod "invalidate" invalidateProc
+    defEdhProc'_ EdhMethod "fill" fillProc
+    defEdhProc'_ EdhMethod "stabilized" stabilizedProc
+    defEdhProperty_ "home" homeProc Nothing
+    defEdhProperty_ "doc" docProc Nothing
   where
     msAllocator :: Edh (Maybe Unique, ObjectStore)
     msAllocator =
@@ -103,30 +89,16 @@ createMetaModuleClass =
           !hv = EdhString docFile
       return hv
 
-createMetaWorldClass :: Object -> Edh Object
-createMetaWorldClass !msClass =
-  mkEdhClass "MetaWorld" (allocObjM elwAllocator) [] $ do
-    !arts <-
-      sequence $
-        [ (AttrByName nm,) <$> mkEdhProc vc nm hp
-          | (nm, vc, hp) <-
-              [ ("locate", EdhMethod, wrapEdhProc locateProc),
-                ("locateByFile", EdhMethod, wrapEdhProc locateByFileProc),
-                ("diags", EdhMethod, wrapEdhProc diagsProc),
-                ("defi", EdhMethod, wrapEdhProc defiProc),
-                ("hover", EdhMethod, wrapEdhProc hoverProc),
-                ("suggest", EdhMethod, wrapEdhProc suggestProc)
-              ]
-        ]
-          ++ [ (AttrByName nm,)
-                 <$> mkEdhProperty nm getter setter
-               | (nm, getter, setter) <-
-                   [ ("homes", homesProc, Nothing)
-                   ]
-             ]
-
-    !clsScope <- contextScope . edh'context <$> edhThreadState
-    iopdUpdateEdh arts $ edh'scope'entity clsScope
+defineMetaWorldClass :: Object -> Edh Object
+defineMetaWorldClass !msClass =
+  defEdhClass "MetaWorld" (allocObjM elwAllocator) [] $ do
+    defEdhProc'_ EdhMethod "locate" locateProc
+    defEdhProc'_ EdhMethod "locateByFile" locateByFileProc
+    defEdhProc'_ EdhMethod "diags" diagsProc
+    defEdhProc'_ EdhMethod "defi" defiProc
+    defEdhProc'_ EdhMethod "hover" hoverProc
+    defEdhProc'_ EdhMethod "suggest" suggestProc
+    defEdhProperty_ "homes" homesProc Nothing
   where
     elwAllocator :: Edh (Maybe Unique, ObjectStore)
     elwAllocator = do
