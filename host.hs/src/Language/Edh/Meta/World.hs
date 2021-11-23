@@ -18,7 +18,7 @@ import Prelude
 
 defineMetaModuleClass :: Edh Object
 defineMetaModuleClass =
-  defEdhClass "MetaModule" (allocObjM msAllocator) [] $ do
+  defEdhClass' "MetaModule" msAllocator [] $ do
     defEdhProc'_ EdhMethod "moduSymbols" moduSymbolsProc
     defEdhProc'_ EdhMethod "foldingRanges" foldingRangesProc
     defEdhProc'_ EdhMethod "invalidate" invalidateProc
@@ -90,7 +90,7 @@ defineMetaModuleClass =
 
 defineMetaWorldClass :: Object -> Edh Object
 defineMetaWorldClass !msClass =
-  defEdhClass "MetaWorld" (allocObjM elwAllocator) [] $ do
+  defEdhClass' "MetaWorld" elwAllocator [] $ do
     defEdhProc'_ EdhMethod "locate" locateProc
     defEdhProc'_ EdhMethod "locateByFile" locateByFileProc
     defEdhProc'_ EdhMethod "diags" diagsProc

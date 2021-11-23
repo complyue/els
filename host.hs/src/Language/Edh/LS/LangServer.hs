@@ -36,7 +36,7 @@ data LangServer = LangServer
 
 defineLangServerClass :: Object -> Edh Object
 defineLangServerClass !addrClass =
-  defEdhClass "LangServer" (allocObjM serverAllocator) [] $ do
+  defEdhClass' "LangServer" serverAllocator [] $ do
     defEdhProc'_ EdhMethod "addrs" addrsProc
     defEdhProc'_ EdhMethod "eol" eolProc
     defEdhProc'_ EdhMethod "join" joinProc
