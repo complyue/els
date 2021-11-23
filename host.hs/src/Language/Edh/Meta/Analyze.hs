@@ -1316,35 +1316,38 @@ el'LiteralValue !lit !exit !eas = case lit of
   SinkCtor -> el'Exit eas exit . EL'Const . EdhSink =<< newSink
   ValueLiteral !v -> el'Exit eas exit $ EL'Const v
   QtyLiteral _q !uomSpec -> do
-    case uomSpec of
-      NamedUnitSrc uomSym uomSpan -> analyzeUnitRef eas uomSym uomSpan
-      ArithUnitSrc ns ds -> forM_ (ns ++ ds) $ uncurry $ analyzeUnitRef eas
+    analyzeUnitSpec eas uomSpec
     el'Exit eas exit $ EL'OfType "Qty"
 
-analyzeUnitRef :: EL'AnalysisState -> AttrName -> SrcRange -> STM ()
-analyzeUnitRef _ "" _ = return ()
-analyzeUnitRef eas uomSym uomSpan = do
-  el'ResolveContextAttr eas (AttrByName uomSym) >>= \case
-    Nothing ->
-      el'LogDiag
-        diags
-        el'Error
-        uomSpan
-        "unknown-uom"
-        "possible misspelled UoM or reference"
-    Just !attrDef -> do
-      -- record as referencing symbol
-      let !attrRef =
-            EL'AttrRef
-              Nothing
-              (AttrAddrSrc (QuaintAttr uomSym) uomSpan)
-              mwip
-              attrDef
-      recordAttrRef eac attrRef
+analyzeUnitSpec :: EL'AnalysisState -> UnitSpecSrc -> STM ()
+analyzeUnitSpec eas = \case
+  NamedUnitSrc uomSym uomSpan -> analyzeUnitRef uomSym uomSpan
+  ArithUnitSrc ns ds -> forM_ (ns ++ ds) $ uncurry analyzeUnitRef
   where
     !eac = el'context eas
     diags = el'ctx'diags eac
     !mwip = el'ContextModule eac
+
+    analyzeUnitRef :: AttrName -> SrcRange -> STM ()
+    analyzeUnitRef "" _ = return ()
+    analyzeUnitRef uomSym uomSpan = do
+      el'ResolveContextAttr eas (AttrByName uomSym) >>= \case
+        Nothing ->
+          el'LogDiag
+            diags
+            el'Error
+            uomSpan
+            "unknown-uom"
+            "possible misspelled UoM or reference"
+        Just !attrDef -> do
+          -- record as referencing symbol
+          let !attrRef =
+                EL'AttrRef
+                  Nothing
+                  (AttrAddrSrc (QuaintAttr uomSym) uomSpan)
+                  mwip
+                  attrDef
+          recordAttrRef eac attrRef
 
 analyzeUnitDef ::
   EL'AnalysisState -> ExprSrc -> OptDocCmt -> AttrName -> SrcRange -> STM ()
@@ -1512,6 +1515,13 @@ el'AnalyzeAnno (Just anno) !exit !eas = el'RunTx easPure $ case anno of
   QuaintAnno _spec -> \_eas ->
     -- restore original eas
     el'Exit eas exit EL'Unknown
+  QtyAnno _lb lu' _ub uu ->
+    \_eas -> do
+      case lu' of
+        Nothing -> pure ()
+        Just lu -> analyzeUnitSpec eas lu
+      analyzeUnitSpec eas uu
+      el'Exit eas exit $ EL'OfType "Qty"
   AltAnno oneAnno moreAnno ->
     el'AnalyzeAnno (Just oneAnno) $
       \oneResult -> el'AnalyzeAnno (Just moreAnno) $ \_moreResult _eas ->
