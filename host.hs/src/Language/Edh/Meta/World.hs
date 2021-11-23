@@ -2,7 +2,6 @@ module Language.Edh.Meta.World where
 
 import Control.Concurrent.STM
 import Control.Monad
-import Data.Dynamic
 import Data.Maybe
 import Data.Text (Text)
 -- import qualified Data.Text as T
@@ -28,7 +27,7 @@ defineMetaModuleClass =
     defEdhProperty_ "home" homeProc Nothing
     defEdhProperty_ "doc" docProc Nothing
   where
-    msAllocator :: Edh (Maybe Unique, ObjectStore)
+    msAllocator :: Edh ObjectStore
     msAllocator =
       throwEdhM
         EvalError
@@ -37,7 +36,7 @@ defineMetaModuleClass =
     withThisModuSlot :: forall r. (Object -> EL'ModuSlot -> Edh r) -> Edh r
     withThisModuSlot withMetaModu = do
       !this <- edh'scope'this . contextScope . edh'context <$> edhThreadState
-      case fromDynamic =<< dynamicHostData this of
+      case unwrapHostValue =<< objHostValue this of
         Nothing -> throwEdhM EvalError "bug: this is not an MetaModu"
         Just !col -> withMetaModu this col
 
@@ -100,7 +99,7 @@ defineMetaWorldClass !msClass =
     defEdhProc'_ EdhMethod "suggest" suggestProc
     defEdhProperty_ "homes" homesProc Nothing
   where
-    elwAllocator :: Edh (Maybe Unique, ObjectStore)
+    elwAllocator :: Edh ObjectStore
     elwAllocator = do
       !homes <- newTMVarEdh V.empty
       let !bootstrapWorld = EL'World homes odEmpty
@@ -151,12 +150,12 @@ defineMetaWorldClass !msClass =
                     !elw = EL'World homes ambient
 
                 -- return the world
-                exitEdh ets exit (Nothing, HostStore (toDyn elw))
+                exitEdh ets exit . HostStore =<< pinHostValue elw
 
     withThisWorld :: forall r. (Object -> EL'World -> Edh r) -> Edh r
     withThisWorld withWorld = do
       !this <- edh'scope'this . contextScope . edh'context <$> edhThreadState
-      case fromDynamic =<< dynamicHostData this of
+      case unwrapHostValue =<< objHostValue this of
         Nothing -> throwEdhM EvalError "bug: this is not an World"
         Just !col -> withWorld this col
 

@@ -6,7 +6,6 @@ import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
-import Data.Dynamic
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -49,7 +48,7 @@ defineLangServerClass !addrClass =
       "port" ?: Int ->
       "port'max" ?: Int ->
       "addr" ?: Text ->
-      Edh (Maybe Unique, ObjectStore)
+      Edh ObjectStore
     serverAllocator
       (mandatoryArg -> !service)
       (defaultArg 1707 -> !ctorPort)
@@ -81,7 +80,7 @@ defineLangServerClass !addrClass =
                   . void
                   . tryPutTMVar (edh'lang'server'eol server)
               )
-        return (Nothing, HostStore (toDyn server))
+        pinAndStoreHostValue server
         where
           serverThread :: LangServer -> IO ()
           serverThread
@@ -273,7 +272,7 @@ defineLangServerClass !addrClass =
     withThisServer :: forall r. (Object -> LangServer -> Edh r) -> Edh r
     withThisServer withServer = do
       !this <- edh'scope'this . contextScope . edh'context <$> edhThreadState
-      case fromDynamic =<< dynamicHostData this of
+      case unwrapHostValue =<< objHostValue this of
         Nothing -> throwEdhM EvalError "bug: this is not an Server"
         Just !col -> withServer this col
 
@@ -298,7 +297,7 @@ defineLangServerClass !addrClass =
         wrapAddrs addrs [] =
           return $ EdhArgsPack $ ArgsPack addrs odEmpty
         wrapAddrs !addrs (addr : rest) =
-          createHostObjectM addrClass addr
+          createArbiHostObjectM addrClass addr
             >>= \ !addrObj -> wrapAddrs (EdhObject addrObj : addrs) rest
 
     eolProc :: Edh EdhValue
