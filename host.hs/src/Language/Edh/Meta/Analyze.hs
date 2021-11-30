@@ -868,7 +868,7 @@ el'AnalyzeStmt
       el'AnalyzeExpr singleArg $ \ !singleVal _eas -> case singleVal of
         EL'Apk !apk -> doRecv apk
         _ -> case argsRcvr of
-          SingleReceiver (RecvRestPkArgs !addr) ->
+          SingleReceiver (RecvRestPkArgs !addr _) ->
             -- wild repacking
             recvOne addr $ EL'Apk $ EL'ArgsPack [singleVal] odEmpty False False
           SingleReceiver
@@ -927,11 +927,11 @@ el'AnalyzeStmt
       doUnknownRcvrs [] = el'Exit eas exit $ EL'Const nil
       doUnknownRcvrs (rcvr : rest) = do
         case rcvr of
-          RecvRestPosArgs !addr ->
+          RecvRestPosArgs !addr _ ->
             recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty True False
-          RecvRestKwArgs !addr ->
+          RecvRestKwArgs !addr _ ->
             recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty False True
-          RecvRestPkArgs !addr ->
+          RecvRestPkArgs !addr _ ->
             recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty True True
           RecvArg
             addr@(AttrAddrSrc _ arg'span)
@@ -1056,13 +1056,13 @@ el'AnalyzeStmt
             ([EL'Value] -> OrderedDict AttrKey EL'Value -> STM ()) ->
             STM ()
           recvFromPack !args !kwargs !rcvr !done = case rcvr of
-            RecvRestPosArgs !addr -> do
+            RecvRestPosArgs !addr _ -> do
               recvOne addr $ EL'Apk $ EL'ArgsPack args odEmpty True False
               done [] kwargs
-            RecvRestKwArgs !addr -> do
+            RecvRestKwArgs !addr _ -> do
               recvOne addr $ EL'Apk $ EL'ArgsPack [] kwargs False True
               done args odEmpty
-            RecvRestPkArgs !addr -> do
+            RecvRestPkArgs !addr _ -> do
               recvOne addr $ EL'Apk $ EL'ArgsPack args kwargs True True
               done [] odEmpty
             RecvArg
@@ -1569,11 +1569,11 @@ el'AnalyzeAnnoApk !argsRcvr !exit !eas = case argsRcvr of
         _maybeDef -> el'RunTx eas $
           el'AnalyzeAnno anno $ \ !anno'prot _eas ->
             defArgArt argAddr anno'prot
-      RecvRestPkArgs !argAddr ->
+      RecvRestPkArgs !argAddr _ ->
         defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty True True
-      RecvRestKwArgs !argAddr ->
+      RecvRestKwArgs !argAddr _ ->
         defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty False True
-      RecvRestPosArgs !argAddr ->
+      RecvRestPosArgs !argAddr _ ->
         defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty True False
       where
         defArgArt (AttrAddrSrc (NamedAttr "_") _) av =
@@ -3361,8 +3361,8 @@ el'AnalyzeExpr
                                   (attrKeyStr <$> odKeys srcArts)
                             else T.pack (show $ odSize srcArts) <> " more exported"
                 go !srcArts (ar : rest) = case ar of
-                  RecvRestPkArgs (AttrAddrSrc (NamedAttr "_") _) -> pure ()
-                  RecvRestKwArgs (AttrAddrSrc (NamedAttr "_") _) -> pure ()
+                  RecvRestPkArgs (AttrAddrSrc (NamedAttr "_") _) _ -> pure ()
+                  RecvRestKwArgs (AttrAddrSrc (NamedAttr "_") _) _ -> pure ()
                   RecvArg
                     srcAddr@(AttrAddrSrc _ !item'span)
                     _anno -- todo honor annotations on imports?
@@ -3387,14 +3387,14 @@ el'AnalyzeExpr
                             item'span
                             "invalid-import-rename"
                             $ "invalid rename of import: " <> T.pack (show badRename)
-                  RecvRestPosArgs (AttrAddrSrc _ bad'span) ->
+                  RecvRestPosArgs (AttrAddrSrc _ bad'span) _ ->
                     el'LogDiag
                       diags
                       el'Error
                       bad'span
                       "rest-pos-import"
                       "rest positional receiver in import specification"
-                  RecvRestPkArgs localAddr@(AttrAddrSrc _ !addr'span) ->
+                  RecvRestPkArgs localAddr@(AttrAddrSrc _ !addr'span) _ ->
                     el'ResolveAttrAddr eas localAddr $ \case
                       Nothing ->
                         -- invalid attr addr, error should have been logged
@@ -3428,14 +3428,16 @@ el'AnalyzeExpr
                         chkExp localKey attrDef
 
                         go odEmpty rest
-                  RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) ->
+                  RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) _ ->
                     el'ResolveAttrAddr eas localAddr $ \case
                       Nothing ->
                         -- invalid attr addr, error should have been logged
                         go srcArts rest
-                      Just (AttrByName "_") -> go odEmpty rest -- explicit dropping
+                      Just (AttrByName "_") ->
+                        go odEmpty rest -- explicit dropping
                       Just !localKey -> do
-                        !artAnno <- newTVar =<< el'ResolveAnnotation swip localKey
+                        !artAnno <-
+                          newTVar =<< el'ResolveAnnotation swip localKey
                         let !kwVal =
                               EL'Apk $
                                 EL'ArgsPack
@@ -3711,11 +3713,11 @@ el'AnalyzeExpr
                               "bad-data-field-rename"
                               "bad data field rename"
                             go dfs rest exit'
-                  RecvRestPkArgs !dfAddr ->
+                  RecvRestPkArgs !dfAddr _ ->
                     defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty True True) exit'
-                  RecvRestKwArgs !dfAddr ->
+                  RecvRestKwArgs !dfAddr _ ->
                     defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty False True) exit'
-                  RecvRestPosArgs !dfAddr ->
+                  RecvRestPosArgs !dfAddr _ ->
                     defDataField dfAddr (EL'Apk $ EL'ArgsPack [] odEmpty True False) exit'
                   where
                     defDataField (AttrAddrSrc (NamedAttr "_") _) _fv !exit'' =
@@ -4256,11 +4258,11 @@ el'AnalyzeExpr
                       Just (DirectRef !argAddr') ->
                         defLoopArt EL'Unknown argAddr' exit'
                       Just _otherRename -> go args rest exit' -- TODO elaborate?
-              RecvRestPkArgs !argAddr ->
+              RecvRestPkArgs !argAddr _ ->
                 defLoopArt (EL'Apk $ EL'ArgsPack [] odEmpty True True) argAddr exit'
-              RecvRestKwArgs !argAddr ->
+              RecvRestKwArgs !argAddr _ ->
                 defLoopArt (EL'Apk $ EL'ArgsPack [] odEmpty False True) argAddr exit'
-              RecvRestPosArgs !argAddr ->
+              RecvRestPosArgs !argAddr _ ->
                 defLoopArt (EL'Apk $ EL'ArgsPack [] odEmpty True False) argAddr exit'
               where
                 defLoopArt _av (AttrAddrSrc (NamedAttr "_") _) !exit'' =
@@ -4820,11 +4822,11 @@ defArgArts !eas !opSym !srcExpr !ars = go [] ars
                 "bad-re-target"
                 "bad argument re-targeting"
               go args rest exit
-      RecvRestPkArgs !argAddr ->
+      RecvRestPkArgs !argAddr _ ->
         defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty True True
-      RecvRestKwArgs !argAddr ->
+      RecvRestKwArgs !argAddr _ ->
         defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty False True
-      RecvRestPosArgs !argAddr ->
+      RecvRestPosArgs !argAddr _ ->
         defArgArt argAddr $ EL'Apk $ EL'ArgsPack [] odEmpty True False
       where
         defArgArt (AttrAddrSrc (NamedAttr "_") _) _av = go args rest exit
