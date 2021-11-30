@@ -2018,15 +2018,27 @@ el'AnalyzeExpr
 
     -- type synonym annotation
     ":=:" -> case lhExpr of
-      ExprSrc (AttrExpr (DirectRef !addr)) _ ->
+      ExprSrc (AttrExpr (DirectRef addr@(AttrAddrSrc _ addr'span))) _ ->
         el'ResolveAttrAddr eas addr $ \case
           Nothing -> returnAsExpr eas
-          Just (AttrByName "_") -> el'Exit eas exit $ EL'Const nil
+          Just (AttrByName "_") -> el'Exit eas exit EL'Unknown
           Just !attrKey -> do
-            !attrAnno <- EL'AttrAnno rhExpr <$> readTVar (el'doc'cmt eas)
-            -- TODO use separate fields
-            iopdInsert attrKey attrAnno (el'branch'annos'wip bwip)
-            el'Exit eas exit $ EL'Const nil
+            !attrAnno <-
+              newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
+            let !attrs = el'branch'attrs'wip bwip
+                !attrDef =
+                  EL'AttrDef
+                    attrKey
+                    NoDocCmt
+                    opSym
+                    addr'span
+                    xsrc
+                    EL'Unknown
+                    attrAnno
+                    Nothing
+            iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
+            iopdInsert attrKey attrDef attrs
+            el'Exit eas exit EL'Unknown
       ExprSrc _ !bad'anno'span -> do
         el'LogDiag
           diags
