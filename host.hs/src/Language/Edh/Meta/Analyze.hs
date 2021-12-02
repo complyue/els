@@ -902,6 +902,38 @@ el'AnalyzeStmt
               "strange-single-rcvr"
               "strange single arg receiver"
             doUnknownRcvrs [rcvr]
+          PackReceiver
+            [ RecvArg
+                addr@(AttrAddrSrc _ arg'span)
+                !anno
+                !maybeRename
+                _maybeDef
+              ]
+            _ -> el'RunTx eas $
+              el'AnalyzeAnno anno $ \ !anno'prot _eas -> do
+                let rcvdProt = case anno'prot of
+                      EL'Unknown -> singleVal
+                      _ -> anno'prot
+                case maybeRename of
+                  Nothing -> recvOne addr rcvdProt
+                  Just (DirectRef !addr') -> recvOne addr' rcvdProt
+                  Just IndirectRef {} -> pure () -- TODO define art into objs
+                  _ -> do
+                    el'LogDiag
+                      diags
+                      el'Error
+                      arg'span
+                      "invalid-target"
+                      "invalid let target"
+                el'Exit eas exit $ EL'Const nil
+          PackReceiver [!rcvr] _ -> do
+            el'LogDiag
+              diags
+              el'Warning
+              (argReceiverSpan rcvr)
+              "strange-single-rcvr"
+              "strange single arg receiver"
+            doUnknownRcvrs [rcvr]
           PackReceiver !rcvrs _rcvrs'span -> do
             el'LogDiag
               diags
