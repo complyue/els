@@ -1522,6 +1522,7 @@ el'ResolveAttrAddr !eas (AttrAddrSrc MissedAttrSymbol !addr'span) !exit = do
 el'AnalyzeAnno :: Maybe InpAnno -> EL'Analysis EL'Value
 el'AnalyzeAnno Nothing !exit !eas = el'Exit eas exit EL'Unknown
 el'AnalyzeAnno (Just anno) !exit !eas = el'RunTx easPure $ case anno of
+  NilAnno -> el'ExitTx exit $ EL'Const EdhNil
   PluralAnno elemAnno -> el'AnalyzeAnno (Just elemAnno) $ \ !elemVal _eas ->
     -- restore original eas
     el'Exit eas exit $ EL'Apk $ EL'ArgsPack [elemVal] odEmpty True False
