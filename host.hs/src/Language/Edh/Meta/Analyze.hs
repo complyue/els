@@ -866,11 +866,18 @@ el'AnalyzeStmt
   !eas = case argsSndr of
     ArgsPacker [SendPosArg !singleArg] apk'span -> el'RunTx eas $
       el'AnalyzeExpr singleArg $ \ !singleVal _eas -> case singleVal of
-        EL'Apk !apk -> doRecv apk
+        EL'Apk !apk ->
+          el'RunTx eas $
+            el'RecvArgs
+              recvExpr
+              argsRcvr
+              apk
+              $ \() _eas -> el'Exit eas exit $ EL'Const nil
         _ -> case argsRcvr of
           SingleReceiver (RecvRestPkArgs !addr _) ->
             -- wild repacking
-            recvOne addr $ EL'Apk $ EL'ArgsPack [singleVal] odEmpty False False
+            recvOneArg eas recvExpr addr $
+              EL'Apk $ EL'ArgsPack [singleVal] odEmpty False False
           SingleReceiver
             ( RecvArg
                 addr@(AttrAddrSrc _ arg'span)
@@ -883,8 +890,9 @@ el'AnalyzeStmt
                       EL'Unknown -> singleVal
                       _ -> anno'prot
                 case maybeRename of
-                  Nothing -> recvOne addr rcvdProt
-                  Just (DirectRef !addr') -> recvOne addr' rcvdProt
+                  Nothing -> recvOneArg eas recvExpr addr rcvdProt
+                  Just (DirectRef !addr') ->
+                    recvOneArg eas recvExpr addr' rcvdProt
                   Just IndirectRef {} -> pure () -- TODO define art into objs
                   _ -> do
                     el'LogDiag
@@ -901,7 +909,7 @@ el'AnalyzeStmt
               (argReceiverSpan rcvr)
               "strange-single-rcvr"
               "strange single arg receiver"
-            doUnknownRcvrs [rcvr]
+            el'RunTx eas $ el'RecvUnknowns recvExpr [rcvr] exit
           PackReceiver
             [ RecvArg
                 addr@(AttrAddrSrc _ arg'span)
@@ -915,8 +923,9 @@ el'AnalyzeStmt
                       EL'Unknown -> singleVal
                       _ -> anno'prot
                 case maybeRename of
-                  Nothing -> recvOne addr rcvdProt
-                  Just (DirectRef !addr') -> recvOne addr' rcvdProt
+                  Nothing -> recvOneArg eas recvExpr addr rcvdProt
+                  Just (DirectRef !addr') ->
+                    recvOneArg eas recvExpr addr' rcvdProt
                   Just IndirectRef {} -> pure () -- TODO define art into objs
                   _ -> do
                     el'LogDiag
@@ -933,7 +942,7 @@ el'AnalyzeStmt
               (argReceiverSpan rcvr)
               "strange-single-rcvr"
               "strange single arg receiver"
-            doUnknownRcvrs [rcvr]
+            el'RunTx eas $ el'RecvUnknowns recvExpr [rcvr] exit
           PackReceiver !rcvrs _rcvrs'span -> do
             el'LogDiag
               diags
@@ -941,228 +950,21 @@ el'AnalyzeStmt
               apk'span
               "dynamic-unpack"
               "els does not analyze source structure of dynamic unpacking yet"
-            doUnknownRcvrs rcvrs
+            el'RunTx eas $ el'RecvUnknowns recvExpr rcvrs exit
           WildReceiver _ -> el'Exit eas exit $ EL'Const nil
           NullaryReceiver ->
             -- TODO this possible at all?
             el'Exit eas exit $ EL'Const nil
-    _ -> el'RunTx eas $ el'PackArgs argsSndr $ \ !apk _eas -> doRecv apk
+    _ -> el'RunTx eas $
+      el'PackArgs argsSndr $ \ !apk _eas ->
+        el'RunTx eas $
+          el'RecvArgs recvExpr argsRcvr apk $
+            \() _eas -> el'Exit eas exit $ EL'Const nil
     where
-      {- HLINT ignore "Reduce duplication" -}
       !eac = el'context eas
       diags = el'ctx'diags eac
-      !swip = el'ctx'scope eac
-      !pwip = el'ProcWIP swip
-      !bwip = el'scope'branch'wip pwip
 
-      doUnknownRcvrs :: [ArgReceiver] -> STM ()
-      doUnknownRcvrs [] = el'Exit eas exit $ EL'Const nil
-      doUnknownRcvrs (rcvr : rest) = do
-        case rcvr of
-          RecvRestPosArgs !addr _ ->
-            recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty True False
-          RecvRestKwArgs !addr _ ->
-            recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty False True
-          RecvRestPkArgs !addr _ ->
-            recvOne addr $ EL'Apk $ EL'ArgsPack [] odEmpty True True
-          RecvArg
-            addr@(AttrAddrSrc _ arg'span)
-            !anno
-            !maybeRename
-            _maybeDef -> el'RunTx eas $
-              el'AnalyzeAnno anno $ \ !protVal _eas ->
-                case maybeRename of
-                  Nothing ->
-                    recvOne addr protVal
-                  Just (DirectRef !addr') ->
-                    recvOne addr' protVal
-                  Just IndirectRef {} -> pure () -- TODO define art into objs
-                  _ -> do
-                    el'LogDiag
-                      diags
-                      el'Error
-                      arg'span
-                      "invalid-target"
-                      "invalid let target"
-        doUnknownRcvrs rest
-
-      recvOne :: AttrAddrSrc -> EL'Value -> STM ()
-      recvOne (AttrAddrSrc (NamedAttr "_") _) _ = pure ()
-      recvOne addr@(AttrAddrSrc _ !addr'span) !v =
-        el'ResolveAttrAddr eas addr $ \case
-          Nothing -> return ()
-          Just !k -> recvOne' addr'span k v
-
-      recvOne' :: SrcRange -> AttrKey -> EL'Value -> STM ()
-      recvOne' !focus'span !attrKey !attrVal = do
-        !attrAnno <- newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
-        !prevDef <-
-          iopdLookup attrKey $
-            if el'ctx'eff'defining eac
-              then el'branch'effs'wip bwip
-              else el'branch'attrs'wip bwip
-        let !attrDef =
-              EL'AttrDef
-                attrKey
-                NoDocCmt
-                "<let>"
-                focus'span
-                (ExprSrc (BlockExpr [let'stmt]) stmt'span)
-                attrVal
-                attrAnno
-                prevDef
-        -- record as definition symbol
-        recordAttrDef eac attrDef
-        if el'ctx'eff'defining eac
-          then do
-            let !effs = el'branch'effs'wip bwip
-            case attrVal of
-              EL'Const EdhNil -> iopdDelete attrKey effs
-              _ -> iopdInsert attrKey attrDef effs
-          else do
-            let !attrs = el'branch'attrs'wip bwip
-            case attrVal of
-              EL'Const EdhNil -> iopdDelete attrKey attrs
-              _ -> iopdInsert attrKey attrDef attrs
-        when (el'ctx'exporting eac) $
-          iopdInsert attrKey attrDef $ el'obj'exps $ el'scope'this'obj pwip
-
-      doRecv :: EL'ArgsPack -> STM ()
-      doRecv apk@(EL'ArgsPack !args !kwargs _dyn'args _dyn'kwargs) =
-        case argsRcvr of
-          PackReceiver !rcvrs _ -> doRcvrs apk rcvrs
-          SingleReceiver !rcvr -> doRcvrs apk [rcvr]
-          NullaryReceiver -> doRcvrs apk []
-          WildReceiver !rcvr'span -> do
-            unless (null args) $
-              el'LogDiag
-                diags
-                el'Error
-                rcvr'span
-                "let-wild-pos-arg"
-                "letting positional argument(s) into wild receiver"
-
-            -- receive each kwargs
-            forM_ (odToList kwargs) $ \(!k, !v) -> recvOne' stmt'span k v
-
-            -- record a region after this let statement, for current branch
-            iopdSnapshot (el'branch'attrs'wip bwip)
-              >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-                . EL'Region (src'end stmt'span)
-
-            el'Exit eas exit $ EL'Const nil
-
-      doRcvrs :: EL'ArgsPack -> [ArgReceiver] -> STM ()
-      doRcvrs (EL'ArgsPack !all'args !all'kwargs !dyn'args !dyn'kwargs) !rcvrs =
-        go all'args all'kwargs rcvrs $ \ !args' !kwargs' -> do
-          unless (null args' && odNull kwargs') $
-            el'LogDiag
-              diags
-              el'Error
-              stmt'span
-              "extra-args"
-              "extraneous arguments not consumed"
-
-          -- record a region after this let statement, for current scope
-          iopdSnapshot (el'branch'attrs'wip bwip)
-            >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-              . EL'Region (src'end stmt'span)
-
-          el'Exit eas exit $ EL'Const nil
-        where
-          go ::
-            [EL'Value] ->
-            OrderedDict AttrKey EL'Value ->
-            [ArgReceiver] ->
-            ([EL'Value] -> OrderedDict AttrKey EL'Value -> STM ()) ->
-            STM ()
-          go !args !kwargs [] !done = done args kwargs
-          go !args !kwargs (rcvr : rest) done =
-            recvFromPack args kwargs rcvr $ \ !args' !kwargs' ->
-              go args' kwargs' rest done
-
-          recvFromPack ::
-            [EL'Value] ->
-            OrderedDict AttrKey EL'Value ->
-            ArgReceiver ->
-            ([EL'Value] -> OrderedDict AttrKey EL'Value -> STM ()) ->
-            STM ()
-          recvFromPack !args !kwargs !rcvr !done = case rcvr of
-            RecvRestPosArgs !addr _ -> do
-              recvOne addr $ EL'Apk $ EL'ArgsPack args odEmpty True False
-              done [] kwargs
-            RecvRestKwArgs !addr _ -> do
-              recvOne addr $ EL'Apk $ EL'ArgsPack [] kwargs False True
-              done args odEmpty
-            RecvRestPkArgs !addr _ -> do
-              recvOne addr $ EL'Apk $ EL'ArgsPack args kwargs True True
-              done [] odEmpty
-            RecvArg
-              addr@(AttrAddrSrc _ arg'span)
-              !anno
-              !maybeRename
-              maybeDef -> el'RunTx eas $
-                el'AnalyzeAnno anno $ \ !anno'prot _eas -> do
-                  let asRcvd :: EL'Value -> EL'Value
-                      asRcvd = case anno'prot of
-                        EL'Unknown -> id
-                        _ -> const anno'prot
-
-                      goRecv :: (AttrKey -> EL'Value -> STM ()) -> STM ()
-                      goRecv !received =
-                        el'ResolveAttrAddr eas addr $ \case
-                          Nothing -> done args kwargs
-                          Just !recvKey -> case odTakeOut recvKey kwargs of
-                            (Just !kwVal, kwargs') -> do
-                              received recvKey $ asRcvd kwVal
-                              done args kwargs'
-                            (Nothing, kwargs') -> case args of
-                              argVal : args' -> do
-                                received recvKey $ asRcvd argVal
-                                done args' kwargs'
-                              _ -> case maybeDef of
-                                Nothing -> do
-                                  if dyn'args || dyn'kwargs
-                                    then
-                                      el'LogDiag
-                                        diags
-                                        el'Warning
-                                        arg'span
-                                        "dyn-missing-arg"
-                                        "possible missing argument"
-                                    else
-                                      el'LogDiag
-                                        diags
-                                        el'Error
-                                        arg'span
-                                        "missing-arg"
-                                        "missing argument"
-                                  received recvKey $
-                                    asRcvd $
-                                      EL'Expr $
-                                        ExprSrc
-                                          (AttrExpr $ DirectRef addr)
-                                          arg'span
-                                  done args kwargs
-                                Just !defExpr -> el'RunTx
-                                  eas {el'context = eac {el'ctx'pure = True}}
-                                  $ el'AnalyzeExpr defExpr $
-                                    \ !defVal _eas -> do
-                                      received recvKey $ asRcvd defVal
-                                      done args kwargs
-                  case maybeRename of
-                    Nothing -> goRecv $ recvOne' arg'span
-                    Just (DirectRef !addr') ->
-                      goRecv $ \_recvKey -> recvOne addr'
-                    Just IndirectRef {} -> done args kwargs
-                    _ -> do
-                      el'LogDiag
-                        diags
-                        el'Error
-                        arg'span
-                        "invalid-target"
-                        "invalid let target"
-                      done args kwargs
+      recvExpr = ExprSrc (BlockExpr [let'stmt]) stmt'span
 
 --
 
@@ -2278,14 +2080,27 @@ el'AnalyzeExpr
                   el'AnalyzeExpr lhExpr $ -- assuming it be update, i.e.
                   -- initial assignment should not happen this way
                     \_lhVal !easDone' -> returnAsExpr easDone'
-              ExprSrc _ !bad'assign'tgt'span -> do
-                el'LogDiag
-                  diags
-                  el'Error
-                  bad'assign'tgt'span
-                  "bad-assign-target"
-                  "bad assignment target"
-                returnAsExpr easDone
+              ExprSrc !tgtExpr !bad'assign'tgt'span ->
+                -- todo allow indirect refs etc. as multi-assignment targets
+                methodArrowArgsReceiver (deParen'1 tgtExpr) $ \case
+                  Left _err -> do
+                    el'LogDiag
+                      diags
+                      el'Error
+                      bad'assign'tgt'span
+                      "bad-assign-target"
+                      "bad assignment target"
+                    returnAsExpr easDone
+                  Right !argsRcvr -> do
+                    let apk = case el'UltimateValue rhVal of
+                          EL'Apk k -> k
+                          _ -> EL'ArgsPack [rhVal] odEmpty False False
+                    el'RunTx eas $
+                      el'RecvArgs
+                        lhExpr
+                        argsRcvr
+                        apk
+                        $ \() _eas -> el'Exit eas exit rhVal
 
       doBranch :: STM ()
       doBranch = do
@@ -5115,3 +4930,242 @@ suggestCompletions !elw !line !char !modu =
         !typeName = attrKeyStr $ el'class'name cls
 
 --
+
+-- | Receive unknown arguments
+el'RecvUnknowns :: ExprSrc -> [ArgReceiver] -> EL'Analysis EL'Value
+el'RecvUnknowns recvExpr !rcvrs !exit !eas = go rcvrs
+  where
+    !eac = el'context eas
+    diags = el'ctx'diags eac
+
+    go :: [ArgReceiver] -> STM ()
+    go [] = el'Exit eas exit $ EL'Const nil
+    go (rcvr : rest) = do
+      case rcvr of
+        RecvRestPosArgs !addr _ ->
+          recvOneArg eas recvExpr addr $ EL'Apk $ EL'ArgsPack [] odEmpty True False
+        RecvRestKwArgs !addr _ ->
+          recvOneArg eas recvExpr addr $ EL'Apk $ EL'ArgsPack [] odEmpty False True
+        RecvRestPkArgs !addr _ ->
+          recvOneArg eas recvExpr addr $ EL'Apk $ EL'ArgsPack [] odEmpty True True
+        RecvArg
+          addr@(AttrAddrSrc _ arg'span)
+          !anno
+          !maybeRename
+          _maybeDef -> el'RunTx eas $
+            el'AnalyzeAnno anno $ \ !protVal _eas ->
+              case maybeRename of
+                Nothing ->
+                  recvOneArg eas recvExpr addr protVal
+                Just (DirectRef !addr') ->
+                  recvOneArg eas recvExpr addr' protVal
+                Just IndirectRef {} -> pure () -- TODO define art into objs
+                _ -> do
+                  el'LogDiag
+                    diags
+                    el'Error
+                    arg'span
+                    "invalid-target"
+                    "invalid let target"
+      go rest
+
+recvOneArg :: EL'AnalysisState -> ExprSrc -> AttrAddrSrc -> EL'Value -> STM ()
+recvOneArg !eas recvExpr !addr !v = case addr of
+  (AttrAddrSrc (NamedAttr "_") _) -> return ()
+  AttrAddrSrc _ !addr'span -> el'ResolveAttrAddr eas addr $ \case
+    Nothing -> return ()
+    Just !k -> recvOneArg' eas recvExpr addr'span k v
+
+recvOneArg' ::
+  EL'AnalysisState -> ExprSrc -> SrcRange -> AttrKey -> EL'Value -> STM ()
+recvOneArg' !eas recvExpr !focus'span !attrKey !attrVal = do
+  !attrAnno <- newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
+  !prevDef <-
+    iopdLookup attrKey $
+      if el'ctx'eff'defining eac
+        then el'branch'effs'wip bwip
+        else el'branch'attrs'wip bwip
+  let !attrDef =
+        EL'AttrDef
+          attrKey
+          NoDocCmt
+          "<let>"
+          focus'span
+          recvExpr
+          attrVal
+          attrAnno
+          prevDef
+  -- record as definition symbol
+  recordAttrDef eac attrDef
+  if el'ctx'eff'defining eac
+    then do
+      let !effs = el'branch'effs'wip bwip
+      case attrVal of
+        EL'Const EdhNil -> iopdDelete attrKey effs
+        _ -> iopdInsert attrKey attrDef effs
+    else do
+      let !attrs = el'branch'attrs'wip bwip
+      case attrVal of
+        EL'Const EdhNil -> iopdDelete attrKey attrs
+        _ -> iopdInsert attrKey attrDef attrs
+  when (el'ctx'exporting eac) $
+    iopdInsert attrKey attrDef $ el'obj'exps $ el'scope'this'obj pwip
+  where
+    !eac = el'context eas
+    !swip = el'ctx'scope eac
+    !pwip = el'ProcWIP swip
+    !bwip = el'scope'branch'wip pwip
+
+-- | Receive packed arguments
+el'RecvArgs :: ExprSrc -> ArgsReceiver -> EL'ArgsPack -> EL'Analysis ()
+el'RecvArgs
+  recvExpr@(ExprSrc _ recv'span)
+  !argsRcvr
+  !apk
+  !exit
+  !eas = case argsRcvr of
+    PackReceiver !rcvrs _ -> doRcvrs apk rcvrs
+    SingleReceiver !rcvr -> doRcvrs apk [rcvr]
+    NullaryReceiver -> doRcvrs apk []
+    WildReceiver !rcvr'span -> do
+      let (EL'ArgsPack !args !kwargs _dyn'args _dyn'kwargs) = apk
+      unless (null args) $
+        el'LogDiag
+          diags
+          el'Error
+          rcvr'span
+          "let-wild-pos-arg"
+          "letting positional argument(s) into wild receiver"
+
+      -- receive each kwargs
+      forM_ (odToList kwargs) $ \(!k, !v) ->
+        recvOneArg' eas recvExpr recv'span k v
+
+      -- record a region after this let statement, for current branch
+      iopdSnapshot (el'branch'attrs'wip bwip)
+        >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+          . EL'Region (src'end recv'span)
+
+      el'Exit eas exit ()
+    where
+      {- HLINT ignore "Reduce duplication" -}
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      !bwip = el'scope'branch'wip pwip
+
+      doRcvrs :: EL'ArgsPack -> [ArgReceiver] -> STM ()
+      doRcvrs (EL'ArgsPack !all'args !all'kwargs !dyn'args !dyn'kwargs) !rcvrs =
+        go all'args all'kwargs rcvrs $ \ !args' !kwargs' -> do
+          unless (null args' && odNull kwargs') $
+            el'LogDiag
+              diags
+              el'Error
+              recv'span
+              "extra-args"
+              "extraneous arguments not consumed"
+
+          -- record a region after this let statement, for current scope
+          iopdSnapshot (el'branch'attrs'wip bwip)
+            >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+              . EL'Region (src'end recv'span)
+
+          el'Exit eas exit ()
+        where
+          go ::
+            [EL'Value] ->
+            OrderedDict AttrKey EL'Value ->
+            [ArgReceiver] ->
+            ([EL'Value] -> OrderedDict AttrKey EL'Value -> STM ()) ->
+            STM ()
+          go !args !kwargs [] !done = done args kwargs
+          go !args !kwargs (rcvr : rest) done =
+            recvFromPack args kwargs rcvr $ \ !args' !kwargs' ->
+              go args' kwargs' rest done
+
+          recvFromPack ::
+            [EL'Value] ->
+            OrderedDict AttrKey EL'Value ->
+            ArgReceiver ->
+            ([EL'Value] -> OrderedDict AttrKey EL'Value -> STM ()) ->
+            STM ()
+          recvFromPack !args !kwargs !rcvr !done = case rcvr of
+            RecvRestPosArgs !addr _ -> do
+              recvOneArg eas recvExpr addr $
+                EL'Apk $ EL'ArgsPack args odEmpty True False
+              done [] kwargs
+            RecvRestKwArgs !addr _ -> do
+              recvOneArg eas recvExpr addr $
+                EL'Apk $ EL'ArgsPack [] kwargs False True
+              done args odEmpty
+            RecvRestPkArgs !addr _ -> do
+              recvOneArg eas recvExpr addr $
+                EL'Apk $ EL'ArgsPack args kwargs True True
+              done [] odEmpty
+            RecvArg
+              addr@(AttrAddrSrc _ arg'span)
+              !anno
+              !maybeRename
+              maybeDef -> el'RunTx eas $
+                el'AnalyzeAnno anno $ \ !anno'prot _eas -> do
+                  let asRcvd :: EL'Value -> EL'Value
+                      asRcvd = case anno'prot of
+                        EL'Unknown -> id
+                        _ -> const anno'prot
+
+                      goRecv :: (AttrKey -> EL'Value -> STM ()) -> STM ()
+                      goRecv !received =
+                        el'ResolveAttrAddr eas addr $ \case
+                          Nothing -> done args kwargs
+                          Just !recvKey -> case odTakeOut recvKey kwargs of
+                            (Just !kwVal, kwargs') -> do
+                              received recvKey $ asRcvd kwVal
+                              done args kwargs'
+                            (Nothing, kwargs') -> case args of
+                              argVal : args' -> do
+                                received recvKey $ asRcvd argVal
+                                done args' kwargs'
+                              _ -> case maybeDef of
+                                Nothing -> do
+                                  if dyn'args || dyn'kwargs
+                                    then
+                                      el'LogDiag
+                                        diags
+                                        el'Warning
+                                        arg'span
+                                        "dyn-missing-arg"
+                                        "possible missing argument"
+                                    else
+                                      el'LogDiag
+                                        diags
+                                        el'Error
+                                        arg'span
+                                        "missing-arg"
+                                        "missing argument"
+                                  received recvKey $
+                                    asRcvd $
+                                      EL'Expr $
+                                        ExprSrc
+                                          (AttrExpr $ DirectRef addr)
+                                          arg'span
+                                  done args kwargs
+                                Just !defExpr -> el'RunTx
+                                  eas {el'context = eac {el'ctx'pure = True}}
+                                  $ el'AnalyzeExpr defExpr $
+                                    \ !defVal _eas -> do
+                                      received recvKey $ asRcvd defVal
+                                      done args kwargs
+                  case maybeRename of
+                    Nothing -> goRecv $ recvOneArg' eas recvExpr arg'span
+                    Just (DirectRef !addr') ->
+                      goRecv $ \_recvKey -> recvOneArg eas recvExpr addr'
+                    Just IndirectRef {} -> done args kwargs
+                    _ -> do
+                      el'LogDiag
+                        diags
+                        el'Error
+                        arg'span
+                        "invalid-target"
+                        "invalid let target"
+                      done args kwargs
