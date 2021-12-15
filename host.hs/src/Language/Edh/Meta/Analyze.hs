@@ -3022,9 +3022,9 @@ el'AnalyzeExpr
         "els does not analyze source structure of dynamic include yet"
       el'RunTx eas $ -- dynamic string include
       -- TODO analyzetime string eval?
-        el'AnalyzeExpr incSpec $ \ !impFromVal -> do
+        el'AnalyzeExpr incSpec $
           -- TODO validate it is string type, include from it
-          el'ExitTx exit impFromVal
+          const $ el'ExitTx exit $ EL'Const nil
     where
       !world = el'world eas
       !ets = el'ets eas
@@ -3104,9 +3104,9 @@ el'AnalyzeExpr
         "els does not analyze source structure of dynamic include yet"
       el'RunTx eas $ -- dynamic string include
       -- TODO analyzetime string eval?
-        el'AnalyzeExpr incSpec $ \ !impFromVal -> do
+        el'AnalyzeExpr incSpec $
           -- TODO validate it is string type, iexpr from it
-          el'ExitTx exit impFromVal
+          const $ el'ExitTx exit $ EL'Const nil
     where
       !ets = el'ets eas
       !eac = el'context eas
@@ -3150,21 +3150,146 @@ el'AnalyzeExpr
       doImp :: EL'ArtsWIP -> EL'ArtsWIP -> STM ()
       doImp !intoScope !withExps = do
         !docCmt <- takeDocComment eas
-        let chkExport :: STM (AttrKey -> EL'AttrDef -> STM ())
-            chkExport =
+        let chkExp =
               if not (el'ctx'exporting eac)
-                then return $ \_ _ -> return ()
-                else return $ \ !localKey !attrDef ->
+                then \_ _ -> return ()
+                else \ !localKey !attrDef ->
                   iopdInsert localKey attrDef withExps
 
-            impIntoScope ::
-              (AttrKey -> EL'AttrDef -> STM ()) ->
-              EL'ModuSlot ->
-              EL'Artifacts ->
-              ArgsReceiver ->
-              STM ()
-            impIntoScope !chkExp !srcModu !srcExps !asr = do
-              case asr of
+            impFromUnknown :: STM ()
+            impFromUnknown = do
+              case argsRcvr of
+                WildReceiver _ -> return ()
+                PackReceiver !ars _ -> forM_ ars go
+                SingleReceiver !ar -> go ar
+                NullaryReceiver -> return ()
+              -- record a region after this import, for current scope
+              iopdSnapshot (el'branch'attrs'wip bwip)
+                >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                  . EL'Region (src'end expr'span)
+              where
+                go :: ArgReceiver -> STM ()
+                go = \case
+                  RecvRestPkArgs (AttrAddrSrc (NamedAttr "_") _) _ -> pure ()
+                  RecvRestKwArgs (AttrAddrSrc (NamedAttr "_") _) _ -> pure ()
+                  RecvArg
+                    srcAddr@(AttrAddrSrc _ !item'span)
+                    _anno -- todo honor annotations on imports?
+                    !maybeAs
+                    !defExpr -> do
+                      case defExpr of
+                        Nothing -> pure ()
+                        Just {} ->
+                          el'LogDiag
+                            diags
+                            el'Warning
+                            item'span
+                            "unusual-import"
+                            "defaults in import specificatin is not analyzed yet"
+                      case maybeAs of
+                        Nothing -> processImp srcAddr
+                        Just (DirectRef !asAddr) -> processImp asAddr
+                        Just !badRename ->
+                          el'LogDiag
+                            diags
+                            el'Error
+                            item'span
+                            "invalid-import-rename"
+                            $ "invalid rename of import: " <> T.pack (show badRename)
+                  RecvRestPosArgs (AttrAddrSrc _ bad'span) _ ->
+                    el'LogDiag
+                      diags
+                      el'Error
+                      bad'span
+                      "rest-pos-import"
+                      "rest positional receiver in import specification"
+                  RecvRestPkArgs localAddr@(AttrAddrSrc _ !addr'span) _ ->
+                    el'ResolveAttrAddr eas localAddr $ \case
+                      Nothing ->
+                        -- invalid attr addr, error should have been logged
+                        return ()
+                      Just (AttrByName "_") -> return () -- explicit dropping
+                      Just !localKey -> do
+                        !artAnno <- newTVar =<< el'ResolveAnnotation swip localKey
+                        let !attrDef =
+                              EL'AttrDef
+                                localKey
+                                docCmt
+                                "<import>"
+                                addr'span
+                                xsrc
+                                EL'Unknown
+                                artAnno
+                                Nothing
+                        -- record as definition symbol
+                        recordAttrDef eac attrDef
+
+                        -- register as local attribute
+                        iopdInsert localKey attrDef intoScope
+                        -- export it if specified so
+                        chkExp localKey attrDef
+
+                        return ()
+                  RecvRestKwArgs localAddr@(AttrAddrSrc _ !addr'span) _ ->
+                    el'ResolveAttrAddr eas localAddr $ \case
+                      Nothing ->
+                        -- invalid attr addr, error should have been logged
+                        return ()
+                      Just (AttrByName "_") ->
+                        return () -- explicit dropping
+                      Just !localKey -> do
+                        !artAnno <-
+                          newTVar =<< el'ResolveAnnotation swip localKey
+                        let !attrDef =
+                              EL'AttrDef
+                                localKey
+                                docCmt
+                                "<import>"
+                                addr'span
+                                xsrc
+                                EL'Unknown
+                                artAnno
+                                Nothing
+                        -- record as definition symbol
+                        recordAttrDef eac attrDef
+
+                        -- register as local attribute
+                        iopdInsert localKey attrDef intoScope
+                        -- export it if specified so
+                        chkExp localKey attrDef
+
+                        return ()
+                  where
+                    processImp :: AttrAddrSrc -> STM ()
+                    processImp localAddr@(AttrAddrSrc _ !local'span) = do
+                      el'ResolveAttrAddr eas localAddr $ \case
+                        Nothing ->
+                          -- invalid attr addr, error should have been logged
+                          return ()
+                        Just !localKey -> do
+                          !artAnno <-
+                            newTVar
+                              =<< el'ResolveAnnotation swip localKey
+                          let !impDef =
+                                EL'AttrDef
+                                  localKey
+                                  docCmt
+                                  "<import>"
+                                  local'span
+                                  xsrc
+                                  EL'Unknown
+                                  artAnno
+                                  Nothing
+                          -- record as definition symbol
+                          recordAttrDef eac impDef
+                          -- register as local attribute
+                          iopdInsert localKey impDef intoScope
+                          -- export it if specified so
+                          chkExp localKey impDef
+
+            impIntoScope :: EL'ModuSlot -> EL'Artifacts -> STM ()
+            impIntoScope !srcModu !srcExps = do
+              case argsRcvr of
                 WildReceiver _ -> forM_ (odToList srcExps) wildImp
                 PackReceiver !ars _ -> go srcExps ars
                 SingleReceiver !ar -> go srcExps [ar]
@@ -3423,7 +3548,6 @@ el'AnalyzeExpr
                       modifyTVar' (el'modu'dependencies'wip resolvImporter) $
                         Map.insert msImportee True
                       -- do importing whether it is resolving or resolved
-                      !chkExp <- chkExport
                       runEdhTx ets $
                         asModuleResolving world msImportee $ \case
                           EL'ModuResolved !resolved -> \_ets -> do
@@ -3432,7 +3556,7 @@ el'AnalyzeExpr
                               Map.insert msImporter True
                             -- do import
                             let !exps = el'modu'exports resolved
-                            impIntoScope chkExp msImportee exps argsRcvr
+                            impIntoScope msImportee exps
                             el'Exit eas exit moduVal
                           EL'ModuResolving !resolving _acts -> \_ets -> do
                             -- record importer as a dependant
@@ -3440,7 +3564,7 @@ el'AnalyzeExpr
                               Map.insert msImporter True
                             -- do import
                             !exps <- iopdSnapshot $ el'modu'exps'wip resolving
-                            impIntoScope chkExp msImportee exps argsRcvr
+                            impIntoScope msImportee exps
                             el'Exit eas exit moduVal
           _ -> do
             el'LogDiag
@@ -3451,9 +3575,11 @@ el'AnalyzeExpr
               "els does not analyze source structure of dynamic import yet"
             el'RunTx eas $ -- dynamic string or obj import
             -- TODO analyzetime string/object eval?
-              el'AnalyzeExpr impSpec $ \ !impFromVal -> do
-                -- TODO validate it is object type, import from it
-                el'ExitTx exit impFromVal
+              el'AnalyzeExpr impSpec $
+                \_ _eas -> do
+                  impFromUnknown
+                  -- TODO validate it is object type, import from it
+                  el'Exit eas exit $ EL'Apk $ EL'ArgsPack [] odEmpty False True
 --
 
 -- defining a class
