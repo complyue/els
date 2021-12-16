@@ -2156,6 +2156,56 @@ el'AnalyzeExpr
                   !attrAnno <- newTVar Nothing
                   case sndr of
                     SendPosArg
+                      ( ExprSrc
+                          ( InfixExpr
+                              (OpSymSrc "as" _)
+                              ( ExprSrc
+                                  ( AttrExpr
+                                      ( DirectRef
+                                          srcAttr@(AttrAddrSrc _ !src'span)
+                                        )
+                                    )
+                                  _
+                                )
+                              attrExpr@( ExprSrc
+                                           (AttrExpr (DirectRef !tgtAttr))
+                                           !arg'span
+                                         )
+                            )
+                          _
+                        ) ->
+                        el'ResolveAttrAddr eas srcAttr $ \case
+                          Nothing -> go rest kds
+                          Just !srcKey ->
+                            el'ResolveAttrAddr eas tgtAttr $ \case
+                              Nothing -> go rest kds
+                              Just !tgtKey -> do
+                                !attrVal <-
+                                  el'ResolveObjAttr' cls srcKey >>= \case
+                                    Nothing -> do
+                                      el'LogDiag
+                                        diags
+                                        el'Error
+                                        src'span
+                                        "missing-data-field"
+                                        "no such data class field"
+                                      return $ EL'Expr attrExpr
+                                    Just !def -> do
+                                      recordAttrRef eac $
+                                        EL'AttrRef Nothing srcAttr clsModu def
+                                      return $ el'attr'def'value def
+                                let !attrDef =
+                                      EL'AttrDef
+                                        tgtKey
+                                        NoDocCmt
+                                        opSym
+                                        arg'span
+                                        xsrc
+                                        attrVal
+                                        attrAnno
+                                        Nothing
+                                go rest $ (tgtKey, attrDef) : kds
+                    SendPosArg
                       attrExpr@( ExprSrc
                                    (AttrExpr (DirectRef !rcvAttr))
                                    !arg'span

@@ -39,8 +39,8 @@ export data Position( line, character ) {
 export data Range( start, end ) {
 
   method __match__( jsonRepr ) {
-    case jsonRepr[ 'start' ] of { Position() = start } ->
-    case jsonRepr[ 'end' ] of { Position() = end } ->
+    case jsonRepr[ 'start' ] of { Position() as start } ->
+    case jsonRepr[ 'end' ] of { Position() as end } ->
     Range( start, end )
   } $=> nil
 
@@ -54,8 +54,8 @@ export data Range( start, end ) {
 export data Location( uri, range ) {
 
   method __match__( jsonRepr ) {
-    case jsonRepr[ 'uri' ] of { URI() = uri } ->
-    case jsonRepr[ 'range' ] of { Range() = range } ->
+    case jsonRepr[ 'uri' ] of { URI() as uri } ->
+    case jsonRepr[ 'range' ] of { Range() as range } ->
     Location( uri, range )
   } $=> nil
 
