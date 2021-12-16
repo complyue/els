@@ -2420,13 +2420,13 @@ el'AnalyzeExpr
                     EL'ClsVal !clsModu !cls ->
                       defDfAttrs clsModu cls apkr analyzeBranch
                     _ -> defDfAttrs mwip el'MetaClass apkr analyzeBranch
-            -- { class( field1, field2, ... ) = instAddr } -- fields by
+            -- { class( field1, field2, ... ) as instAddr } -- fields by
             -- class again, but receive the matched object as well
             -- __match__ magic from the class works here
             [ StmtSrc
                 ( ExprStmt
                     ( InfixExpr
-                        (OpSymSrc "=" _)
+                        (OpSymSrc !opSym' _)
                         ( ExprSrc
                             ( CallExpr
                                 clsExpr@ExprSrc {}
@@ -2442,7 +2442,8 @@ el'AnalyzeExpr
                     _docCmt
                   )
                 _
-              ] -> el'RunTx eas $
+              ] | opSym' `elem` ["as", "="] -> el'RunTx eas $
+                -- TODO: deprecate and remove (=) syntax sooner or later
                 el'AnalyzeExpr clsExpr $
                   \ !clsResult _eas -> case el'UltimateValue clsResult of
                     EL'ClsVal !clsModu !cls -> do
