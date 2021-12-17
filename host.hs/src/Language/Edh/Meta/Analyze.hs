@@ -1805,16 +1805,17 @@ el'AnalyzeExpr
     "=>" ->
       el'RunTx eas $
         el'DefineArrowProc
-          (methodArrowArgsReceiver . deParen'1)
+          methodArrowArgsReceiver
           (AttrByName "<arrow>")
           lhExpr
           rhExpr
           exit
     --  producer arrow procedure
     "=>*" ->
+      -- TODO error if not receiving `outlet` arg
       el'RunTx eas $
         el'DefineArrowProc
-          (producerArrowArgsReceiver . deParen'1)
+          methodArrowArgsReceiver
           (AttrByName "<producer>")
           lhExpr
           rhExpr
@@ -2082,7 +2083,7 @@ el'AnalyzeExpr
                     \_lhVal !easDone' -> returnAsExpr easDone'
               ExprSrc !tgtExpr !bad'assign'tgt'span ->
                 -- todo allow indirect refs etc. as multi-assignment targets
-                methodArrowArgsReceiver (deParen'1 tgtExpr) $ \case
+                methodArrowArgsReceiver tgtExpr $ \case
                   Left _err -> do
                     el'LogDiag
                       diags
@@ -3866,6 +3867,7 @@ el'AnalyzeExpr xsrc@(ExprSrc (GeneratorExpr !pd) _expr'span) !exit !eas =
 el'AnalyzeExpr xsrc@(ExprSrc (InterpreterExpr !pd) _expr'span) !exit !eas =
   el'RunTx eas $ el'DefineMethod xsrc pd exit
 el'AnalyzeExpr xsrc@(ExprSrc (ProducerExpr !pd) _expr'span) !exit !eas =
+  -- TODO error if not receiving `outlet` arg
   el'RunTx eas $ el'DefineMethod xsrc pd exit
 -- defining an operator procedure
 el'AnalyzeExpr
