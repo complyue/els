@@ -1148,6 +1148,7 @@ el'LiteralValue !lit !exit !eas = case lit of
   BoolLiteral !v -> el'Exit eas exit $ EL'Const (EdhBool v)
   NilLiteral -> el'Exit eas exit $ EL'Const nil
   SinkCtor -> el'Exit eas exit . EL'Const . EdhSink =<< newSink
+  ChanCtor -> el'Exit eas exit . EL'Const . EdhChan =<< newBChan
   ValueLiteral !v -> el'Exit eas exit $ EL'Const v
   QtyLiteral _q !uomSpec -> do
     analyzeUnitSpec eas uomSpec
