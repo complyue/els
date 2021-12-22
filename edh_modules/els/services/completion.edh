@@ -34,8 +34,8 @@ export method @'textDocument/completion' (
       return nil
     }
     go { # not block subsequent requests from the lsp client
-      perceive (perform lspReqSignal()) {
-        { break } -> {
+      perceive perform lspReqSignal() {
+        nil -> {
           perform lspError( 'cancelled', -32800 ) # RequestCancelled
           break
         }

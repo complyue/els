@@ -56,13 +56,9 @@ export method edhLanguageService() {
     effect import * './effects'
 
 
-    {## Event sinks per lsc request, majorly used for cancellation by lsc
+    {## One channel per lsc request, majorly used for cancellation by lsc
      # Keyed by lsc request id #}
     clientRequests = {}
-
-    {## Event sink for all responses from lsc wrt lss requests
-     #}
-    globalResponses = sink
 
     {## Registered listeners for responses from lsc wrt lss requests
      # Keyed by lss request id #}
@@ -75,8 +71,8 @@ export method edhLanguageService() {
       import * './services'
 
       method @'$/cancelRequest'( id as idReq ) {
-        ai case clientRequests[ idReq ] of { cancelSignal } -> {
-          cancelSignal <- { break }
+        case clientRequests[ idReq ] of { cancelSignal } -> {
+          cancelSignal <- nil
           clientRequests[ idReq ] = nil
         }
       }
@@ -105,11 +101,11 @@ export method edhLanguageService() {
       }
       return ai case clientRequests[ idReq ] of {
         { reqSig } -> reqSig # already armed
-        # need to arm a signal sink
+        # need to arm a signal channel
         # assuming current thread is the owner, cleanup on thread termination
         defer clientRequests[ idReq ] = nil
-        # arm an event sink by request id
-        clientRequests[ idReq ] = sink
+        # arm a signal channel by request id
+        clientRequests[ idReq ] = chan
       }
     }
 
@@ -147,9 +143,6 @@ export method edhLanguageService() {
       postOnePkt( json$ outDict, **headers )
     }
 
-    # global sink of all responses, service threads can choose to perceive this
-    effect lspResponses = globalResponses
-
     # response listeners can be registered per request id
     effect method lspReceiveResponse( idReq, listener ) {
       responseListeners[ idReq ] = listener
@@ -163,8 +156,8 @@ export method edhLanguageService() {
 
   # Seems VSCode can make fast concurrent connections at startup, here per a subsequent connection, the importing job into the `services` namespace can, finish before those modules finished initialization.
   # Wait here and only proceed after the artifacts have actually gotten imported, or we'll be wrong to report `MethodNotFound` back to VSCode
+  do break if services ? initialize is not nil
   for _ from console.everyMillis(200, wait1st= false,)
-  do if services ? initialize is not nil then break
 
 
   # loop forever until eol on error, or stopped elsewhere
@@ -184,12 +177,11 @@ export method edhLanguageService() {
         case rpcIn[ 'id' ] of {
           nil -> error( 'lsp error response without id' )
           { idReq } -> {
-            globalResponses <- rpcIn
             case responseListeners[ idReq ] of {
               { listener } -> { {
+                  do responseListeners[ idReq ] = nil
                   # a listener must return `true` to be kept installed
                   if listener( NA, error=rpcErr ) is not true
-                  then responseListeners[ idReq ] = nil
                 } $=> { exc } -> {
                   console.warn<| 'LSP response listener failed: ' ++ desc( exc )
                   # uninstall the failing one
@@ -210,12 +202,11 @@ export method edhLanguageService() {
         case rpcIn[ 'id' ] of {
           nil -> error( 'lsp response without id' )
           { idReq } -> {
-            globalResponses <- rpcIn
             case responseListeners[ idReq ] of {
               { listener } -> { {
+                  do responseListeners[ idReq ] = nil
                   # a listener must return `true` to be kept installed
                   if listener( rpcResult ) is not true
-                  then responseListeners[ idReq ] = nil
                 } $=> { exc } -> {
                   console.warn<| 'LSP response listener failed: ' ++ desc( exc )
                   # uninstall the failing one
