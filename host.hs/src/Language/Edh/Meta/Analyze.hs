@@ -1752,11 +1752,11 @@ el'AnalyzeExpr
 el'AnalyzeExpr
   xsrc@( ExprSrc
            ( InfixExpr
-               (OpSymSrc !opSym (SrcRange op'start _op'end))
+               op@(OpSymSrc !opSym (SrcRange op'start _op'end))
                lhExpr@(ExprSrc !lhx lh'span@(SrcRange _lh'start lh'end))
                !rhExpr
              )
-           !expr'span
+           _
          )
   !exit
   !eas = case opSym of
@@ -1793,7 +1793,12 @@ el'AnalyzeExpr
     --
 
     -- assignment
-    _ | "=" `T.isSuffixOf` opSym -> doAssign
+    "as" -> el'RunTx eas $ doAssign xsrc op rhExpr lhExpr exit
+    _
+      | "=" `T.isSuffixOf` opSym ->
+        el'RunTx eas $ doAssign xsrc op lhExpr rhExpr exit
+    -- attribute prototype annotation
+    "=:" -> el'RunTx eas $ doAssign xsrc op lhExpr rhExpr exit
     --
 
     -- branch
@@ -1819,10 +1824,6 @@ el'AnalyzeExpr
           lhExpr
           rhExpr
           exit
-    --
-
-    -- attribute prototype annotation
-    "=:" -> doAssign
     --
 
     -- attribute type annotation
@@ -1914,193 +1915,6 @@ el'AnalyzeExpr
           el'AnalyzeExpr lhExpr $
             const $
               el'AnalyzeExpr rhExpr $ const returnAsExpr
-
-      doAssign :: STM ()
-      doAssign = do
-        !docCmt <- takeDocComment eas
-        el'RunTx eas $ -- TODO use pure ctx?
-          el'AnalyzeExpr rhExpr $ \ !rhVal !easDone -> do
-            case lhExpr of
-              ExprSrc
-                (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span)))
-                _ ->
-                  el'ResolveAttrAddr easDone addr $ \case
-                    Nothing -> returnAsExpr easDone
-                    Just (AttrByName "_") -> el'Exit easDone exit $ EL'Const nil
-                    Just !attrKey -> do
-                      !attrAnno <-
-                        newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
-                      !maybePrevDef <-
-                        iopdLookup attrKey $
-                          if el'ctx'eff'defining eac
-                            then el'branch'effs'wip bwip
-                            else el'branch'attrs'wip bwip
-                      let !attrDef =
-                            EL'AttrDef
-                              attrKey
-                              docCmt
-                              opSym
-                              addr'span
-                              xsrc
-                              rhVal
-                              attrAnno
-                              maybePrevDef
-
-                      -- record as artifact of current scope
-                      if el'ctx'eff'defining eac
-                        then do
-                          -- todo (+=) (*=) etc. are working but confusing for effect definition
-                          --      log errors/warnings case by case, for ops other than (=) or (:=)
-                          let !effs = el'branch'effs'wip bwip
-                          case rhVal of
-                            EL'Const EdhNil -> iopdDelete attrKey effs
-                            _ -> iopdInsert attrKey attrDef effs
-                          el'Exit easDone exit rhVal
-                        else do
-                          -- note the assignment defines attr regardless of pure ctx
-                          let !attrs = el'branch'attrs'wip bwip
-                          if el'IsNil rhVal && "=" == opSym
-                            then do
-                              iopdDelete attrKey $ el'scope'attrs'wip pwip
-                              iopdDelete attrKey attrs
-                              iopdSnapshot attrs
-                                >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
-                                  . EL'Region (src'end expr'span)
-                            else do
-                              iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
-                              iopdInsert attrKey attrDef attrs
-                              case maybePrevDef of
-                                -- assignment created a new attr, record a region
-                                -- after this assignment expr for current scope
-                                Nothing ->
-                                  iopdSnapshot attrs
-                                    >>= modifyTVar' (el'branch'regions'wip bwip)
-                                      . (:)
-                                      . EL'Region (src'end expr'span)
-                                _ -> pure ()
-                          when (el'ctx'exporting eac) $
-                            iopdInsert attrKey attrDef $
-                              el'obj'exps $ el'scope'this'obj pwip
-                          --
-
-                          -- note "?=" goes otherwise
-                          if opSym `elem` ["=", ":=", "|=", "=:"]
-                            then do
-                              -- check if it shadows attr from outer scopes
-                              case swip of
-                                EL'InitObject {} -> pure () -- not eligible
-                                EL'DefineClass {} -> pure () -- not eligible
-                                EL'InitModule {} -> pure () -- need check?
-                                EL'ProcFlow {} ->
-                                  el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
-                                    >>= \case
-                                      Nothing -> pure ()
-                                      Just !shadowedDef -> do
-                                        el'LogDiag
-                                          diags
-                                          el'Warning
-                                          addr'span
-                                          "attr-shadow"
-                                          "shadows the attribute defined in outer scope"
-                                        -- record a reference to the shadowed attr
-                                        let !attrRef =
-                                              EL'AttrRef Nothing addr mwip shadowedDef
-                                        recordAttrRef eac attrRef
-
-                              -- record as reference symbol, for completion
-                              recordAttrRef eac $
-                                EL'UnsolvedRef Nothing addr'span
-                              -- record as definition symbol
-                              recordAttrDef eac attrDef
-                              el'Exit easDone exit rhVal
-                            else case maybePrevDef of
-                              Just !prevDef -> do
-                                -- record as reference symbol
-                                recordAttrRef eac $
-                                  EL'AttrRef Nothing addr mwip prevDef
-                                returnAsExpr easDone
-                              Nothing -> do
-                                -- record as definition symbol
-                                recordAttrDef eac attrDef
-                                returnAsExpr easDone
-              ExprSrc
-                ( AttrExpr
-                    (IndirectRef !tgtExpr addr@(AttrAddrSrc _ !addr'span))
-                  )
-                _expr'span ->
-                  el'RunTx easDone $
-                    el'AnalyzeExpr tgtExpr $ \ !tgtVal !easDone' -> do
-                      -- record as reference symbol, for completion
-                      recordAttrRef eac $
-                        EL'UnsolvedRef (Just tgtVal) addr'span
-                      el'ResolveAttrAddr easDone' addr $ \case
-                        Nothing ->
-                          -- record as reference symbol, for completion
-                          recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
-                        Just !attrKey ->
-                          case tgtVal of
-                            EL'ObjVal _ms !obj -> do
-                              let !cls = el'obj'class obj
-                                  !objAttrs = el'obj'attrs obj
-                              !maybePrevDef <- el'ResolveObjAttr obj attrKey
-                              case maybePrevDef of
-                                Just !prevDef ->
-                                  -- record as reference symbol
-                                  recordAttrRef eac $
-                                    EL'AttrRef Nothing addr mwip prevDef
-                                Nothing -> pure ()
-                              !attrAnno <-
-                                (newTVar =<<) $
-                                  tryReadTMVar (el'class'defi cls) >>= \case
-                                    Nothing -> return Nothing
-                                    Just !defi ->
-                                      return $
-                                        odLookup attrKey $ el'class'annos defi
-                              let !attrDef =
-                                    EL'AttrDef
-                                      attrKey
-                                      docCmt
-                                      opSym
-                                      addr'span
-                                      xsrc
-                                      rhVal
-                                      attrAnno
-                                      maybePrevDef
-                              iopdInsert attrKey attrDef objAttrs
-                            -- TODO more to do?
-                            _ -> pure ()
-                      returnAsExpr easDone'
-              ExprSrc (IndexExpr !idxExpr !tgtExpr) _expr'span ->
-                el'RunTx easDone $
-                  el'AnalyzeExpr idxExpr $
-                    const $
-                      el'AnalyzeExpr tgtExpr $ const returnAsExpr
-              ExprSrc (InfixExpr (OpSymSrc "@" _) _ _) _ ->
-                el'RunTx easDone $
-                  el'AnalyzeExpr lhExpr $ -- assuming it be update, i.e.
-                  -- initial assignment should not happen this way
-                    \_lhVal !easDone' -> returnAsExpr easDone'
-              ExprSrc !tgtExpr !bad'assign'tgt'span ->
-                -- todo allow indirect refs etc. as multi-assignment targets
-                methodArrowArgsReceiver tgtExpr $ \case
-                  Left _err -> do
-                    el'LogDiag
-                      diags
-                      el'Error
-                      bad'assign'tgt'span
-                      "bad-assign-target"
-                      "bad assignment target"
-                    returnAsExpr easDone
-                  Right !argsRcvr -> do
-                    let apk = case el'UltimateValue rhVal of
-                          EL'Apk k -> k
-                          _ -> EL'ArgsPack [rhVal] odEmpty False False
-                    el'RunTx eas $
-                      el'RecvArgs
-                        lhExpr
-                        argsRcvr
-                        apk
-                        $ \() _eas -> el'Exit eas exit rhVal
 
       doBranch :: STM ()
       doBranch = do
@@ -5353,3 +5167,205 @@ el'RecvArgs
                         "invalid-target"
                         "invalid let target"
                       done args kwargs
+
+doAssign ::
+  ExprSrc -> OpSymSrc -> ExprSrc -> ExprSrc -> EL'TxExit EL'Value -> EL'Tx
+doAssign
+  xsrc@(ExprSrc _ !expr'span)
+  (OpSymSrc !opSym _)
+  !lhExpr
+  !rhExpr
+  !exit
+  !eas = do
+    !docCmt <- takeDocComment eas
+    el'RunTx eas $ -- TODO use pure ctx?
+      el'AnalyzeExpr rhExpr $ \ !rhVal !easDone -> do
+        case lhExpr of
+          ExprSrc
+            (AttrExpr (DirectRef addr@(AttrAddrSrc _ !addr'span)))
+            _ ->
+              el'ResolveAttrAddr easDone addr $ \case
+                Nothing -> returnAsExpr easDone
+                Just (AttrByName "_") -> el'Exit easDone exit $ EL'Const nil
+                Just !attrKey -> do
+                  !attrAnno <-
+                    newTVar =<< iopdLookup attrKey (el'branch'annos'wip bwip)
+                  !maybePrevDef <-
+                    iopdLookup attrKey $
+                      if el'ctx'eff'defining eac
+                        then el'branch'effs'wip bwip
+                        else el'branch'attrs'wip bwip
+                  let !attrDef =
+                        EL'AttrDef
+                          attrKey
+                          docCmt
+                          opSym
+                          addr'span
+                          xsrc
+                          rhVal
+                          attrAnno
+                          maybePrevDef
+
+                  -- record as artifact of current scope
+                  if el'ctx'eff'defining eac
+                    then do
+                      -- todo (+=) (*=) etc. are working but confusing for effect definition
+                      --      log errors/warnings case by case, for ops other than (=) or (:=)
+                      let !effs = el'branch'effs'wip bwip
+                      case rhVal of
+                        EL'Const EdhNil -> iopdDelete attrKey effs
+                        _ -> iopdInsert attrKey attrDef effs
+                      el'Exit easDone exit rhVal
+                    else do
+                      -- note the assignment defines attr regardless of pure ctx
+                      let !attrs = el'branch'attrs'wip bwip
+                      if el'IsNil rhVal && "=" == opSym
+                        then do
+                          iopdDelete attrKey $ el'scope'attrs'wip pwip
+                          iopdDelete attrKey attrs
+                          iopdSnapshot attrs
+                            >>= modifyTVar' (el'branch'regions'wip bwip) . (:)
+                              . EL'Region (src'end expr'span)
+                        else do
+                          iopdInsert attrKey attrDef $ el'scope'attrs'wip pwip
+                          iopdInsert attrKey attrDef attrs
+                          case maybePrevDef of
+                            -- assignment created a new attr, record a region
+                            -- after this assignment expr for current scope
+                            Nothing ->
+                              iopdSnapshot attrs
+                                >>= modifyTVar' (el'branch'regions'wip bwip)
+                                  . (:)
+                                  . EL'Region (src'end expr'span)
+                            _ -> pure ()
+                      when (el'ctx'exporting eac) $
+                        iopdInsert attrKey attrDef $
+                          el'obj'exps $ el'scope'this'obj pwip
+                      --
+
+                      -- note "?=" goes otherwise
+                      if opSym `elem` ["=", ":=", "|=", "=:"]
+                        then do
+                          -- check if it shadows attr from outer scopes
+                          case swip of
+                            EL'InitObject {} -> pure () -- not eligible
+                            EL'DefineClass {} -> pure () -- not eligible
+                            EL'InitModule {} -> pure () -- need check?
+                            EL'ProcFlow {} ->
+                              el'ResolveLexicalAttr (el'ctx'outers eac) attrKey
+                                >>= \case
+                                  Nothing -> pure ()
+                                  Just !shadowedDef -> do
+                                    el'LogDiag
+                                      diags
+                                      el'Warning
+                                      addr'span
+                                      "attr-shadow"
+                                      "shadows the attribute defined in outer scope"
+                                    -- record a reference to the shadowed attr
+                                    let !attrRef =
+                                          EL'AttrRef Nothing addr mwip shadowedDef
+                                    recordAttrRef eac attrRef
+
+                          -- record as reference symbol, for completion
+                          recordAttrRef eac $
+                            EL'UnsolvedRef Nothing addr'span
+                          -- record as definition symbol
+                          recordAttrDef eac attrDef
+                          el'Exit easDone exit rhVal
+                        else case maybePrevDef of
+                          Just !prevDef -> do
+                            -- record as reference symbol
+                            recordAttrRef eac $
+                              EL'AttrRef Nothing addr mwip prevDef
+                            returnAsExpr easDone
+                          Nothing -> do
+                            -- record as definition symbol
+                            recordAttrDef eac attrDef
+                            returnAsExpr easDone
+          ExprSrc
+            ( AttrExpr
+                (IndirectRef !tgtExpr addr@(AttrAddrSrc _ !addr'span))
+              )
+            _expr'span ->
+              el'RunTx easDone $
+                el'AnalyzeExpr tgtExpr $ \ !tgtVal !easDone' -> do
+                  -- record as reference symbol, for completion
+                  recordAttrRef eac $
+                    EL'UnsolvedRef (Just tgtVal) addr'span
+                  el'ResolveAttrAddr easDone' addr $ \case
+                    Nothing ->
+                      -- record as reference symbol, for completion
+                      recordAttrRef eac $ EL'UnsolvedRef Nothing addr'span
+                    Just !attrKey ->
+                      case tgtVal of
+                        EL'ObjVal _ms !obj -> do
+                          let !cls = el'obj'class obj
+                              !objAttrs = el'obj'attrs obj
+                          !maybePrevDef <- el'ResolveObjAttr obj attrKey
+                          case maybePrevDef of
+                            Just !prevDef ->
+                              -- record as reference symbol
+                              recordAttrRef eac $
+                                EL'AttrRef Nothing addr mwip prevDef
+                            Nothing -> pure ()
+                          !attrAnno <-
+                            (newTVar =<<) $
+                              tryReadTMVar (el'class'defi cls) >>= \case
+                                Nothing -> return Nothing
+                                Just !defi ->
+                                  return $
+                                    odLookup attrKey $ el'class'annos defi
+                          let !attrDef =
+                                EL'AttrDef
+                                  attrKey
+                                  docCmt
+                                  opSym
+                                  addr'span
+                                  xsrc
+                                  rhVal
+                                  attrAnno
+                                  maybePrevDef
+                          iopdInsert attrKey attrDef objAttrs
+                        -- TODO more to do?
+                        _ -> pure ()
+                  returnAsExpr easDone'
+          ExprSrc (IndexExpr !idxExpr !tgtExpr) _expr'span ->
+            el'RunTx easDone $
+              el'AnalyzeExpr idxExpr $
+                const $
+                  el'AnalyzeExpr tgtExpr $ const returnAsExpr
+          ExprSrc (InfixExpr (OpSymSrc "@" _) _ _) _ ->
+            el'RunTx easDone $
+              el'AnalyzeExpr lhExpr $ -- assuming it be update, i.e.
+              -- initial assignment should not happen this way
+                \_lhVal !easDone' -> returnAsExpr easDone'
+          ExprSrc !tgtExpr !bad'assign'tgt'span ->
+            -- todo allow indirect refs etc. as multi-assignment targets
+            methodArrowArgsReceiver tgtExpr $ \case
+              Left _err -> do
+                el'LogDiag
+                  diags
+                  el'Error
+                  bad'assign'tgt'span
+                  "bad-assign-target"
+                  "bad assignment target"
+                returnAsExpr easDone
+              Right !argsRcvr -> do
+                let apk = case el'UltimateValue rhVal of
+                      EL'Apk k -> k
+                      _ -> EL'ArgsPack [rhVal] odEmpty False False
+                el'RunTx eas $
+                  el'RecvArgs
+                    lhExpr
+                    argsRcvr
+                    apk
+                    $ \() _eas -> el'Exit eas exit rhVal
+    where
+      !eac = el'context eas
+      diags = el'ctx'diags eac
+      !mwip = el'ContextModule eac
+      !swip = el'ctx'scope eac
+      !pwip = el'ProcWIP swip
+      !bwip = el'scope'branch'wip pwip
+      returnAsExpr = el'ExitTx exit $ EL'Expr xsrc
