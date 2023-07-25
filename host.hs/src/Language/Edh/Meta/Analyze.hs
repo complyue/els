@@ -1074,7 +1074,7 @@ el'AnalyzeStmt (StmtSrc (DeferStmt !expr) _stmt'span) !exit !eas =
 --
 
 -- perceive
-el'AnalyzeStmt (StmtSrc (PerceiveStmt !expr !body) _stmt'span) !exit !eas =
+el'AnalyzeStmt (StmtSrc (PerceiveStmt _eosOnly !expr !body) _stmt'span) !exit !eas =
   el'RunTx eas $
     el'AnalyzeExpr expr $
       const $
