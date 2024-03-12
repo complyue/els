@@ -5,7 +5,7 @@ module Language.Edh.LS.BaseLSP where
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception
-import Control.Monad.Reader
+import Control.Monad
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as C
